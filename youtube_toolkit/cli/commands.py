@@ -5,9 +5,16 @@ from __future__ import annotations
 import argparse
 import json
 
-from ..audio import AudioOptions, download_transcription_audio, remove_cached_audio_file
-from ..caption import TranscriptOptions, fetch_transcript
-from ..channels import (
+from ..output import (
+    render_transcript_json,
+    render_transcript_markdown,
+    write_or_print,
+)
+from ..stt import SpeechToTextOptions, transcribe_audio_to_db
+from ..ytdlp import YtDlpClient
+from ..ytdlp.audio import AudioOptions, download_transcription_audio
+from ..ytdlp.caption import TranscriptOptions, fetch_transcript
+from ..ytdlp.channels import (
     ChannelOptions,
     add_blacklist_channel,
     add_watchlist_channel,
@@ -15,16 +22,7 @@ from ..channels import (
     format_channel_results,
     sync_watchlist,
 )
-from ..output import (
-    normalize_text_output_path,
-    render_plain_text,
-    render_transcript_json,
-    render_transcript_markdown,
-    write_or_print,
-)
-from ..search import SearchOptions, format_search_results, search_videos
-from ..stt import SpeechToTextOptions, transcribe_audio_file
-from ..ytdlp_client import YtDlpClient
+from ..ytdlp.search import SearchOptions, format_search_results, search_videos
 
 
 def run_transcript(args: argparse.Namespace) -> int:
@@ -63,11 +61,9 @@ def run_audio(args: argparse.Namespace) -> int:
 
 
 def run_transcribe_audio(args: argparse.Namespace) -> int:
-    output_path = normalize_text_output_path(args.output) if args.output else None
-    transcription = transcribe_audio_file(args.audio, options=SpeechToTextOptions())
-    output = render_plain_text(transcription.text)
-    write_or_print(output, output_path)
-    remove_cached_audio_file(args.audio)
+    payload = transcribe_audio_to_db(args.audio, options=SpeechToTextOptions())
+    output = json.dumps(payload, indent=2, ensure_ascii=False)
+    print(output)
     return 0
 
 

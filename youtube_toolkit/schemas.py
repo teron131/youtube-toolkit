@@ -28,13 +28,14 @@ class VideoMetadata:
         if not video_id:
             raise ValueError("yt-dlp metadata did not include a video id")
 
+        channel_handle = normalize_handle(metadata.get("channel_handle") or metadata.get("uploader_id") or metadata.get("channel_url") or metadata.get("uploader_url"))
         return cls(
             video_id=video_id,
             url=f"https://www.youtube.com/watch?v={video_id}",
             title=normalize_text(metadata.get("title")),
             channel=normalize_text(metadata.get("uploader") or metadata.get("channel")),
             channel_id=normalize_channel_id(metadata.get("channel_id")),
-            channel_handle=normalize_handle(metadata.get("channel_handle") or metadata.get("uploader_id") or metadata.get("channel_url") or metadata.get("uploader_url")),
+            channel_handle=channel_handle,
             upload_date=normalize_upload_date(metadata.get("upload_date")),
             duration_seconds=normalize_number(metadata.get("duration")),
             view_count=normalize_view_count(metadata.get("view_count")),

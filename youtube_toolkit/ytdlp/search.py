@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .schemas import ChannelIdentity, extract_channel_identity
-from .storage import get_connection, list_blacklist_channel_identities, upsert_video
-from .ytdlp_client import SEARCH_SORT_PARAMS, YtDlpClient
+from ..schemas import ChannelIdentity, extract_channel_identity
+from ..storage import get_connection, list_blacklist_channel_identities, upsert_video
+from .client import SEARCH_SORT_PARAMS, YtDlpClient
 
 DEFAULT_LIMIT = 10
 DEFAULT_MIN_VIEWS = 10_000
@@ -94,7 +94,14 @@ def filter_entries(
         options,
         blacklisted_channels=blacklisted_channels or [],
     )
-    filtered = [entry for entry in entries if is_video_entry(entry) and not is_blacklisted_channel(entry, filters.blacklisted_channels) and entry_matches_filters(entry, filters)]
+    filtered: list[dict[str, Any]] = []
+    for entry in entries:
+        if not is_video_entry(entry):
+            continue
+        if is_blacklisted_channel(entry, filters.blacklisted_channels):
+            continue
+        if entry_matches_filters(entry, filters):
+            filtered.append(entry)
     return filtered[: options.limit]
 
 
@@ -131,16 +138,12 @@ def is_blacklisted_channel(
     entry_channel = extract_channel_identity(entry)
     if not entry_channel.has_identity():
         return False
-    return any(channel_identity_matches(entry_channel, blacklisted_channel) for blacklisted_channel in blacklisted_channels)
-
-
-def channel_identity_matches(
-    entry_channel: ChannelIdentity,
-    blacklisted_channel: ChannelIdentity,
-) -> bool:
-    return (entry_channel.youtube_channel_id is not None and entry_channel.youtube_channel_id == blacklisted_channel.youtube_channel_id) or (
-        entry_channel.channel_handle is not None and entry_channel.channel_handle == blacklisted_channel.channel_handle
-    )
+    for blacklisted_channel in blacklisted_channels:
+        same_channel_id = entry_channel.youtube_channel_id is not None and entry_channel.youtube_channel_id == blacklisted_channel.youtube_channel_id
+        same_channel_handle = entry_channel.channel_handle is not None and entry_channel.channel_handle == blacklisted_channel.channel_handle
+        if same_channel_id or same_channel_handle:
+            return True
+    return False
 
 
 def entry_matches_filters(
@@ -225,15 +228,6 @@ def format_search_results(entries: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def format_count(
-    value: int | None,
-    noun: str,
-) -> str:
-    if value is None:
-        return f"unknown-{noun}"
-    return f"{value:,} {noun}"
-
-
 def format_duration(duration: int | float | None) -> str:
     if not isinstance(duration, int | float):
         return "unknown-duration"
@@ -243,3 +237,12 @@ def format_duration(duration: int | float | None) -> str:
     if hours:
         return f"{hours}:{minutes:02d}:{seconds:02d}"
     return f"{minutes}:{seconds:02d}"
+
+
+def format_count(
+    value: int | None,
+    noun: str,
+) -> str:
+    if value is None:
+        return f"unknown-{noun}"
+    return f"{value:,} {noun}"

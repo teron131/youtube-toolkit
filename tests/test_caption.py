@@ -1,5 +1,5 @@
-from youtube_toolkit.caption import remove_sponsorblock_chunks
 from youtube_toolkit.schemas import TranscriptChunk
+from youtube_toolkit.ytdlp.caption import remove_sponsorblock_chunks
 
 
 def test_remove_sponsorblock_chunks_drops_overlapping_chunks() -> None:
