@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import subprocess
 import sys
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
-from .url import ALLOWED_VIDEO_HOSTS, normalize_youtube_url, validate_url
+from ..url import ALLOWED_VIDEO_HOSTS, normalize_youtube_url, validate_url
 
 SEARCH_SORT_PARAMS = {
-    "relevance": "EgIQAQ==",
-    "views": "CAMSAhAB",
+    "relevance": "EgIQAQ==",  # boolean "true"
+    "views": "CAMSAhAB",  # sort search results by view count in descending order
 }
 
 
@@ -43,7 +43,11 @@ class YtDlpClient:
         fetch: int,
         sort: str,
     ) -> dict[str, Any]:
-        search_url = f"https://www.youtube.com/results?{urlencode({'search_query': query, 'sp': SEARCH_SORT_PARAMS[sort]})}"
+        search_params = {
+            "search_query": query,
+            "sp": SEARCH_SORT_PARAMS[sort],
+        }
+        search_url = f"https://www.youtube.com/results?{urlencode(search_params)}"
         return self._json(
             [
                 *self.command_prefix(),

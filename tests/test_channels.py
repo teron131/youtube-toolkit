@@ -1,6 +1,6 @@
 import pytest
 
-from youtube_toolkit.channels import ChannelOptions, normalize_channel_url, validate_channel_options
+from youtube_toolkit.ytdlp.channels import ChannelOptions, normalize_channel_url, validate_channel_options
 
 
 def test_normalize_channel_url_from_common_inputs() -> None:

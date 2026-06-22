@@ -7,9 +7,8 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from urllib.parse import urlparse
 
-from .caption import fetch_transcript
-from .schemas import extract_channel_identity
-from .storage import (
+from ..schemas import extract_channel_identity
+from ..storage import (
     get_connection,
     list_missing_watchlist_video_ids,
     list_watchlist_channel_inputs,
@@ -17,7 +16,8 @@ from .storage import (
     upsert_blacklist_channel,
     upsert_watchlist_channel,
 )
-from .ytdlp_client import YtDlpClient
+from .caption import fetch_transcript
+from .client import YtDlpClient
 
 DEFAULT_LAST_VIDEOS = 10
 MIN_DAYS_WINDOW = 10

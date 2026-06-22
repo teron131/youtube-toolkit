@@ -1,18 +1,9 @@
-from pathlib import Path
-
-import pytest
-
-from youtube_toolkit.output import normalize_text_output_path, render_plain_text
+from youtube_toolkit.output import format_timestamp
 
 
-def test_normalize_text_output_path_adds_txt_suffix() -> None:
-    assert normalize_text_output_path(Path("transcripts/sample")) == Path("transcripts/sample.txt")
+def test_format_timestamp_uses_hour_when_needed() -> None:
+    assert format_timestamp(3723) == "1:02:03"
 
 
-def test_normalize_text_output_path_rejects_non_txt_suffix() -> None:
-    with pytest.raises(ValueError, match=r"\.txt"):
-        normalize_text_output_path(Path("transcripts/sample.json"))
-
-
-def test_render_plain_text_returns_only_text() -> None:
-    assert render_plain_text("  This is the transcript.  ") == "This is the transcript.\n"
+def test_format_timestamp_uses_minute_without_hour() -> None:
+    assert format_timestamp(123) == "2:03"

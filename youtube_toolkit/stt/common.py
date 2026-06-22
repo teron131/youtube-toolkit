@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import os
-import urllib.error
-import urllib.request
-from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
+import urllib.error
+import urllib.request
 from uuid import uuid4
 
-from youtube_toolkit.convert_zh import convert_zh
-
+from ..convert_zh import convert_zh
+from ..storage import get_connection, search_stored_videos, upsert_video
+from ..url import extract_video_id
 from .schemas import SpeechTranscription
 
 DEFAULT_STT_LANGUAGE = "en"
@@ -27,7 +28,6 @@ class SpeechToTextOptions:
     provider: SpeechToTextProvider = DEFAULT_STT_PROVIDER
     language: str | None = DEFAULT_STT_LANGUAGE
     model: str | None = None
-    opencc_config: str | None = None
     api_key: str | None = None
     timeout_seconds: float = 300
 
@@ -47,7 +47,79 @@ def transcribe_audio_file(
         transcription = transcribe_audio_file_with_elevenlabs(audio_path, options=options)
     else:
         raise ValueError(f"Unsupported speech-to-text provider: {options.provider}")
-    return convert_transcription_text(transcription, options.opencc_config)
+    return SpeechTranscription(
+        text=convert_zh(transcription.text, "s2hk"),
+        language=transcription.language,
+        duration_seconds=transcription.duration_seconds,
+        word_count=transcription.word_count,
+    )
+
+
+def transcribe_audio_to_db(
+    audio_path: Path,
+    *,
+    options: SpeechToTextOptions | None = None,
+) -> dict[str, Any]:
+    video_id = extract_video_id(audio_path.stem)
+    if video_id is None:
+        raise ValueError("audio filename must include a YouTube video ID so the transcript can be stored")
+
+    with get_connection() as connection:
+        stored_videos = search_stored_videos(
+            connection,
+            video_id,
+            limit=1,
+            require_transcript=True,
+        )
+    if stored_videos:
+        audio_path.unlink(missing_ok=True)
+        return transcription_result_payload(
+            stored_videos[0],
+            language=None,
+            duration_seconds=None,
+            word_count=None,
+        )
+
+    transcription = transcribe_audio_file(
+        audio_path,
+        options=options,
+    )
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {"id": video_id},
+            transcript=transcription.text,
+        )
+        stored_videos = search_stored_videos(
+            connection,
+            video_id,
+            limit=1,
+            require_transcript=True,
+        )
+    if not stored_videos:
+        raise RuntimeError(f"Stored transcript could not be found after writing video {video_id}")
+    audio_path.unlink()
+    return transcription_result_payload(
+        stored_videos[0],
+        language=transcription.language,
+        duration_seconds=transcription.duration_seconds,
+        word_count=transcription.word_count,
+    )
+
+
+def transcription_result_payload(
+    stored_video: dict[str, Any],
+    *,
+    language: str | None,
+    duration_seconds: float | None,
+    word_count: int | None,
+) -> dict[str, Any]:
+    return {
+        **stored_video,
+        "language": language,
+        "duration_seconds": duration_seconds,
+        "word_count": word_count,
+    }
 
 
 def transcribe_audio_file_with_xai(
@@ -87,21 +159,6 @@ def transcribe_audio_file_with_elevenlabs(
         timeout_seconds=options.timeout_seconds,
     )
     return SpeechTranscription.from_elevenlabs_stt(response)
-
-
-def convert_transcription_text(
-    transcription: SpeechTranscription,
-    opencc_config: str | None,
-) -> SpeechTranscription:
-    if opencc_config is None:
-        return transcription
-    return replace(
-        transcription,
-        text=convert_zh(
-            transcription.text,
-            opencc_config,
-        ),
-    )
 
 
 def run_json_request(

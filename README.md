@@ -20,7 +20,7 @@ The toolkit intentionally ships a small working surface:
 
 - `youtube transcript <url-or-id>` prints or writes a transcript artifact
 - `youtube audio <url-or-id>` downloads compact mono 16 kHz MP3 audio ready for STT models
-- `youtube transcribe-audio <audio-path>` transcribes local audio with xAI STT, prints plain transcript text, and removes generated `.cache/audio` input
+- `youtube transcribe-audio <audio-path>` transcribes local audio with xAI STT, applies `s2hk` Chinese conversion, stores the transcript in SQLite, returns JSON, and removes generated `.cache/audio` input
 - `youtube search "<query>"` searches videos with local metadata filters
 - `youtube inspect <url-or-id>` prints metadata JSON
 - `youtube channel-videos <channel>` lists recent channel uploads
@@ -42,7 +42,7 @@ uv run youtube doctor
 ```bash
 uv run youtube transcript JpSHyEIZ_bo --output artifacts/JpSHyEIZ_bo.md
 uv run youtube audio JpSHyEIZ_bo
-uv run youtube transcribe-audio .cache/audio/JpSHyEIZ_bo.mp3 --output .cache/audio/JpSHyEIZ_bo.txt
+uv run youtube transcribe-audio .cache/audio/JpSHyEIZ_bo.mp3
 uv run youtube search "langgraph tutorial" --limit 5 --max-duration 20:00
 uv run youtube inspect https://www.youtube.com/watch?v=JpSHyEIZ_bo
 uv run youtube channel-videos @OpenAI --last 5

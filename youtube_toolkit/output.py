@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import asdict
+import json
 from pathlib import Path
 
-from youtube_toolkit.schemas import TranscriptDocument
+from .schemas import TranscriptDocument
 
 
 def write_or_print(
@@ -19,18 +19,6 @@ def write_or_print(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(output, encoding="utf-8")
     print(str(output_path))
-
-
-def normalize_text_output_path(output_path: Path) -> Path:
-    if output_path.suffix == "":
-        return output_path.with_suffix(".txt")
-    if output_path.suffix.casefold() != ".txt":
-        raise ValueError("text artifact output must be a .txt path")
-    return output_path
-
-
-def render_plain_text(text: str) -> str:
-    return f"{text.strip()}\n"
 
 
 def render_transcript_markdown(document: TranscriptDocument) -> str:

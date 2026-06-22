@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .url import extract_video_id
-from .ytdlp_client import YtDlpClient
+from ..url import extract_video_id
+from .client import YtDlpClient
 
 DEFAULT_AUDIO_DIR = Path(".cache/audio")
 DEFAULT_SAMPLE_RATE = 16_000

@@ -1,94 +1,11 @@
-"""Repo-local SQLite state database for videos, channels, watchlists, and blacklists."""
+"""Local YouTube catalog persistence for channels, videos, watchlists, and blacklists."""
 
 from __future__ import annotations
 
-import os
 import sqlite3
-from pathlib import Path
 from typing import Any
 
-from youtube_toolkit.schemas import ChannelIdentity, VideoRecord, extract_channel_identity, extract_video_record
-
-STORAGE_DIRNAME = ".cache"
-DATABASE_FILENAME = "youtube.sqlite3"
-SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS channels (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    youtube_channel_id TEXT,
-    channel_handle TEXT
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_channels_youtube_channel_id
-ON channels (youtube_channel_id)
-WHERE youtube_channel_id IS NOT NULL;
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_channels_channel_handle
-ON channels (channel_handle)
-WHERE channel_handle IS NOT NULL;
-
-CREATE TABLE IF NOT EXISTS videos (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    youtube_video_id TEXT NOT NULL UNIQUE,
-    channel_id INTEGER,
-    title TEXT,
-    upload_date TEXT,
-    view_count INTEGER,
-    transcript TEXT,
-    FOREIGN KEY (channel_id) REFERENCES channels (id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_videos_channel_id
-ON videos (channel_id);
-
-CREATE TABLE IF NOT EXISTS channels_watchlist (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    channel_id INTEGER NOT NULL UNIQUE,
-    FOREIGN KEY (channel_id) REFERENCES channels (id)
-);
-
-CREATE TABLE IF NOT EXISTS channels_blacklist (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    channel_id INTEGER NOT NULL UNIQUE,
-    FOREIGN KEY (channel_id) REFERENCES channels (id)
-);
-"""
-
-
-def get_connection() -> sqlite3.Connection:
-    storage_dir = resolve_storage_dir()
-    storage_dir.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(storage_dir / DATABASE_FILENAME, timeout=30)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    initialize_database(connection)
-    return connection
-
-
-def resolve_storage_dir() -> Path:
-    configured_home = os.environ.get("YOUTUBE_TOOLKIT_STORAGE_HOME") or os.environ.get("YOUTUBE_TOOLKIT_STATE_HOME") or os.environ.get("YOUTUBE_MEMORY_HOME")
-    if configured_home:
-        return Path(configured_home).expanduser().resolve()
-
-    current_repo_root = find_repo_root(Path.cwd())
-    if current_repo_root is not None:
-        return current_repo_root / STORAGE_DIRNAME
-
-    package_repo_root = find_repo_root(Path(__file__))
-    if package_repo_root is not None:
-        return package_repo_root / STORAGE_DIRNAME
-    return Path(__file__).resolve().parents[1] / STORAGE_DIRNAME
-
-
-def find_repo_root(start_dir: Path) -> Path | None:
-    current_dir = start_dir.resolve()
-    for candidate_dir in (current_dir, *current_dir.parents):
-        if (candidate_dir / ".git").exists():
-            return candidate_dir
-    return None
-
-
-def initialize_database(connection: sqlite3.Connection) -> None:
-    connection.executescript(SCHEMA_SQL)
+from ..schemas import ChannelIdentity, VideoRecord, extract_channel_identity, extract_video_record
 
 
 def upsert_channel(
@@ -215,7 +132,9 @@ def upsert_video(
     if video_record is None:
         return None
 
-    resolved_channel = channel_identity if channel_identity and channel_identity.has_identity() else extract_channel_identity(metadata)
+    resolved_channel = channel_identity
+    if resolved_channel is None or not resolved_channel.has_identity():
+        resolved_channel = extract_channel_identity(metadata)
     channel_id = upsert_channel(connection, resolved_channel)
     existing_row = find_video_row(connection, video_record.youtube_video_id)
     if existing_row is None:
@@ -274,6 +193,11 @@ def update_video(
     video_record: VideoRecord,
     channel_id: int | None,
 ) -> None:
+    next_channel_id = channel_id if channel_id is not None else existing_row["channel_id"]
+    next_title = video_record.title if video_record.title is not None else existing_row["title"]
+    next_upload_date = video_record.upload_date if video_record.upload_date is not None else existing_row["upload_date"]
+    next_view_count = video_record.view_count if video_record.view_count is not None else existing_row["view_count"]
+    next_transcript = video_record.transcript if video_record.transcript is not None else existing_row["transcript"]
     connection.execute(
         """
         UPDATE videos
@@ -285,14 +209,27 @@ def update_video(
         WHERE id = ?
         """,
         (
-            channel_id if channel_id is not None else existing_row["channel_id"],
-            video_record.title if video_record.title is not None else existing_row["title"],
-            video_record.upload_date if video_record.upload_date is not None else existing_row["upload_date"],
-            video_record.view_count if video_record.view_count is not None else existing_row["view_count"],
-            video_record.transcript if video_record.transcript is not None else existing_row["transcript"],
+            next_channel_id,
+            next_title,
+            next_upload_date,
+            next_view_count,
+            next_transcript,
             existing_row["id"],
         ),
     )
+    if (
+        next_title,
+        next_upload_date,
+        next_transcript,
+    ) != (
+        existing_row["title"],
+        existing_row["upload_date"],
+        existing_row["transcript"],
+    ):
+        connection.execute(
+            "DELETE FROM video_embeddings WHERE video_id = ?",
+            (existing_row["id"],),
+        )
 
 
 def store_channel_listing(

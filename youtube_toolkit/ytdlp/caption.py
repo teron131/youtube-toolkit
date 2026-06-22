@@ -8,10 +8,10 @@ import json
 import urllib.error
 import urllib.request
 
-from .schemas import TranscriptChunk, TranscriptDocument, TranscriptSection, VideoMetadata
-from .storage import get_connection, upsert_video
-from .url import ALLOWED_CAPTION_HOST_SUFFIXES, validate_url
-from .ytdlp_client import YtDlpClient
+from ..schemas import TranscriptChunk, TranscriptDocument, TranscriptSection, VideoMetadata
+from ..storage import get_connection, upsert_video
+from ..url import ALLOWED_CAPTION_HOST_SUFFIXES, validate_url
+from .client import YtDlpClient
 
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 

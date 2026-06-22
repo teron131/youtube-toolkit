@@ -57,9 +57,8 @@ def add_audio_parser(subparsers: argparse._SubParsersAction) -> None:
 
 
 def add_transcribe_audio_parser(subparsers: argparse._SubParsersAction) -> None:
-    transcribe_parser = subparsers.add_parser("transcribe-audio", help="Transcribe a local audio file")
-    transcribe_parser.add_argument("audio", type=Path, help="Local audio file")
-    transcribe_parser.add_argument("--output", type=Path, help="Write plain transcript text to this path")
+    transcribe_parser = subparsers.add_parser("transcribe-audio", help="Store a local audio transcript and return JSON")
+    transcribe_parser.add_argument("audio", type=Path, help="Local audio file named with a YouTube video ID")
     transcribe_parser.set_defaults(handler=run_transcribe_audio)
 
 
