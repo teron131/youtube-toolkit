@@ -1,4 +1,4 @@
-"""Shared speech-to-text workflow and HTTP helpers."""
+"""Speech-to-text workflow, provider dispatch, and upload helpers."""
 
 from __future__ import annotations
 
@@ -19,12 +19,25 @@ from .schemas import SpeechTranscription
 DEFAULT_STT_LANGUAGE = "en"
 DEFAULT_STT_PROVIDER = "xai"
 DEFAULT_ELEVENLABS_STT_MODEL = "scribe_v2"
+AUDIO_CONTENT_TYPES = {
+    ".aac": "audio/aac",
+    ".flac": "audio/flac",
+    ".m4a": "audio/x-m4a",
+    ".mp3": "audio/mpeg",
+    ".mp4": "audio/mp4",
+    ".ogg": "audio/ogg",
+    ".opus": "audio/opus",
+    ".wav": "audio/wav",
+    ".webm": "audio/webm",
+}
 
 SpeechToTextProvider = Literal["xai", "elevenlabs"]
 
 
 @dataclass(frozen=True, slots=True)
 class SpeechToTextOptions:
+    """Options for selecting an STT provider and request behavior."""
+
     provider: SpeechToTextProvider = DEFAULT_STT_PROVIDER
     language: str | None = DEFAULT_STT_LANGUAGE
     model: str | None = None
@@ -37,6 +50,8 @@ def transcribe_audio_file(
     *,
     options: SpeechToTextOptions | None = None,
 ) -> SpeechTranscription:
+    """Transcribe one local audio file and normalize the text to Hong Kong Traditional Chinese."""
+
     options = options or SpeechToTextOptions()
     if not audio_path.is_file():
         raise ValueError(f"audio file does not exist: {audio_path}")
@@ -60,6 +75,8 @@ def transcribe_audio_to_db(
     *,
     options: SpeechToTextOptions | None = None,
 ) -> dict[str, Any]:
+    """Store a local audio transcript in the video database before returning the result payload."""
+
     video_id = extract_video_id(audio_path.stem)
     if video_id is None:
         raise ValueError("audio filename must include a YouTube video ID so the transcript can be stored")
@@ -72,12 +89,12 @@ def transcribe_audio_to_db(
         )
     if stored_video is not None:
         audio_path.unlink(missing_ok=True)
-        return transcription_result_payload(
-            stored_video,
-            language=None,
-            duration_seconds=None,
-            word_count=None,
-        )
+        return {
+            **stored_video,
+            "language": None,
+            "duration_seconds": None,
+            "word_count": None,
+        }
 
     transcription = transcribe_audio_file(
         audio_path,
@@ -92,26 +109,11 @@ def transcribe_audio_to_db(
     if stored_video is None or not stored_video["transcript"]:
         raise RuntimeError(f"Stored transcript could not be found after writing video {video_id}")
     audio_path.unlink()
-    return transcription_result_payload(
-        stored_video,
-        language=transcription.language,
-        duration_seconds=transcription.duration_seconds,
-        word_count=transcription.word_count,
-    )
-
-
-def transcription_result_payload(
-    stored_video: dict[str, Any],
-    *,
-    language: str | None,
-    duration_seconds: float | None,
-    word_count: int | None,
-) -> dict[str, Any]:
     return {
         **stored_video,
-        "language": language,
-        "duration_seconds": duration_seconds,
-        "word_count": word_count,
+        "language": transcription.language,
+        "duration_seconds": transcription.duration_seconds,
+        "word_count": transcription.word_count,
     }
 
 
@@ -120,6 +122,8 @@ def transcribe_audio_file_with_xai(
     *,
     options: SpeechToTextOptions,
 ) -> SpeechTranscription:
+    """Request and normalize an xAI speech-to-text transcription."""
+
     from . import xai
 
     api_key = options.api_key or os.environ.get("XAI_API_KEY")
@@ -139,6 +143,8 @@ def transcribe_audio_file_with_elevenlabs(
     *,
     options: SpeechToTextOptions,
 ) -> SpeechTranscription:
+    """Request and normalize an ElevenLabs speech-to-text transcription."""
+
     from . import elevenlabs
 
     api_key = options.api_key or os.environ.get("ELEVENLABS_API_KEY")
@@ -160,6 +166,8 @@ def run_json_request(
     timeout_seconds: float,
     provider_name: str,
 ) -> dict[str, Any]:
+    """Run an STT HTTP request and return its JSON object response."""
+
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310 - fixed HTTPS API endpoint.
             raw_response = response.read()
@@ -184,6 +192,8 @@ def encode_multipart_form(
     file_field: str,
     file_path: Path,
 ) -> tuple[bytes, str]:
+    """Encode STT form fields and one audio file as multipart form data."""
+
     boundary = f"----youtube-toolkit-{uuid4().hex}"
     chunks: list[bytes] = []
 
@@ -202,28 +212,10 @@ def encode_multipart_form(
         [
             f"--{boundary}\r\n".encode(),
             f'Content-Disposition: form-data; name="{file_field}"; filename="{file_path.name}"\r\n'.encode(),
-            f"Content-Type: {detect_audio_content_type(file_path)}\r\n\r\n".encode(),
+            f"Content-Type: {AUDIO_CONTENT_TYPES.get(file_path.suffix.casefold(), 'application/octet-stream')}\r\n\r\n".encode(),
             file_path.read_bytes(),
             b"\r\n",
             f"--{boundary}--\r\n".encode(),
         ]
     )
     return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
-
-
-def detect_audio_content_type(audio_path: Path) -> str:
-    suffix = audio_path.suffix.casefold()
-    content_types = {
-        ".aac": "audio/aac",
-        ".flac": "audio/flac",
-        ".m4a": "audio/x-m4a",
-        ".mp3": "audio/mpeg",
-        ".mp4": "audio/mp4",
-        ".ogg": "audio/ogg",
-        ".opus": "audio/opus",
-        ".wav": "audio/wav",
-        ".webm": "audio/webm",
-    }
-    if suffix in content_types:
-        return content_types[suffix]
-    return "application/octet-stream"
