@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-import sqlite3
 from typing import Any, Literal
+
+import turso
 
 from ..model_config import EmbeddingConfig
 from ..url import extract_video_id
-from .semantic import (
-    cosine_similarity,
-    embed_text_with_gemini,
-    embedding_from_blob,
-)
+from .semantic import embed_text_with_gemini, encode_vector
 
 EmbedText = Callable[[str], list[float]]
 SearchSort = Literal["views", "upload_date", "relevance"]
@@ -20,7 +17,7 @@ SEARCH_SORTS = {"views", "upload_date", "relevance"}
 
 
 def search_stored_videos(
-    connection: sqlite3.Connection,
+    connection: turso.Connection,
     query: str,
     *,
     limit: int = 10,
@@ -79,13 +76,13 @@ def search_stored_videos(
 
 
 def search_video_rows_by_id(
-    connection: sqlite3.Connection,
+    connection: turso.Connection,
     youtube_video_id: str,
     *,
     limit: int,
     require_transcript: bool,
     sort: SearchSort,
-) -> list[sqlite3.Row]:
+) -> list[turso.Row]:
     return connection.execute(
         """
         SELECT
@@ -115,13 +112,13 @@ def search_video_rows_by_id(
 
 
 def search_video_rows_by_keyword(
-    connection: sqlite3.Connection,
+    connection: turso.Connection,
     keyword: str,
     *,
     limit: int,
     require_transcript: bool,
     sort: SearchSort,
-) -> list[sqlite3.Row]:
+) -> list[turso.Row]:
     like_pattern = f"%{escape_like(keyword)}%"
     return connection.execute(
         """
@@ -171,40 +168,62 @@ def search_video_rows_by_keyword(
 
 
 def search_video_payloads_by_semantic(
-    connection: sqlite3.Connection,
+    connection: turso.Connection,
     query: str,
     *,
     require_transcript: bool,
     embed_text: EmbedText | None,
     embedding_config: EmbeddingConfig | None,
 ) -> list[dict[str, Any]]:
+    if not has_semantic_video_rows(
+        connection,
+        require_transcript=require_transcript,
+    ):
+        return []
+    query_embedding = embed_text(query) if embed_text is not None else embed_text_with_gemini(query, config=embedding_config)
     indexed_rows = list_semantic_video_rows(
         connection,
+        query_embedding=query_embedding,
         require_transcript=require_transcript,
     )
     if not indexed_rows:
         return []
 
-    query_embedding = embed_text(query) if embed_text is not None else embed_text_with_gemini(query, config=embedding_config)
-    scored_payloads: list[tuple[float, dict[str, Any]]] = []
+    semantic_payloads: list[dict[str, Any]] = []
     for row in indexed_rows:
-        score = cosine_similarity(
-            query_embedding,
-            embedding_from_blob(row["embedding"]),
-        )
         payload = stored_video_payload(row)
-        payload["semantic_score"] = score
-        scored_payloads.append((score, payload))
+        payload["semantic_score"] = row["semantic_score"]
+        semantic_payloads.append(payload)
+    return semantic_payloads
 
-    scored_payloads.sort(key=lambda item: item[0], reverse=True)
-    return [payload for _, payload in scored_payloads]
+
+def has_semantic_video_rows(
+    connection: turso.Connection,
+    *,
+    require_transcript: bool,
+) -> bool:
+    row = connection.execute(
+        """
+        SELECT 1
+        FROM videos
+        WHERE embedding IS NOT NULL
+            AND (
+                ? = 0
+                OR (transcript IS NOT NULL AND transcript != '')
+            )
+        LIMIT 1
+        """,
+        (int(require_transcript),),
+    ).fetchone()
+    return row is not None
 
 
 def list_semantic_video_rows(
-    connection: sqlite3.Connection,
+    connection: turso.Connection,
     *,
+    query_embedding: list[float],
     require_transcript: bool,
-) -> list[sqlite3.Row]:
+) -> list[turso.Row]:
     return connection.execute(
         """
         SELECT
@@ -216,21 +235,24 @@ def list_semantic_video_rows(
             videos.transcript,
             channels.youtube_channel_id,
             channels.channel_handle,
-            videos.embedding
+            1.0 - vector_distance_cos(videos.embedding, vector32(?)) AS semantic_score
         FROM videos AS videos
         LEFT JOIN channels AS channels ON channels.id = videos.channel_id
         WHERE videos.embedding IS NOT NULL
-            AND videos.embedding != ''
             AND (
                 ? = 0
                 OR (videos.transcript IS NOT NULL AND videos.transcript != '')
             )
+        ORDER BY semantic_score DESC
         """,
-        (int(require_transcript),),
+        (
+            encode_vector(query_embedding),
+            int(require_transcript),
+        ),
     ).fetchall()
 
 
-def stored_video_payload(row: sqlite3.Row) -> dict[str, Any]:
+def stored_video_payload(row: turso.Row) -> dict[str, Any]:
     return {
         "video_id": row["youtube_video_id"],
         "database_row_id": int(row["id"]),

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-import sqlite3
+
+import turso
 
 STORAGE_DIRNAME = ".cache"
 DATABASE_FILENAME = "youtube.sqlite3"
@@ -34,7 +35,7 @@ CREATE TABLE IF NOT EXISTS videos (
     transcript TEXT,
     summary TEXT,
     embedding_content_hash TEXT,
-    embedding BLOB,
+    embedding F32_BLOB,
     FOREIGN KEY (channel_id) REFERENCES channels (id)
 );
 
@@ -56,11 +57,11 @@ CREATE TABLE IF NOT EXISTS channels_blacklist (
 """
 
 
-def get_connection() -> sqlite3.Connection:
+def get_connection() -> turso.Connection:
     storage_dir = resolve_storage_dir()
     storage_dir.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(storage_dir / DATABASE_FILENAME, timeout=30)
-    connection.row_factory = sqlite3.Row
+    connection = turso.connect(str(storage_dir / DATABASE_FILENAME))
+    connection.row_factory = turso.Row
     connection.execute("PRAGMA foreign_keys = ON")
     connection.executescript(SCHEMA_SQL)
     return connection

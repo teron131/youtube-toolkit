@@ -5,11 +5,11 @@ from __future__ import annotations
 from collections.abc import Callable
 import hashlib
 import json
-import sqlite3
-import struct
 from typing import Any
 import urllib.error
 import urllib.request
+
+import turso
 
 from ..model_config import EmbeddingConfig, embedding_config_from_env
 
@@ -21,7 +21,7 @@ class EmbeddingSearchError(RuntimeError):
 
 
 def index_video_embedding(
-    connection: sqlite3.Connection,
+    connection: turso.Connection,
     youtube_video_id: str,
     *,
     embed_text: EmbedText | None = None,
@@ -36,7 +36,10 @@ def index_video_embedding(
             upload_date,
             transcript,
             embedding_content_hash,
-            embedding
+            CASE
+                WHEN embedding IS NULL THEN NULL
+                ELSE vector_extract(embedding)
+            END AS embedding_text
         FROM videos
         WHERE youtube_video_id = ?
         LIMIT 1
@@ -57,11 +60,11 @@ def index_video_embedding(
         if part not in (None, "")
     )
     content_hash = hashlib.sha256(source_text.encode("utf-8")).hexdigest()
-    if row["embedding_content_hash"] == content_hash and row["embedding"]:
+    if row["embedding_content_hash"] == content_hash and row["embedding_text"]:
         return embedding_index_payload(
             row,
             content_hash,
-            embedding_from_blob(row["embedding"]),
+            decode_extracted_vector(row["embedding_text"]),
         )
 
     embedding = embed_text(source_text) if embed_text is not None else embed_text_with_gemini(source_text, config=embedding_config)
@@ -71,12 +74,12 @@ def index_video_embedding(
         """
         UPDATE videos
         SET embedding_content_hash = ?,
-            embedding = ?
+            embedding = vector32(?)
         WHERE id = ?
         """,
         (
             content_hash,
-            embedding_to_blob(embedding),
+            encode_vector(embedding),
             row["id"],
         ),
     )
@@ -84,7 +87,7 @@ def index_video_embedding(
 
 
 def embedding_index_payload(
-    row: sqlite3.Row,
+    row: turso.Row,
     content_hash: str,
     embedding: list[float],
 ) -> dict[str, Any]:
@@ -152,36 +155,20 @@ def gemini_embedding_config() -> EmbeddingConfig:
         raise EmbeddingSearchError(str(error)) from error
 
 
-def embedding_to_blob(embedding: list[float]) -> bytes:
-    """Encode an embedding vector as little-endian float32 bytes."""
-    return struct.pack(f"<{len(embedding)}f", *embedding)
+def encode_vector(embedding: list[float]) -> str:
+    """Encode an embedding vector for libSQL vector conversion."""
+    return json.dumps(embedding, separators=(",", ":"))
 
 
-def embedding_from_blob(value: bytes) -> list[float]:
-    """Decode an embedding vector from little-endian float32 bytes."""
-    if not isinstance(value, bytes | bytearray | memoryview):
-        raise EmbeddingSearchError("Stored embedding is not a blob")
-    embedding_bytes = bytes(value)
-    if len(embedding_bytes) % 4 != 0:
-        raise EmbeddingSearchError("Stored embedding blob has an invalid length")
-    return [
-        float(item)
-        for item in struct.unpack(
-            f"<{len(embedding_bytes) // 4}f",
-            embedding_bytes,
-        )
-    ]
-
-
-def cosine_similarity(left: list[float], right: list[float]) -> float:
-    if not left or not right or len(left) != len(right):
-        return 0.0
-    dot_product = sum(left_value * right_value for left_value, right_value in zip(left, right, strict=True))
-    left_norm = sum(value * value for value in left) ** 0.5
-    right_norm = sum(value * value for value in right) ** 0.5
-    if left_norm == 0.0 or right_norm == 0.0:
-        return 0.0
-    return dot_product / (left_norm * right_norm)
+def decode_extracted_vector(value: str) -> list[float]:
+    """Decode a vector_extract result into floats."""
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as error:
+        raise EmbeddingSearchError("Stored embedding is not valid vector text") from error
+    if not isinstance(parsed, list):
+        raise EmbeddingSearchError("Stored embedding is not a vector")
+    return [float(item) for item in parsed]
 
 
 def compact_embedding_error(text: str) -> str:
