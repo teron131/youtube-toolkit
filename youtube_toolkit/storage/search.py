@@ -9,6 +9,7 @@ import turso
 
 from ..model_config import EmbeddingConfig
 from ..url import extract_video_id
+from .catalog import stored_video_payload
 from .semantic import embed_text_with_gemini, encode_vector
 
 EmbedText = Callable[[str], list[float]]
@@ -73,6 +74,28 @@ def search_stored_videos(
         sort=sort,
         limit=limit,
     )
+
+
+def get_stored_video(
+    connection: turso.Connection,
+    video: str,
+    *,
+    require_transcript: bool = False,
+) -> dict[str, Any] | None:
+    """Return one stored video payload by ID or URL."""
+    video_id = extract_video_id(video)
+    if video_id is None:
+        return None
+    rows = search_video_rows_by_id(
+        connection,
+        video_id,
+        limit=1,
+        require_transcript=require_transcript,
+        sort="upload_date",
+    )
+    if not rows:
+        return None
+    return stored_video_payload(rows[0])
 
 
 def search_video_rows_by_id(
@@ -250,19 +273,6 @@ def list_semantic_video_rows(
             int(require_transcript),
         ),
     ).fetchall()
-
-
-def stored_video_payload(row: turso.Row) -> dict[str, Any]:
-    return {
-        "video_id": row["youtube_video_id"],
-        "database_row_id": int(row["id"]),
-        "title": row["title"],
-        "upload_date": row["upload_date"],
-        "view_count": row["view_count"],
-        "channel_id": row["youtube_channel_id"],
-        "channel_handle": row["channel_handle"],
-        "transcript": row["transcript"],
-    }
 
 
 def merge_search_payloads(

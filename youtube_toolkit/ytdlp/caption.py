@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 
 from ..schemas import TranscriptChunk, TranscriptDocument, TranscriptSection, VideoMetadata
-from ..storage import get_connection, upsert_video
+from ..storage import get_connection, get_stored_video, upsert_video
 from ..url import ALLOWED_CAPTION_HOST_SUFFIXES, validate_url
 from .client import YtDlpClient
 
@@ -29,6 +29,11 @@ def fetch_transcript(
     client: YtDlpClient | None = None,
 ) -> TranscriptDocument:
     options = options or TranscriptOptions()
+    if options == TranscriptOptions():
+        stored_document = fetch_stored_transcript(video)
+        if stored_document is not None:
+            return stored_document
+
     client = client or YtDlpClient()
     metadata_payload = client.metadata(video)
     metadata = VideoMetadata.from_yt_dlp(metadata_payload)
@@ -60,6 +65,54 @@ def fetch_transcript(
             transcript=document.text,
         )
     return document
+
+
+def fetch_stored_transcript(video: str) -> TranscriptDocument | None:
+    """Return a stored transcript document when the DB already has one."""
+    with get_connection() as connection:
+        stored_video = get_stored_video(
+            connection,
+            video,
+            require_transcript=True,
+        )
+    if stored_video is None:
+        return None
+    return stored_transcript_document(stored_video)
+
+
+def stored_transcript_document(stored_video: dict) -> TranscriptDocument:
+    """Build a transcript document from stored flat transcript text."""
+    transcript = stored_video["transcript"]
+    metadata = VideoMetadata(
+        video_id=stored_video["video_id"],
+        url=f"https://www.youtube.com/watch?v={stored_video['video_id']}",
+        title=stored_video["title"],
+        channel=None,
+        channel_id=stored_video["channel_id"],
+        channel_handle=stored_video["channel_handle"],
+        upload_date=stored_video["upload_date"],
+        view_count=stored_video["view_count"],
+    )
+    return TranscriptDocument(
+        metadata=metadata,
+        language="stored",
+        source="database",
+        chunks=[
+            TranscriptChunk(
+                start_seconds=0,
+                end_seconds=0,
+                text=transcript,
+            )
+        ],
+        sections=[
+            TranscriptSection(
+                title="Transcript",
+                start_seconds=None,
+                end_seconds=None,
+                text=transcript,
+            )
+        ],
+    )
 
 
 def select_caption_track(

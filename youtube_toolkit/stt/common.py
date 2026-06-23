@@ -12,7 +12,7 @@ import urllib.request
 from uuid import uuid4
 
 from ..convert_zh import convert_zh
-from ..storage import get_connection, search_stored_videos, upsert_video
+from ..storage import get_connection, get_stored_video, upsert_video
 from ..url import extract_video_id
 from .schemas import SpeechTranscription
 
@@ -65,16 +65,15 @@ def transcribe_audio_to_db(
         raise ValueError("audio filename must include a YouTube video ID so the transcript can be stored")
 
     with get_connection() as connection:
-        stored_videos = search_stored_videos(
+        stored_video = get_stored_video(
             connection,
             video_id,
-            limit=1,
             require_transcript=True,
         )
-    if stored_videos:
+    if stored_video is not None:
         audio_path.unlink(missing_ok=True)
         return transcription_result_payload(
-            stored_videos[0],
+            stored_video,
             language=None,
             duration_seconds=None,
             word_count=None,
@@ -85,22 +84,16 @@ def transcribe_audio_to_db(
         options=options,
     )
     with get_connection() as connection:
-        upsert_video(
+        stored_video = upsert_video(
             connection,
             {"id": video_id},
             transcript=transcription.text,
         )
-        stored_videos = search_stored_videos(
-            connection,
-            video_id,
-            limit=1,
-            require_transcript=True,
-        )
-    if not stored_videos:
+    if stored_video is None or not stored_video["transcript"]:
         raise RuntimeError(f"Stored transcript could not be found after writing video {video_id}")
     audio_path.unlink()
     return transcription_result_payload(
-        stored_videos[0],
+        stored_video,
         language=transcription.language,
         duration_seconds=transcription.duration_seconds,
         word_count=transcription.word_count,

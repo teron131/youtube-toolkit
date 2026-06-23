@@ -7,6 +7,7 @@ from youtube_toolkit.storage import (
     embed_text_with_gemini,
     find_repo_root,
     get_connection,
+    get_stored_video,
     index_video_embedding,
     resolve_storage_dir,
     search_stored_videos,
@@ -63,6 +64,69 @@ def test_upsert_video_converts_title_to_hong_kong_traditional(
 
     assert row is not None
     assert row["title"] == "AI商業發展暗藏機會"
+
+
+def test_upsert_video_returns_existing_values_for_sparse_update(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "AI market notes",
+                "upload_date": "20260621",
+                "view_count": 123,
+            },
+        )
+        payload = upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+            },
+            transcript="既有逐字稿",
+        )
+
+    assert payload == {
+        "video_id": "JpSHyEIZ_bo",
+        "database_row_id": 1,
+        "title": "AI market notes",
+        "upload_date": "2026-06-21",
+        "view_count": 123,
+        "channel_id": None,
+        "channel_handle": None,
+        "transcript": "既有逐字稿",
+    }
+
+
+def test_get_stored_video_returns_one_payload_by_url(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "AI market notes",
+            },
+            transcript="逐字稿",
+        )
+        payload = get_stored_video(
+            connection,
+            "https://www.youtube.com/watch?v=JpSHyEIZ_bo",
+            require_transcript=True,
+        )
+
+    assert payload is not None
+    assert payload["video_id"] == "JpSHyEIZ_bo"
+    assert payload["title"] == "AI market notes"
+    assert payload["transcript"] == "逐字稿"
 
 
 def test_search_stored_videos_finds_by_id_and_url(

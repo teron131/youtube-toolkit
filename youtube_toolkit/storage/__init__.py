@@ -24,7 +24,7 @@ from .connection import (
     get_connection,
     resolve_storage_dir,
 )
-from .search import search_stored_videos
+from .search import get_stored_video, search_stored_videos
 from .semantic import (
     EmbeddingSearchError,
     embed_text_with_gemini,
@@ -41,6 +41,7 @@ __all__ = [
     "embed_text_with_gemini",
     "find_repo_root",
     "get_connection",
+    "get_stored_video",
     "index_video_embedding",
     "list_blacklist_channel_identities",
     "list_missing_watchlist_video_ids",
