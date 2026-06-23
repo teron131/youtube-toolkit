@@ -128,7 +128,7 @@ def upsert_video(
     *,
     transcript: str | None = None,
     channel_identity: ChannelIdentity | None = None,
-) -> int | None:
+) -> dict[str, Any] | None:
     video_record = extract_video_record(metadata, transcript=transcript)
     if video_record is None:
         return None
@@ -139,10 +139,11 @@ def upsert_video(
     channel_id = upsert_channel(connection, resolved_channel)
     existing_row = find_video_row(connection, video_record.youtube_video_id)
     if existing_row is None:
-        return insert_video(connection, video_record, channel_id)
+        row_id = insert_video(connection, video_record, channel_id)
+        return find_video_payload(connection, row_id)
 
     update_video(connection, existing_row, video_record, channel_id)
-    return int(existing_row["id"])
+    return find_video_payload(connection, int(existing_row["id"]))
 
 
 def upsert_video_summary(
@@ -215,17 +216,58 @@ def insert_video(
     return int(cursor.lastrowid)
 
 
+def find_video_payload(
+    connection: turso.Connection,
+    video_row_id: int,
+) -> dict[str, Any] | None:
+    """Return the caller-facing stored values for a video row."""
+    row = connection.execute(
+        """
+        SELECT
+            videos.id,
+            videos.youtube_video_id,
+            videos.title,
+            videos.upload_date,
+            videos.view_count,
+            videos.transcript,
+            channels.youtube_channel_id,
+            channels.channel_handle
+        FROM videos AS videos
+        LEFT JOIN channels AS channels ON channels.id = videos.channel_id
+        WHERE videos.id = ?
+        """,
+        (video_row_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return stored_video_payload(row)
+
+
+def stored_video_payload(row: turso.Row) -> dict[str, Any]:
+    """Project a stored video row into the public payload shape."""
+    return {
+        "video_id": row["youtube_video_id"],
+        "database_row_id": int(row["id"]),
+        "title": row["title"],
+        "upload_date": row["upload_date"],
+        "view_count": row["view_count"],
+        "channel_id": row["youtube_channel_id"],
+        "channel_handle": row["channel_handle"],
+        "transcript": row["transcript"],
+    }
+
+
 def update_video(
     connection: turso.Connection,
     existing_row: turso.Row,
     video_record: VideoRecord,
     channel_id: int | None,
 ) -> None:
-    next_channel_id = channel_id if channel_id is not None else existing_row["channel_id"]
-    next_title = video_record.title if video_record.title is not None else existing_row["title"]
-    next_upload_date = video_record.upload_date if video_record.upload_date is not None else existing_row["upload_date"]
-    next_view_count = video_record.view_count if video_record.view_count is not None else existing_row["view_count"]
-    next_transcript = video_record.transcript if video_record.transcript is not None else existing_row["transcript"]
+    next_channel_id = keep_existing_if_missing(channel_id, existing_row["channel_id"])
+    next_title = keep_existing_if_missing(video_record.title, existing_row["title"])
+    next_upload_date = keep_existing_if_missing(video_record.upload_date, existing_row["upload_date"])
+    next_view_count = keep_existing_if_missing(video_record.view_count, existing_row["view_count"])
+    next_transcript = keep_existing_if_missing(video_record.transcript, existing_row["transcript"])
     connection.execute(
         """
         UPDATE videos
@@ -245,33 +287,73 @@ def update_video(
             existing_row["id"],
         ),
     )
-    if (
-        next_title,
-        next_upload_date,
-        next_transcript,
+    if video_embedding_source_changed(
+        existing_row,
+        title=next_title,
+        upload_date=next_upload_date,
+        transcript=next_transcript,
+    ):
+        clear_video_embedding(connection, int(existing_row["id"]))
+    if next_transcript != existing_row["transcript"]:
+        clear_video_summary(connection, int(existing_row["id"]))
+
+
+def keep_existing_if_missing[StoredValue](
+    incoming_value: StoredValue | None,
+    existing_value: StoredValue,
+) -> StoredValue:
+    """Use stored data when an incoming update omits a field."""
+    return existing_value if incoming_value is None else incoming_value
+
+
+def video_embedding_source_changed(
+    existing_row: turso.Row,
+    *,
+    title: str | None,
+    upload_date: str | None,
+    transcript: str | None,
+) -> bool:
+    """Return whether video fields used for embeddings changed."""
+    return (
+        title,
+        upload_date,
+        transcript,
     ) != (
         existing_row["title"],
         existing_row["upload_date"],
         existing_row["transcript"],
-    ):
-        connection.execute(
-            """
-            UPDATE videos
-            SET embedding_content_hash = NULL,
-                embedding = NULL
-            WHERE id = ?
-            """,
-            (existing_row["id"],),
-        )
-    if next_transcript != existing_row["transcript"]:
-        connection.execute(
-            """
-            UPDATE videos
-            SET summary = NULL
-            WHERE id = ?
-            """,
-            (existing_row["id"],),
-        )
+    )
+
+
+def clear_video_embedding(
+    connection: turso.Connection,
+    video_row_id: int,
+) -> None:
+    """Clear cached embedding data for a stored video."""
+    connection.execute(
+        """
+        UPDATE videos
+        SET embedding_content_hash = NULL,
+            embedding = NULL
+        WHERE id = ?
+        """,
+        (video_row_id,),
+    )
+
+
+def clear_video_summary(
+    connection: turso.Connection,
+    video_row_id: int,
+) -> None:
+    """Clear cached summary data for a stored video."""
+    connection.execute(
+        """
+        UPDATE videos
+        SET summary = NULL
+        WHERE id = ?
+        """,
+        (video_row_id,),
+    )
 
 
 def store_channel_listing(

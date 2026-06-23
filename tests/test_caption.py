@@ -1,5 +1,8 @@
+import pytest
+
 from youtube_toolkit.schemas import TranscriptChunk
-from youtube_toolkit.ytdlp.caption import remove_sponsorblock_chunks
+from youtube_toolkit.storage import get_connection, upsert_video
+from youtube_toolkit.ytdlp.caption import TranscriptOptions, fetch_transcript, remove_sponsorblock_chunks
 
 
 def test_remove_sponsorblock_chunks_drops_overlapping_chunks() -> None:
@@ -13,3 +16,66 @@ def test_remove_sponsorblock_chunks_drops_overlapping_chunks() -> None:
         TranscriptChunk(start_seconds=0, end_seconds=5, text="main"),
         TranscriptChunk(start_seconds=10, end_seconds=15, text="more"),
     ]
+
+
+def test_fetch_transcript_returns_stored_transcript_without_client(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "Stored title",
+                "upload_date": "20260621",
+                "view_count": 123,
+            },
+            transcript="Stored transcript.",
+        )
+
+    class FailingClient:
+        def metadata(self, video):
+            raise AssertionError("metadata should not be fetched")
+
+    document = fetch_transcript(
+        "https://www.youtube.com/watch?v=JpSHyEIZ_bo",
+        client=FailingClient(),
+    )
+
+    assert document.metadata.video_id == "JpSHyEIZ_bo"
+    assert document.metadata.title == "Stored title"
+    assert document.language == "stored"
+    assert document.source == "database"
+    assert document.text == "Stored transcript."
+    assert document.sections[0].text == "Stored transcript."
+
+
+def test_fetch_transcript_does_not_use_stored_transcript_for_custom_options(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "Stored title",
+            },
+            transcript="Stored transcript.",
+        )
+
+    class FailingClient:
+        def metadata(self, video):
+            raise AssertionError("metadata fetched")
+
+    with pytest.raises(AssertionError, match="metadata fetched"):
+        fetch_transcript(
+            "https://www.youtube.com/watch?v=JpSHyEIZ_bo",
+            options=TranscriptOptions(languages=("zh",)),
+            client=FailingClient(),
+        )
