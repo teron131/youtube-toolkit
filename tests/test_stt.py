@@ -1,5 +1,6 @@
 import sqlite3
 from dataclasses import fields
+from pathlib import Path
 
 from youtube_toolkit.storage import get_connection, upsert_video
 from youtube_toolkit.stt import (
@@ -8,6 +9,7 @@ from youtube_toolkit.stt import (
     transcribe_audio_file,
     transcribe_audio_to_db,
 )
+from youtube_toolkit.stt.common import detect_audio_content_type
 
 
 def test_xai_stt_response_normalizes_to_plain_contract() -> None:
@@ -67,6 +69,12 @@ def test_stt_transcription_is_hardcoded_to_s2hk(tmp_path, monkeypatch) -> None:
 
     assert "opencc_config" not in {field.name for field in fields(SpeechToTextOptions)}
     assert result.text == "數據庫"
+
+
+def test_detect_audio_content_type_handles_ytdlp_default_containers() -> None:
+    """STT uploads include useful MIME hints for common yt-dlp audio outputs."""
+    assert detect_audio_content_type(Path("audio.webm")) == "audio/webm"
+    assert detect_audio_content_type(Path("audio.m4a")) == "audio/x-m4a"
 
 
 def test_transcribe_audio_to_db_stores_first_then_returns_json_payload(

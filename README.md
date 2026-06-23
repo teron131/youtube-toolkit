@@ -6,20 +6,20 @@ This repo pulls the strongest parts of the existing Codex YouTube skill and the 
 
 - the skill's reliable local `yt-dlp` path for search, metadata, captions, recent channel uploads, watchlists, blacklists, SponsorBlock-aware transcript cleanup, and chaptered output
 - the summarizer repo's provider-oriented posture, summary schema discipline, and deployment lessons, but without making MCP, Cloud Run, or LLM routing the core abstraction
-- local artifact output as a first-class workflow, so agents can create durable Markdown/JSON files instead of only printing summaries into chat
+- local database state as the first-class workflow, so agents can reuse transcripts, summaries, search metadata, and embeddings
 
 ## Positioning
 
 This repo is not only a summarizer and not only a Codex skill. The core object is a normalized video document:
 
 ```text
-YouTube URL -> metadata + timed transcript chunks + chapters -> durable state/artifacts -> optional summaries/adapters
+YouTube URL -> metadata + timed transcript chunks + chapters -> durable state -> optional summaries/adapters
 ```
 
 The toolkit intentionally ships a small working surface:
 
-- `youtube transcript <url-or-id>` prints or writes a transcript artifact
-- `youtube audio <url-or-id>` downloads compact mono 16 kHz MP3 audio ready for STT models
+- `youtube transcript <url-or-id>` fetches and stores a transcript, then prints JSON
+- `youtube audio <url-or-id>` downloads provider-compatible audio for STT models without conversion
 - `youtube transcribe-audio <audio-path>` transcribes local audio with xAI STT, applies `s2hk` Chinese conversion, stores the transcript in SQLite, returns JSON, and removes generated `.cache/audio` input
 - `youtube search "<query>"` searches videos with local metadata filters
 - `youtube inspect <url-or-id>` prints metadata JSON
@@ -40,9 +40,9 @@ uv run youtube doctor
 ## Examples
 
 ```bash
-uv run youtube transcript JpSHyEIZ_bo --output artifacts/JpSHyEIZ_bo.md
-uv run youtube audio JpSHyEIZ_bo
-uv run youtube transcribe-audio .cache/audio/JpSHyEIZ_bo.mp3
+uv run youtube transcript JpSHyEIZ_bo
+audio_path=$(uv run youtube audio JpSHyEIZ_bo)
+uv run youtube transcribe-audio "$audio_path"
 uv run youtube search "langgraph tutorial" --limit 5 --max-duration 20:00
 uv run youtube inspect https://www.youtube.com/watch?v=JpSHyEIZ_bo
 uv run youtube channel-videos @OpenAI --last 5

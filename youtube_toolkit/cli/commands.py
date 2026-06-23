@@ -3,65 +3,42 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import json
 
-from ..output import (
-    render_transcript_json,
-    render_transcript_markdown,
-    write_or_print,
-)
-from ..stt import SpeechToTextOptions, transcribe_audio_to_db
+from ..stt import transcribe_audio_to_db
 from ..ytdlp import YtDlpClient
-from ..ytdlp.audio import AudioOptions, download_transcription_audio
-from ..ytdlp.caption import TranscriptOptions, fetch_transcript
+from ..ytdlp.caption import fetch_transcript
 from ..ytdlp.channels import (
     ChannelOptions,
     add_blacklist_channel,
     add_watchlist_channel,
     fetch_channel_videos,
-    format_channel_results,
     sync_watchlist,
 )
-from ..ytdlp.search import SearchOptions, format_search_results, search_videos
+from ..ytdlp.search import SearchOptions, search_videos
 
 
 def run_transcript(args: argparse.Namespace) -> int:
-    languages = tuple(args.languages or ["en-orig", "en"])
-    document = fetch_transcript(
-        args.video,
-        options=TranscriptOptions(
-            languages=languages,
-            source=args.caption_source,
-        ),
-    )
-    output = render_transcript_json(document) if args.format == "json" else render_transcript_markdown(document)
-    write_or_print(output, args.output)
+    document = fetch_transcript(args.video)
+    print(json.dumps(asdict(document), indent=2, ensure_ascii=False))
     return 0
 
 
 def run_inspect(args: argparse.Namespace) -> int:
     metadata = YtDlpClient().metadata(args.video)
-    print(
-        json.dumps(
-            metadata,
-            indent=2,
-            ensure_ascii=False,
-        )
-    )
+    print(json.dumps(metadata, indent=2, ensure_ascii=False))
     return 0
 
 
 def run_audio(args: argparse.Namespace) -> int:
-    output_path = download_transcription_audio(
-        args.video,
-        options=AudioOptions(output=args.output),
-    )
+    output_path = YtDlpClient().download_transcription_audio(args.video)
     print(output_path)
     return 0
 
 
 def run_transcribe_audio(args: argparse.Namespace) -> int:
-    payload = transcribe_audio_to_db(args.audio, options=SpeechToTextOptions())
+    payload = transcribe_audio_to_db(args.audio)
     output = json.dumps(payload, indent=2, ensure_ascii=False)
     print(output)
     return 0
@@ -82,17 +59,7 @@ def run_search(args: argparse.Namespace) -> int:
             exclude_title=tuple(args.exclude_title),
         ),
     )
-    if args.json:
-        print(
-            json.dumps(
-                entries,
-                indent=2,
-                ensure_ascii=False,
-            )
-        )
-        return 0
-
-    print(format_search_results(entries))
+    print(json.dumps(entries, indent=2, ensure_ascii=False))
     return 0
 
 
@@ -104,16 +71,7 @@ def run_channel_videos(args: argparse.Namespace) -> int:
             days=args.days,
         ),
     )
-    if args.json:
-        print(
-            json.dumps(
-                metadata,
-                indent=2,
-                ensure_ascii=False,
-            )
-        )
-        return 0
-    print(format_channel_results(metadata))
+    print(json.dumps(metadata, indent=2, ensure_ascii=False))
     return 0
 
 

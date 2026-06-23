@@ -14,12 +14,13 @@ from ..url import ALLOWED_CAPTION_HOST_SUFFIXES, validate_url
 from .client import YtDlpClient
 
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+DEFAULT_TRANSCRIPT_LANGUAGES = ("en-orig", "en", "zh-Hant", "zh-Hans", "zh-HK", "zh-TW", "zh-CN", "zh")
 
 
 @dataclass(frozen=True, slots=True)
 class TranscriptOptions:
-    languages: tuple[str, ...] = ("en-orig", "en")
-    source: str = "auto"
+    languages: tuple[str, ...] = DEFAULT_TRANSCRIPT_LANGUAGES
+    source: str = "any"
 
 
 def fetch_transcript(
@@ -146,7 +147,7 @@ def iter_caption_sources(metadata: dict, source: str) -> list[tuple[str, dict]]:
         return [("subtitles", manual)]
     if source == "any":
         return [("automatic_captions", automatic), ("subtitles", manual)]
-    raise ValueError("--caption-source must be auto, manual, or any")
+    raise ValueError("caption source must be auto, manual, or any")
 
 
 def fetch_caption_payload(url: str) -> dict:
