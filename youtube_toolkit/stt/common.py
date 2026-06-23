@@ -213,8 +213,17 @@ def encode_multipart_form(
 
 def detect_audio_content_type(audio_path: Path) -> str:
     suffix = audio_path.suffix.casefold()
-    if suffix == ".mp3":
-        return "audio/mpeg"
-    if suffix == ".wav":
-        return "audio/wav"
+    content_types = {
+        ".aac": "audio/aac",
+        ".flac": "audio/flac",
+        ".m4a": "audio/x-m4a",
+        ".mp3": "audio/mpeg",
+        ".mp4": "audio/mp4",
+        ".ogg": "audio/ogg",
+        ".opus": "audio/opus",
+        ".wav": "audio/wav",
+        ".webm": "audio/webm",
+    }
+    if suffix in content_types:
+        return content_types[suffix]
     return "application/octet-stream"

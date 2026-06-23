@@ -36,10 +36,6 @@ def build_parser() -> argparse.ArgumentParser:
 def add_transcript_parser(subparsers: argparse._SubParsersAction) -> None:
     transcript_parser = subparsers.add_parser("transcript", help="Fetch a normalized transcript")
     transcript_parser.add_argument("video", help="YouTube video URL or ID")
-    transcript_parser.add_argument("--language", action="append", dest="languages", help="Preferred caption language")
-    transcript_parser.add_argument("--caption-source", choices=("auto", "manual", "any"), default="auto", help="Caption source selection order")
-    transcript_parser.add_argument("--format", choices=("markdown", "json"), default="markdown", help="Output format")
-    transcript_parser.add_argument("--output", type=Path, help="Write output to a file")
     transcript_parser.set_defaults(handler=run_transcript)
 
 
@@ -50,9 +46,8 @@ def add_inspect_parser(subparsers: argparse._SubParsersAction) -> None:
 
 
 def add_audio_parser(subparsers: argparse._SubParsersAction) -> None:
-    audio_parser = subparsers.add_parser("audio", help="Download compact MP3 audio for STT")
+    audio_parser = subparsers.add_parser("audio", help="Download provider-compatible audio for STT")
     audio_parser.add_argument("video", help="YouTube video URL or ID")
-    audio_parser.add_argument("--output", type=Path, help="Write audio to this path")
     audio_parser.set_defaults(handler=run_audio)
 
 
@@ -74,7 +69,6 @@ def add_search_parser(subparsers: argparse._SubParsersAction) -> None:
     search_parser.add_argument("--exclude-channel", action="append", default=[])
     search_parser.add_argument("--include-title", action="append", default=[])
     search_parser.add_argument("--exclude-title", action="append", default=[])
-    search_parser.add_argument("--json", action="store_true")
     search_parser.set_defaults(handler=run_search)
 
 
@@ -82,7 +76,6 @@ def add_channel_videos_parser(subparsers: argparse._SubParsersAction) -> None:
     channel_parser = subparsers.add_parser("channel-videos", help="List recent videos from a YouTube channel")
     channel_parser.add_argument("channel", help="YouTube channel URL, handle, or channel ID")
     add_channel_window_args(channel_parser)
-    channel_parser.add_argument("--json", action="store_true")
     channel_parser.set_defaults(handler=run_channel_videos)
 
 

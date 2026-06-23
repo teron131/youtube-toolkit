@@ -156,35 +156,6 @@ def should_expand_window(
     return min(dated_entries) >= cutoff_date_for_days(days)
 
 
-def format_channel_results(metadata: dict[str, Any]) -> str:
-    lines: list[str] = []
-    for entry in metadata.get("entries") or []:
-        upload_date = format_upload_date(entry.get("upload_date"))
-        title = entry.get("title") or "Untitled video"
-        video_id = entry.get("id")
-        video_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else "missing-url"
-        view_count = format_count(entry.get("view_count"), "views")
-        like_count = format_count(entry.get("like_count"), "likes")
-        lines.append(f"{upload_date} | {video_url} | {title} | {view_count} | {like_count}")
-    return "\n".join(lines)
-
-
-def format_upload_date(upload_date: str | None) -> str:
-    parsed_upload_date = parse_upload_date(upload_date)
-    if parsed_upload_date is None:
-        return "unknown-date"
-    return parsed_upload_date.isoformat()
-
-
-def format_count(
-    value: int | None,
-    noun: str,
-) -> str:
-    if value is None:
-        return f"unknown-{noun}"
-    return f"{value:,} {noun}"
-
-
 def add_watchlist_channel(channel_input: str) -> str:
     metadata = fetch_channel_videos(
         channel_input,

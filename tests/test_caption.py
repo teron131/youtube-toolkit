@@ -2,7 +2,7 @@ import pytest
 
 from youtube_toolkit.schemas import TranscriptChunk
 from youtube_toolkit.storage import get_connection, upsert_video
-from youtube_toolkit.ytdlp.caption import TranscriptOptions, fetch_transcript, remove_sponsorblock_chunks
+from youtube_toolkit.ytdlp.caption import DEFAULT_TRANSCRIPT_LANGUAGES, TranscriptOptions, fetch_transcript, remove_sponsorblock_chunks, select_caption_track
 
 
 def test_remove_sponsorblock_chunks_drops_overlapping_chunks() -> None:
@@ -79,3 +79,45 @@ def test_fetch_transcript_does_not_use_stored_transcript_for_custom_options(
             options=TranscriptOptions(languages=("zh",)),
             client=FailingClient(),
         )
+
+
+def test_any_caption_source_falls_back_to_manual_subtitles() -> None:
+    """Default caption selection can use manual subtitles when automatic captions are absent."""
+    metadata = {
+        "automatic_captions": {},
+        "subtitles": {
+            "en": [
+                {
+                    "ext": "json3",
+                    "url": "https://www.youtube.com/api/timedtext?v=example",
+                }
+            ]
+        },
+    }
+
+    assert select_caption_track(metadata, ["en"], "any") == (
+        "https://www.youtube.com/api/timedtext?v=example",
+        "en",
+        "subtitles",
+    )
+
+
+def test_default_languages_include_chinese_caption_fallbacks() -> None:
+    """Default transcript language selection includes common Chinese caption codes."""
+    metadata = {
+        "automatic_captions": {},
+        "subtitles": {
+            "zh-Hant": [
+                {
+                    "ext": "json3",
+                    "url": "https://www.youtube.com/api/timedtext?v=example&lang=zh-Hant",
+                }
+            ]
+        },
+    }
+
+    assert select_caption_track(metadata, list(DEFAULT_TRANSCRIPT_LANGUAGES), "any") == (
+        "https://www.youtube.com/api/timedtext?v=example&lang=zh-Hant",
+        "zh-Hant",
+        "subtitles",
+    )
