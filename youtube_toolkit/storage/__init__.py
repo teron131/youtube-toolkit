@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from ..model_config import (
+    DEFAULT_EMBEDDING_DIMENSIONALITY,
+    DEFAULT_EMBEDDING_MODEL,
+    EMBEDDING_BASE_URL,
+)
 from .catalog import (
     list_blacklist_channel_identities,
     list_missing_watchlist_video_ids,
@@ -20,10 +25,6 @@ from .connection import (
 )
 from .search import search_stored_videos
 from .semantic import (
-    DEFAULT_EMBEDDING_DIMENSIONALITY,
-    DEFAULT_EMBEDDING_MODEL,
-    EMBEDDING_BASE_URL,
-    EMBEDDING_PROVIDER,
     EmbeddingSearchError,
     embed_text_with_gemini,
     index_video_embedding,
@@ -34,7 +35,6 @@ __all__ = [
     "DEFAULT_EMBEDDING_DIMENSIONALITY",
     "DEFAULT_EMBEDDING_MODEL",
     "EMBEDDING_BASE_URL",
-    "EMBEDDING_PROVIDER",
     "STORAGE_DIRNAME",
     "EmbeddingSearchError",
     "embed_text_with_gemini",

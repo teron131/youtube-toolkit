@@ -1,8 +1,10 @@
 import pytest
 
+from youtube_toolkit import EmbeddingConfig
 from youtube_toolkit.storage import (
     DATABASE_FILENAME,
     STORAGE_DIRNAME,
+    embed_text_with_gemini,
     find_repo_root,
     get_connection,
     index_video_embedding,
@@ -190,8 +192,6 @@ def test_search_stored_videos_semantic_search_uses_saved_embeddings(
         assert embedding_payload == {
             "video_id": "JpSHyEIZ_bo",
             "database_row_id": 1,
-            "provider": "gemini",
-            "model": "gemini-embedding-2",
             "dimensions": 2,
         }
         index_video_embedding(connection, "dQw4w9WgXcQ", embed_text=fake_embed)
@@ -205,6 +205,35 @@ def test_search_stored_videos_semantic_search_uses_saved_embeddings(
 
     assert results[0]["video_id"] == "JpSHyEIZ_bo"
     assert results[0]["semantic_score"] == pytest.approx(1.0)
+
+
+def test_embed_text_with_gemini_uses_embedding_config(monkeypatch) -> None:
+    calls = {}
+
+    def fake_post_embedding_json(url, config, payload):
+        calls["url"] = url
+        calls["config"] = config
+        calls["payload"] = payload
+        return {"embedding": {"values": [0.25, 0.75]}}
+
+    config = EmbeddingConfig(
+        model="gemini-embedding-test",
+        api_key="embedding-key",
+        base_url="https://embedding.example/v1beta/",
+        output_dimensionality=512,
+    )
+    monkeypatch.setattr("youtube_toolkit.storage.semantic.post_embedding_json", fake_post_embedding_json)
+
+    assert embed_text_with_gemini("hello", config=config) == [0.25, 0.75]
+    assert calls == {
+        "url": "https://embedding.example/v1beta/models/gemini-embedding-test:embedContent",
+        "config": config,
+        "payload": {
+            "model": "models/gemini-embedding-test",
+            "content": {"parts": [{"text": "hello"}]},
+            "output_dimensionality": 512,
+        },
+    }
 
 
 def test_search_stored_videos_can_sort_by_relevance_score(

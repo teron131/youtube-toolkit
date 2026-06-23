@@ -52,12 +52,10 @@ CREATE TABLE IF NOT EXISTS channels_blacklist (
 
 CREATE TABLE IF NOT EXISTS video_embeddings (
     video_id INTEGER NOT NULL,
-    provider TEXT NOT NULL,
-    model TEXT NOT NULL,
     content_hash TEXT NOT NULL,
     embedding_json TEXT NOT NULL,
     embedded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (video_id, provider, model),
+    PRIMARY KEY (video_id),
     FOREIGN KEY (video_id) REFERENCES videos (id) ON DELETE CASCADE
 );
 """
