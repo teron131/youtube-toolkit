@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-import sqlite3
 from typing import Any
+
+import turso
 
 from ..schemas import ChannelIdentity, VideoRecord, extract_channel_identity, extract_video_record
 
 
 def upsert_channel(
-    connection: sqlite3.Connection,
+    connection: turso.Connection,
     channel_identity: ChannelIdentity,
 ) -> int | None:
     if not channel_identity.has_identity():
@@ -30,9 +31,9 @@ def upsert_channel(
 
 
 def find_matching_channel_rows(
-    connection: sqlite3.Connection,
+    connection: turso.Connection,
     channel_identity: ChannelIdentity,
-) -> list[sqlite3.Row]:
+) -> list[turso.Row]:
     return connection.execute(
         """
         SELECT id, youtube_channel_id, channel_handle
@@ -51,8 +52,8 @@ def find_matching_channel_rows(
 
 
 def merge_channel_rows(
-    connection: sqlite3.Connection,
-    rows: list[sqlite3.Row],
+    connection: turso.Connection,
+    rows: list[turso.Row],
     channel_identity: ChannelIdentity,
 ) -> int:
     primary_row = rows[0]
@@ -88,7 +89,7 @@ def merge_channel_rows(
 
 
 def upsert_watchlist_channel(
-    connection: sqlite3.Connection,
+    connection: turso.Connection,
     channel_identity: ChannelIdentity,
 ) -> int | None:
     channel_id = upsert_channel(connection, channel_identity)
@@ -105,7 +106,7 @@ def upsert_watchlist_channel(
 
 
 def upsert_blacklist_channel(
-    connection: sqlite3.Connection,
+    connection: turso.Connection,
     channel_identity: ChannelIdentity,
 ) -> int | None:
     channel_id = upsert_channel(connection, channel_identity)
@@ -122,7 +123,7 @@ def upsert_blacklist_channel(
 
 
 def upsert_video(
-    connection: sqlite3.Connection,
+    connection: turso.Connection,
     metadata: dict[str, Any],
     *,
     transcript: str | None = None,
@@ -145,7 +146,7 @@ def upsert_video(
 
 
 def upsert_video_summary(
-    connection: sqlite3.Connection,
+    connection: turso.Connection,
     youtube_video_id: str,
     summary: str,
 ) -> int | None:
@@ -172,9 +173,9 @@ def upsert_video_summary(
 
 
 def find_video_row(
-    connection: sqlite3.Connection,
+    connection: turso.Connection,
     youtube_video_id: str,
-) -> sqlite3.Row | None:
+) -> turso.Row | None:
     return connection.execute(
         """
         SELECT id, channel_id, title, upload_date, view_count, transcript, summary
@@ -186,7 +187,7 @@ def find_video_row(
 
 
 def insert_video(
-    connection: sqlite3.Connection,
+    connection: turso.Connection,
     video_record: VideoRecord,
     channel_id: int | None,
 ) -> int:
@@ -215,8 +216,8 @@ def insert_video(
 
 
 def update_video(
-    connection: sqlite3.Connection,
-    existing_row: sqlite3.Row,
+    connection: turso.Connection,
+    existing_row: turso.Row,
     video_record: VideoRecord,
     channel_id: int | None,
 ) -> None:
@@ -274,7 +275,7 @@ def update_video(
 
 
 def store_channel_listing(
-    connection: sqlite3.Connection,
+    connection: turso.Connection,
     metadata: dict[str, Any],
 ) -> None:
     channel_identity = extract_channel_identity(metadata)
@@ -287,7 +288,7 @@ def store_channel_listing(
         )
 
 
-def list_watchlist_channel_inputs(connection: sqlite3.Connection) -> list[str]:
+def list_watchlist_channel_inputs(connection: turso.Connection) -> list[str]:
     rows = connection.execute(
         """
         SELECT channels.youtube_channel_id, channels.channel_handle
@@ -299,7 +300,7 @@ def list_watchlist_channel_inputs(connection: sqlite3.Connection) -> list[str]:
     return [row["channel_handle"] or row["youtube_channel_id"] for row in rows if row["channel_handle"] or row["youtube_channel_id"]]
 
 
-def list_blacklist_channel_identities(connection: sqlite3.Connection) -> list[ChannelIdentity]:
+def list_blacklist_channel_identities(connection: turso.Connection) -> list[ChannelIdentity]:
     rows = connection.execute(
         """
         SELECT channels.youtube_channel_id, channels.channel_handle
@@ -317,7 +318,7 @@ def list_blacklist_channel_identities(connection: sqlite3.Connection) -> list[Ch
     ]
 
 
-def list_missing_watchlist_video_ids(connection: sqlite3.Connection) -> list[str]:
+def list_missing_watchlist_video_ids(connection: turso.Connection) -> list[str]:
     rows = connection.execute(
         """
         SELECT videos.youtube_video_id
