@@ -1,7 +1,7 @@
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from youtube_toolkit import ModelConfig
-from youtube_toolkit.summarization import CaptionSummary, Chapter, summarize_caption
+from youtube_toolkit.summarization import Chapter, TranscriptSummary, summarize_transcript
 
 
 def test_model_config_normalizes_values() -> None:
@@ -17,7 +17,7 @@ def test_model_config_normalizes_values() -> None:
 
 
 def test_text_summary_formats_chapters() -> None:
-    summary = CaptionSummary(
+    summary = TranscriptSummary(
         overview="Main arc.",
         chapters=[
             Chapter(
@@ -44,7 +44,7 @@ def test_text_summary_formats_chapters() -> None:
 
 
 def test_text_summary_allows_no_chapters() -> None:
-    summary = CaptionSummary(
+    summary = TranscriptSummary(
         overview="Short source with no chapter structure.",
         chapters=[],
     )
@@ -55,13 +55,13 @@ def test_text_summary_allows_no_chapters() -> None:
     }
 
 
-def test_summarize_caption_uses_langchain_structured_output(monkeypatch) -> None:
+def test_summarize_transcript_uses_langchain_structured_output(monkeypatch) -> None:
     calls = {}
 
     class FakeStructuredLlm:
         def invoke(self, messages):
             calls["messages"] = messages
-            return CaptionSummary(
+            return TranscriptSummary(
                 overview="A compact summary.",
                 chapters=[
                     Chapter(
@@ -81,7 +81,7 @@ def test_summarize_caption_uses_langchain_structured_output(monkeypatch) -> None
 
     monkeypatch.setattr("youtube_toolkit.summarization.ChatOpenAI", FakeChatOpenAI)
 
-    summary = summarize_caption(
+    summary = summarize_transcript(
         "Transcript text.",
         ModelConfig(
             model="summary-model",
@@ -97,7 +97,7 @@ def test_summarize_caption_uses_langchain_structured_output(monkeypatch) -> None
         "api_key": "summary-key",
         "base_url": "https://summary.example/v1",
     }
-    assert calls["schema"] is CaptionSummary
+    assert calls["schema"] is TranscriptSummary
     assert isinstance(calls["messages"][0], SystemMessage)
     assert isinstance(calls["messages"][1], HumanMessage)
     assert "Write the summary in English" in calls["messages"][0].content

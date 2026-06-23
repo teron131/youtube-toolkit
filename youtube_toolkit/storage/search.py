@@ -11,7 +11,7 @@ from ..url import extract_video_id
 from .semantic import (
     cosine_similarity,
     embed_text_with_gemini,
-    embedding_from_json,
+    embedding_from_blob,
 )
 
 EmbedText = Callable[[str], list[float]]
@@ -190,7 +190,7 @@ def search_video_payloads_by_semantic(
     for row in indexed_rows:
         score = cosine_similarity(
             query_embedding,
-            embedding_from_json(row["embedding_json"]),
+            embedding_from_blob(row["embedding"]),
         )
         payload = stored_video_payload(row)
         payload["semantic_score"] = score
@@ -216,14 +216,15 @@ def list_semantic_video_rows(
             videos.transcript,
             channels.youtube_channel_id,
             channels.channel_handle,
-            video_embeddings.embedding_json
-        FROM video_embeddings AS video_embeddings
-        JOIN videos AS videos ON videos.id = video_embeddings.video_id
+            videos.embedding
+        FROM videos AS videos
         LEFT JOIN channels AS channels ON channels.id = videos.channel_id
-        WHERE (
-            ? = 0
-            OR (videos.transcript IS NOT NULL AND videos.transcript != '')
-        )
+        WHERE videos.embedding IS NOT NULL
+            AND videos.embedding != ''
+            AND (
+                ? = 0
+                OR (videos.transcript IS NOT NULL AND videos.transcript != '')
+            )
         """,
         (int(require_transcript),),
     ).fetchall()

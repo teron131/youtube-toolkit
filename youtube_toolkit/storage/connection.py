@@ -32,6 +32,9 @@ CREATE TABLE IF NOT EXISTS videos (
     upload_date TEXT,
     view_count INTEGER,
     transcript TEXT,
+    summary TEXT,
+    embedding_content_hash TEXT,
+    embedding BLOB,
     FOREIGN KEY (channel_id) REFERENCES channels (id)
 );
 
@@ -50,14 +53,6 @@ CREATE TABLE IF NOT EXISTS channels_blacklist (
     FOREIGN KEY (channel_id) REFERENCES channels (id)
 );
 
-CREATE TABLE IF NOT EXISTS video_embeddings (
-    video_id INTEGER NOT NULL,
-    content_hash TEXT NOT NULL,
-    embedding_json TEXT NOT NULL,
-    embedded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (video_id),
-    FOREIGN KEY (video_id) REFERENCES videos (id) ON DELETE CASCADE
-);
 """
 
 

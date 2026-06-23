@@ -11,6 +11,7 @@ from youtube_toolkit.storage import (
     resolve_storage_dir,
     search_stored_videos,
     upsert_video,
+    upsert_video_summary,
 )
 
 
@@ -35,6 +36,33 @@ def test_find_repo_root_returns_nearest_git_parent(tmp_path) -> None:
     (repo_root / ".git").mkdir()
 
     assert find_repo_root(nested) == repo_root
+
+
+def test_upsert_video_converts_title_to_hong_kong_traditional(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "AI商业发展暗藏机会",
+            },
+        )
+        row = connection.execute(
+            """
+            SELECT title
+            FROM videos
+            WHERE youtube_video_id = ?
+            """,
+            ("JpSHyEIZ_bo",),
+        ).fetchone()
+
+    assert row is not None
+    assert row["title"] == "AI商業發展暗藏機會"
 
 
 def test_search_stored_videos_finds_by_id_and_url(
@@ -187,8 +215,19 @@ def test_search_stored_videos_semantic_search_uses_saved_embeddings(
             transcript="番茄酱和意大利面",
         )
         embedding_payload = index_video_embedding(connection, "JpSHyEIZ_bo", embed_text=fake_embed)
+        stored_embedding = connection.execute(
+            """
+            SELECT embedding_content_hash, typeof(embedding) AS embedding_type
+            FROM videos
+            WHERE youtube_video_id = ?
+            """,
+            ("JpSHyEIZ_bo",),
+        ).fetchone()
         assert embedding_payload is not None
         assert embedding_payload.pop("content_hash")
+        assert stored_embedding is not None
+        assert stored_embedding["embedding_content_hash"]
+        assert stored_embedding["embedding_type"] == "blob"
         assert embedding_payload == {
             "video_id": "JpSHyEIZ_bo",
             "database_row_id": 1,
@@ -234,6 +273,118 @@ def test_embed_text_with_gemini_uses_embedding_config(monkeypatch) -> None:
             "output_dimensionality": 512,
         },
     }
+
+
+def test_upsert_video_summary_stores_summary(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "Market GPU note",
+            },
+            transcript="GPU earnings",
+        )
+        row_id = upsert_video_summary(
+            connection,
+            "JpSHyEIZ_bo",
+            "GPU earnings improved.",
+        )
+        row = connection.execute(
+            """
+            SELECT summary
+            FROM videos
+            WHERE youtube_video_id = ?
+            """,
+            ("JpSHyEIZ_bo",),
+        ).fetchone()
+
+    assert row_id == 1
+    assert row is not None
+    assert row["summary"] == "GPU earnings improved."
+
+
+def test_upsert_video_summary_updates_summary(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "Market GPU note",
+            },
+            transcript="GPU earnings transcript",
+        )
+        upsert_video_summary(
+            connection,
+            "JpSHyEIZ_bo",
+            "Old summary.",
+        )
+        row_id = upsert_video_summary(
+            connection,
+            "JpSHyEIZ_bo",
+            "New summary.",
+        )
+        row = connection.execute(
+            """
+            SELECT summary
+            FROM videos
+            WHERE youtube_video_id = ?
+            """,
+            ("JpSHyEIZ_bo",),
+        ).fetchone()
+
+    assert row_id == 1
+    assert row is not None
+    assert row["summary"] == "New summary."
+
+
+def test_video_summary_is_removed_when_transcript_changes(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        metadata = {
+            "id": "JpSHyEIZ_bo",
+            "title": "Market GPU note",
+        }
+        upsert_video(
+            connection,
+            metadata,
+            transcript="Old transcript",
+        )
+        upsert_video_summary(
+            connection,
+            "JpSHyEIZ_bo",
+            "Old summary.",
+        )
+        upsert_video(
+            connection,
+            metadata,
+            transcript="New transcript",
+        )
+        summary_row = connection.execute(
+            """
+            SELECT summary
+            FROM videos
+            WHERE youtube_video_id = ?
+            """,
+            ("JpSHyEIZ_bo",),
+        ).fetchone()
+
+    assert summary_row is not None
+    assert summary_row["summary"] is None
 
 
 def test_search_stored_videos_can_sort_by_relevance_score(

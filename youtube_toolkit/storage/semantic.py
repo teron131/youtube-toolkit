@@ -6,6 +6,7 @@ from collections.abc import Callable
 import hashlib
 import json
 import sqlite3
+import struct
 from typing import Any
 import urllib.error
 import urllib.request
@@ -28,7 +29,14 @@ def index_video_embedding(
 ) -> dict[str, Any] | None:
     row = connection.execute(
         """
-        SELECT id, youtube_video_id, title, upload_date, transcript
+        SELECT
+            id,
+            youtube_video_id,
+            title,
+            upload_date,
+            transcript,
+            embedding_content_hash,
+            embedding
         FROM videos
         WHERE youtube_video_id = ?
         LIMIT 1
@@ -49,19 +57,11 @@ def index_video_embedding(
         if part not in (None, "")
     )
     content_hash = hashlib.sha256(source_text.encode("utf-8")).hexdigest()
-    existing_embedding_row = connection.execute(
-        """
-        SELECT content_hash, embedding_json
-        FROM video_embeddings
-        WHERE video_id = ?
-        """,
-        (row["id"],),
-    ).fetchone()
-    if existing_embedding_row is not None and existing_embedding_row["content_hash"] == content_hash:
+    if row["embedding_content_hash"] == content_hash and row["embedding"]:
         return embedding_index_payload(
             row,
             content_hash,
-            embedding_from_json(existing_embedding_row["embedding_json"]),
+            embedding_from_blob(row["embedding"]),
         )
 
     embedding = embed_text(source_text) if embed_text is not None else embed_text_with_gemini(source_text, config=embedding_config)
@@ -69,22 +69,15 @@ def index_video_embedding(
         raise EmbeddingSearchError("Embedding request returned an empty vector")
     connection.execute(
         """
-        INSERT INTO video_embeddings (
-            video_id,
-            content_hash,
-            embedding_json
-        )
-        VALUES (?, ?, ?)
-        ON CONFLICT(video_id)
-        DO UPDATE SET
-            content_hash = excluded.content_hash,
-            embedding_json = excluded.embedding_json,
-            embedded_at = CURRENT_TIMESTAMP
+        UPDATE videos
+        SET embedding_content_hash = ?,
+            embedding = ?
+        WHERE id = ?
         """,
         (
-            row["id"],
             content_hash,
-            json.dumps(embedding),
+            embedding_to_blob(embedding),
+            row["id"],
         ),
     )
     return embedding_index_payload(row, content_hash, embedding)
@@ -159,14 +152,25 @@ def gemini_embedding_config() -> EmbeddingConfig:
         raise EmbeddingSearchError(str(error)) from error
 
 
-def embedding_from_json(value: str) -> list[float]:
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError as error:
-        raise EmbeddingSearchError("Stored embedding is not valid JSON") from error
-    if not isinstance(parsed, list):
-        raise EmbeddingSearchError("Stored embedding is not a vector")
-    return [float(item) for item in parsed]
+def embedding_to_blob(embedding: list[float]) -> bytes:
+    """Encode an embedding vector as little-endian float32 bytes."""
+    return struct.pack(f"<{len(embedding)}f", *embedding)
+
+
+def embedding_from_blob(value: bytes) -> list[float]:
+    """Decode an embedding vector from little-endian float32 bytes."""
+    if not isinstance(value, bytes | bytearray | memoryview):
+        raise EmbeddingSearchError("Stored embedding is not a blob")
+    embedding_bytes = bytes(value)
+    if len(embedding_bytes) % 4 != 0:
+        raise EmbeddingSearchError("Stored embedding blob has an invalid length")
+    return [
+        float(item)
+        for item in struct.unpack(
+            f"<{len(embedding_bytes) // 4}f",
+            embedding_bytes,
+        )
+    ]
 
 
 def cosine_similarity(left: list[float], right: list[float]) -> float:

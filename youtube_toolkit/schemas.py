@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
+from .convert_zh import convert_zh
+
 
 @dataclass(frozen=True, slots=True)
 class VideoMetadata:
@@ -32,7 +34,7 @@ class VideoMetadata:
         return cls(
             video_id=video_id,
             url=f"https://www.youtube.com/watch?v={video_id}",
-            title=normalize_text(metadata.get("title")),
+            title=normalize_title(metadata.get("title")),
             channel=normalize_text(metadata.get("uploader") or metadata.get("channel")),
             channel_id=normalize_channel_id(metadata.get("channel_id")),
             channel_handle=channel_handle,
@@ -126,7 +128,7 @@ def extract_video_record(
         return None
     return VideoRecord(
         youtube_video_id=youtube_video_id,
-        title=normalize_text(metadata.get("title")),
+        title=normalize_title(metadata.get("title")),
         upload_date=normalize_upload_date(metadata.get("upload_date")),
         view_count=normalize_view_count(metadata.get("view_count")),
         transcript=transcript,
@@ -169,6 +171,13 @@ def normalize_text(value: Any) -> str | None:
         return None
     stripped_value = value.strip()
     return stripped_value or None
+
+
+def normalize_title(value: Any) -> str | None:
+    normalized_text = normalize_text(value)
+    if normalized_text is None:
+        return None
+    return convert_zh(normalized_text, "s2hk")
 
 
 def normalize_view_count(view_count: Any) -> int | None:
