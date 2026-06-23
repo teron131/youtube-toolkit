@@ -1,6 +1,5 @@
 import sqlite3
 from dataclasses import fields
-from pathlib import Path
 
 from youtube_toolkit.storage import get_connection, upsert_video
 from youtube_toolkit.stt import (
@@ -9,7 +8,7 @@ from youtube_toolkit.stt import (
     transcribe_audio_file,
     transcribe_audio_to_db,
 )
-from youtube_toolkit.stt.common import detect_audio_content_type
+from youtube_toolkit.stt.common import encode_multipart_form
 
 
 def test_xai_stt_response_normalizes_to_plain_contract() -> None:
@@ -71,10 +70,27 @@ def test_stt_transcription_is_hardcoded_to_s2hk(tmp_path, monkeypatch) -> None:
     assert result.text == "數據庫"
 
 
-def test_detect_audio_content_type_handles_ytdlp_default_containers() -> None:
+def test_encode_multipart_form_handles_ytdlp_default_containers(tmp_path) -> None:
     """STT uploads include useful MIME hints for common yt-dlp audio outputs."""
-    assert detect_audio_content_type(Path("audio.webm")) == "audio/webm"
-    assert detect_audio_content_type(Path("audio.m4a")) == "audio/x-m4a"
+
+    webm_path = tmp_path / "audio.webm"
+    m4a_path = tmp_path / "audio.m4a"
+    webm_path.write_bytes(b"webm-audio")
+    m4a_path.write_bytes(b"m4a-audio")
+
+    webm_body, _webm_content_type = encode_multipart_form(
+        fields={},
+        file_field="file",
+        file_path=webm_path,
+    )
+    m4a_body, _m4a_content_type = encode_multipart_form(
+        fields={},
+        file_field="file",
+        file_path=m4a_path,
+    )
+
+    assert b"Content-Type: audio/webm" in webm_body
+    assert b"Content-Type: audio/x-m4a" in m4a_body
 
 
 def test_transcribe_audio_to_db_stores_first_then_returns_json_payload(
