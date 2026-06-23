@@ -2,27 +2,21 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import hashlib
 import json
-import os
 import sqlite3
+from typing import Any
 import urllib.error
 import urllib.request
-from collections.abc import Callable
-from pathlib import Path
-from typing import Any
 
-from .connection import find_repo_root
+from ..model_config import EmbeddingConfig, embedding_config_from_env
 
-EMBEDDING_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
-EMBEDDING_PROVIDER = "gemini"
-DEFAULT_EMBEDDING_MODEL = "gemini-embedding-2"
-DEFAULT_EMBEDDING_DIMENSIONALITY = 768
 EmbedText = Callable[[str], list[float]]
 
 
 class EmbeddingSearchError(RuntimeError):
-    """Raised when semantic search cannot call or parse the embedding provider."""
+    """Raised when semantic search cannot call or parse the embedding response."""
 
 
 def index_video_embedding(
@@ -30,6 +24,7 @@ def index_video_embedding(
     youtube_video_id: str,
     *,
     embed_text: EmbedText | None = None,
+    embedding_config: EmbeddingConfig | None = None,
 ) -> dict[str, Any] | None:
     row = connection.execute(
         """
@@ -58,13 +53,9 @@ def index_video_embedding(
         """
         SELECT content_hash, embedding_json
         FROM video_embeddings
-        WHERE video_id = ? AND provider = ? AND model = ?
+        WHERE video_id = ?
         """,
-        (
-            row["id"],
-            EMBEDDING_PROVIDER,
-            DEFAULT_EMBEDDING_MODEL,
-        ),
+        (row["id"],),
     ).fetchone()
     if existing_embedding_row is not None and existing_embedding_row["content_hash"] == content_hash:
         return embedding_index_payload(
@@ -73,20 +64,18 @@ def index_video_embedding(
             embedding_from_json(existing_embedding_row["embedding_json"]),
         )
 
-    embedding = (embed_text or embed_text_with_gemini)(source_text)
+    embedding = embed_text(source_text) if embed_text is not None else embed_text_with_gemini(source_text, config=embedding_config)
     if not embedding:
-        raise EmbeddingSearchError("Embedding provider returned an empty vector")
+        raise EmbeddingSearchError("Embedding request returned an empty vector")
     connection.execute(
         """
         INSERT INTO video_embeddings (
             video_id,
-            provider,
-            model,
             content_hash,
             embedding_json
         )
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(video_id, provider, model)
+        VALUES (?, ?, ?)
+        ON CONFLICT(video_id)
         DO UPDATE SET
             content_hash = excluded.content_hash,
             embedding_json = excluded.embedding_json,
@@ -94,8 +83,6 @@ def index_video_embedding(
         """,
         (
             row["id"],
-            EMBEDDING_PROVIDER,
-            DEFAULT_EMBEDDING_MODEL,
             content_hash,
             json.dumps(embedding),
         ),
@@ -111,26 +98,25 @@ def embedding_index_payload(
     return {
         "video_id": row["youtube_video_id"],
         "database_row_id": int(row["id"]),
-        "provider": EMBEDDING_PROVIDER,
-        "model": DEFAULT_EMBEDDING_MODEL,
         "content_hash": content_hash,
         "dimensions": len(embedding),
     }
 
 
-def embed_text_with_gemini(text: str) -> list[float]:
-    api_key = embedding_api_key()
-    if api_key is None:
-        raise EmbeddingSearchError("Missing embedding setup: set GEMINI_API_KEY in env or .env.")
-
+def embed_text_with_gemini(
+    text: str,
+    *,
+    config: EmbeddingConfig | None = None,
+) -> list[float]:
+    resolved_config = config or gemini_embedding_config()
     payload = {
-        "model": f"models/{DEFAULT_EMBEDDING_MODEL}",
+        "model": f"models/{resolved_config.model}",
         "content": {"parts": [{"text": text}]},
-        "output_dimensionality": DEFAULT_EMBEDDING_DIMENSIONALITY,
+        "output_dimensionality": resolved_config.output_dimensionality,
     }
     response = post_embedding_json(
-        f"{EMBEDDING_BASE_URL}/models/{DEFAULT_EMBEDDING_MODEL}:embedContent",
-        api_key,
+        resolved_config.endpoint(f"models/{resolved_config.model}:embedContent"),
+        resolved_config,
         payload,
     )
     embedding = response.get("embedding")
@@ -142,17 +128,17 @@ def embed_text_with_gemini(text: str) -> list[float]:
 
 def post_embedding_json(
     url: str,
-    api_key: str,
+    config: EmbeddingConfig,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    if not url.startswith(f"{EMBEDDING_BASE_URL}/"):
+    if not url.startswith(f"{config.base_url}/"):
         raise EmbeddingSearchError("Unsupported embedding URL")
     request = urllib.request.Request(  # noqa: S310
         url,
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "Content-Type": "application/json",
-            "x-goog-api-key": api_key,
+            "x-goog-api-key": config.api_key,
         },
         method="POST",
     )
@@ -161,35 +147,16 @@ def post_embedding_json(
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
         message = compact_embedding_error(error.read().decode("utf-8", errors="replace"))
-        raise EmbeddingSearchError(message or f"Embedding provider HTTP {error.code}") from error
+        raise EmbeddingSearchError(message or f"Embedding request HTTP {error.code}") from error
     except (OSError, json.JSONDecodeError) as error:
         raise EmbeddingSearchError(str(error)) from error
 
 
-def embedding_api_key() -> str | None:
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if api_key:
-        return api_key
-
-    repo_root = find_repo_root(Path.cwd()) or find_repo_root(Path(__file__))
-    if repo_root is None:
-        return None
-    return dotenv_values(repo_root / ".env").get("GEMINI_API_KEY")
-
-
-def dotenv_values(file_path: Path) -> dict[str, str]:
-    if not file_path.exists():
-        return {}
-    values: dict[str, str] = {}
-    for line in file_path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, raw_value = stripped.split("=", 1)
-        value = raw_value.strip().strip("'\"")
-        if key.strip():
-            values[key.strip()] = value
-    return values
+def gemini_embedding_config() -> EmbeddingConfig:
+    try:
+        return embedding_config_from_env()
+    except ValueError as error:
+        raise EmbeddingSearchError(str(error)) from error
 
 
 def embedding_from_json(value: str) -> list[float]:

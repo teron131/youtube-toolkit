@@ -6,10 +6,9 @@ from collections.abc import Callable
 import sqlite3
 from typing import Any, Literal
 
+from ..model_config import EmbeddingConfig
 from ..url import extract_video_id
 from .semantic import (
-    DEFAULT_EMBEDDING_MODEL,
-    EMBEDDING_PROVIDER,
     cosine_similarity,
     embed_text_with_gemini,
     embedding_from_json,
@@ -28,6 +27,7 @@ def search_stored_videos(
     require_transcript: bool = False,
     semantic: bool = False,
     embed_text: EmbedText | None = None,
+    embedding_config: EmbeddingConfig | None = None,
     sort: SearchSort = "views",
 ) -> list[dict[str, Any]]:
     normalized_query = query.strip()
@@ -69,6 +69,7 @@ def search_stored_videos(
         normalized_query,
         require_transcript=require_transcript,
         embed_text=embed_text,
+        embedding_config=embedding_config,
     )
     return rank_search_payloads(
         merge_search_payloads(keyword_payloads, semantic_payloads),
@@ -175,6 +176,7 @@ def search_video_payloads_by_semantic(
     *,
     require_transcript: bool,
     embed_text: EmbedText | None,
+    embedding_config: EmbeddingConfig | None,
 ) -> list[dict[str, Any]]:
     indexed_rows = list_semantic_video_rows(
         connection,
@@ -183,7 +185,7 @@ def search_video_payloads_by_semantic(
     if not indexed_rows:
         return []
 
-    query_embedding = (embed_text or embed_text_with_gemini)(query)
+    query_embedding = embed_text(query) if embed_text is not None else embed_text_with_gemini(query, config=embedding_config)
     scored_payloads: list[tuple[float, dict[str, Any]]] = []
     for row in indexed_rows:
         score = cosine_similarity(
@@ -218,18 +220,12 @@ def list_semantic_video_rows(
         FROM video_embeddings AS video_embeddings
         JOIN videos AS videos ON videos.id = video_embeddings.video_id
         LEFT JOIN channels AS channels ON channels.id = videos.channel_id
-        WHERE video_embeddings.provider = ?
-            AND video_embeddings.model = ?
-            AND (
-                ? = 0
-                OR (videos.transcript IS NOT NULL AND videos.transcript != '')
-            )
+        WHERE (
+            ? = 0
+            OR (videos.transcript IS NOT NULL AND videos.transcript != '')
+        )
         """,
-        (
-            EMBEDDING_PROVIDER,
-            DEFAULT_EMBEDDING_MODEL,
-            int(require_transcript),
-        ),
+        (int(require_transcript),),
     ).fetchall()
 
 
