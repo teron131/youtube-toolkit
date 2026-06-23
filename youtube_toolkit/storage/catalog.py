@@ -144,13 +144,40 @@ def upsert_video(
     return int(existing_row["id"])
 
 
+def upsert_video_summary(
+    connection: sqlite3.Connection,
+    youtube_video_id: str,
+    summary: str,
+) -> int | None:
+    row = find_video_row(connection, youtube_video_id)
+    if row is None:
+        return None
+
+    clean_summary = summary.strip()
+    if not clean_summary:
+        raise ValueError("Video summary cannot be empty")
+
+    connection.execute(
+        """
+        UPDATE videos
+        SET summary = ?
+        WHERE id = ?
+        """,
+        (
+            clean_summary,
+            row["id"],
+        ),
+    )
+    return int(row["id"])
+
+
 def find_video_row(
     connection: sqlite3.Connection,
     youtube_video_id: str,
 ) -> sqlite3.Row | None:
     return connection.execute(
         """
-        SELECT id, channel_id, title, upload_date, view_count, transcript
+        SELECT id, channel_id, title, upload_date, view_count, transcript, summary
         FROM videos
         WHERE youtube_video_id = ?
         """,
@@ -227,7 +254,21 @@ def update_video(
         existing_row["transcript"],
     ):
         connection.execute(
-            "DELETE FROM video_embeddings WHERE video_id = ?",
+            """
+            UPDATE videos
+            SET embedding_content_hash = NULL,
+                embedding = NULL
+            WHERE id = ?
+            """,
+            (existing_row["id"],),
+        )
+    if next_transcript != existing_row["transcript"]:
+        connection.execute(
+            """
+            UPDATE videos
+            SET summary = NULL
+            WHERE id = ?
+            """,
             (existing_row["id"],),
         )
 

@@ -14,6 +14,7 @@ from .catalog import (
     store_channel_listing,
     upsert_blacklist_channel,
     upsert_video,
+    upsert_video_summary,
     upsert_watchlist_channel,
 )
 from .connection import (
@@ -49,5 +50,6 @@ __all__ = [
     "store_channel_listing",
     "upsert_blacklist_channel",
     "upsert_video",
+    "upsert_video_summary",
     "upsert_watchlist_channel",
 ]
