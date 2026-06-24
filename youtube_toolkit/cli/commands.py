@@ -14,6 +14,8 @@ from ..ytdlp.channels import (
     add_blacklist_channel,
     add_watchlist_channel,
     fetch_channel_videos,
+    remove_blacklist_channel,
+    remove_watchlist_channel,
     sync_watchlist,
 )
 from ..ytdlp.search import SearchOptions, search_videos
@@ -76,8 +78,12 @@ def run_channel_videos(args: argparse.Namespace) -> int:
 
 
 def run_watchlist(args: argparse.Namespace) -> int:
+    """Dispatch watchlist add, remove, and sync subcommands."""
     if args.watchlist_command == "add":
         print(add_watchlist_channel(args.channel))
+        return 0
+    if args.watchlist_command == "remove":
+        print(remove_watchlist_channel(args.channel))
         return 0
 
     fetched_video_ids = sync_watchlist(
@@ -93,7 +99,12 @@ def run_watchlist(args: argparse.Namespace) -> int:
 
 
 def run_blacklist(args: argparse.Namespace) -> int:
-    print(add_blacklist_channel(args.channel))
+    """Dispatch blacklist add and remove subcommands."""
+    if args.blacklist_command == "add":
+        print(add_blacklist_channel(args.channel))
+        return 0
+
+    print(remove_blacklist_channel(args.channel))
     return 0
 
 

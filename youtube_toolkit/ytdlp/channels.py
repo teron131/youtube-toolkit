@@ -7,8 +7,10 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from urllib.parse import urlparse
 
-from ..schemas import extract_channel_identity
+from ..schemas import extract_channel_identity, parse_channel_identity_input
 from ..storage import (
+    delete_blacklist_channel,
+    delete_watchlist_channel,
     get_connection,
     list_missing_watchlist_video_ids,
     list_watchlist_channel_inputs,
@@ -178,6 +180,40 @@ def add_blacklist_channel(channel_input: str) -> str:
         store_channel_listing(connection, metadata)
         upsert_blacklist_channel(connection, channel_identity)
     return channel_identity.channel_handle or channel_identity.youtube_channel_id or channel_input
+
+
+def remove_watchlist_channel(channel_input: str) -> str:
+    """Remove a channel from the local watchlist without deleting catalog data."""
+    channel_identity = parse_channel_identity_input(channel_input)
+    if not channel_identity.has_identity():
+        metadata = fetch_channel_videos(
+            channel_input,
+            options=ChannelOptions(last=1),
+        )
+        channel_identity = extract_channel_identity(metadata)
+    with get_connection() as connection:
+        removed = delete_watchlist_channel(connection, channel_identity)
+    label = channel_identity.channel_handle or channel_identity.youtube_channel_id or channel_input
+    if removed:
+        return f"Removed {label} from watchlist"
+    return f"{label} was not in watchlist"
+
+
+def remove_blacklist_channel(channel_input: str) -> str:
+    """Remove a channel from the local search blacklist without deleting catalog data."""
+    channel_identity = parse_channel_identity_input(channel_input)
+    if not channel_identity.has_identity():
+        metadata = fetch_channel_videos(
+            channel_input,
+            options=ChannelOptions(last=1),
+        )
+        channel_identity = extract_channel_identity(metadata)
+    with get_connection() as connection:
+        removed = delete_blacklist_channel(connection, channel_identity)
+    label = channel_identity.channel_handle or channel_identity.youtube_channel_id or channel_input
+    if removed:
+        return f"Removed {label} from blacklist"
+    return f"{label} was not in blacklist"
 
 
 def sync_watchlist(

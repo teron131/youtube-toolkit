@@ -8,6 +8,8 @@ from ..model_config import (
     EMBEDDING_BASE_URL,
 )
 from .catalog import (
+    delete_blacklist_channel,
+    delete_watchlist_channel,
     list_blacklist_channel_identities,
     list_missing_watchlist_video_ids,
     list_watchlist_channel_inputs,
@@ -38,6 +40,8 @@ __all__ = [
     "EMBEDDING_BASE_URL",
     "STORAGE_DIRNAME",
     "EmbeddingSearchError",
+    "delete_blacklist_channel",
+    "delete_watchlist_channel",
     "embed_text_with_gemini",
     "find_repo_root",
     "get_connection",

@@ -24,8 +24,8 @@ The toolkit intentionally ships a small working surface:
 - `youtube search "<query>"` searches videos with local metadata filters
 - `youtube inspect <url-or-id>` prints metadata JSON
 - `youtube channel-videos <channel>` lists recent channel uploads
-- `youtube watchlist add <channel>` and `youtube watchlist sync` persist channel workflows
-- `youtube blacklist add <channel>` excludes channels from future search results
+- `youtube watchlist add <channel>`, `youtube watchlist remove <channel>`, and `youtube watchlist sync` persist channel workflows
+- `youtube blacklist add <channel>` and `youtube blacklist remove <channel>` manage channels excluded from future search results
 - `youtube doctor` checks the runtime can import `yt-dlp`
 
 Storage lives in `.cache/youtube.sqlite3` by default. Set `YOUTUBE_TOOLKIT_STORAGE_HOME` to move it.
@@ -47,6 +47,7 @@ uv run youtube search "langgraph tutorial" --limit 5 --max-duration 20:00
 uv run youtube inspect https://www.youtube.com/watch?v=JpSHyEIZ_bo
 uv run youtube channel-videos @OpenAI --last 5
 uv run youtube watchlist add @OpenAI
+uv run youtube watchlist remove @OpenAI
 ```
 
 ## Codex Skill

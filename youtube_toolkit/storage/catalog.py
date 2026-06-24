@@ -122,6 +122,76 @@ def upsert_blacklist_channel(
     return channel_id
 
 
+def delete_watchlist_channel(
+    connection: turso.Connection,
+    channel_identity: ChannelIdentity,
+) -> bool:
+    """Remove a known channel from the watchlist membership table."""
+    if not channel_identity.has_identity():
+        return False
+
+    matching_rows = find_matching_channel_rows(connection, channel_identity)
+    if not matching_rows:
+        return False
+
+    channel_ids = [int(row["id"]) for row in matching_rows]
+    placeholders = ", ".join("?" for _ in channel_ids)
+    membership_rows = connection.execute(
+        f"""
+        SELECT channel_id
+        FROM channels_watchlist
+        WHERE channel_id IN ({placeholders})
+        """,
+        channel_ids,
+    ).fetchall()
+    if not membership_rows:
+        return False
+
+    connection.execute(
+        f"""
+        DELETE FROM channels_watchlist
+        WHERE channel_id IN ({placeholders})
+        """,
+        channel_ids,
+    )
+    return True
+
+
+def delete_blacklist_channel(
+    connection: turso.Connection,
+    channel_identity: ChannelIdentity,
+) -> bool:
+    """Remove a known channel from the blacklist membership table."""
+    if not channel_identity.has_identity():
+        return False
+
+    matching_rows = find_matching_channel_rows(connection, channel_identity)
+    if not matching_rows:
+        return False
+
+    channel_ids = [int(row["id"]) for row in matching_rows]
+    placeholders = ", ".join("?" for _ in channel_ids)
+    membership_rows = connection.execute(
+        f"""
+        SELECT channel_id
+        FROM channels_blacklist
+        WHERE channel_id IN ({placeholders})
+        """,
+        channel_ids,
+    ).fetchall()
+    if not membership_rows:
+        return False
+
+    connection.execute(
+        f"""
+        DELETE FROM channels_blacklist
+        WHERE channel_id IN ({placeholders})
+        """,
+        channel_ids,
+    )
+    return True
+
+
 def upsert_video(
     connection: turso.Connection,
     metadata: dict[str, Any],

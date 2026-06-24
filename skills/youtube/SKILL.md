@@ -28,8 +28,10 @@ Commands:
 - `search "<query>"`: search YouTube videos with local metadata filters
 - `channel-videos <channel>`: list recent videos from a YouTube channel URL, handle, or channel ID
 - `watchlist add <channel>`: persist a channel for later sync
+- `watchlist remove <channel>`: stop watching a channel without deleting stored catalog data
 - `watchlist sync`: refresh watched channels and fetch missing transcripts
 - `blacklist add <channel>`: exclude a channel from future search results
+- `blacklist remove <channel>`: stop excluding a channel from future search results
 
 Transcript language selection is hardcoded to English first, then common Chinese caption codes; caption lookup is hardcoded to automatic captions first, then manual subtitles. SponsorBlock-marked transcript chunks are always removed.
 
