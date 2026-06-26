@@ -55,7 +55,7 @@ Useful channel/watchlist options:
 
 ## Storage
 
-Storage lives in `.cache/youtube.sqlite3` by default, resolved from `YOUTUBE_TOOLKIT_STORAGE_HOME`, then legacy `YOUTUBE_TOOLKIT_STATE_HOME` or `YOUTUBE_MEMORY_HOME`, then the current Git repo root, then the package source root.
+Storage lives in this checkout's `.cache/youtube.sqlite3` during source-checkout usage. Installed CLI usage stores the database at `~/Library/Application Support/youtube-toolkit/youtube.sqlite3`. Set `YOUTUBE_TOOLKIT_STORAGE_HOME` to move it.
 
 Search automatically applies stored blacklist channels. Search, transcript, channel listing, and watchlist commands persist normalized channel/video rows for later workflows.
 
