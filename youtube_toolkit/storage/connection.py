@@ -1,4 +1,4 @@
-"""SQLite connection and schema setup for repo-local YouTube toolkit state."""
+"""SQLite connection and schema setup for YouTube toolkit state."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from pathlib import Path
 import turso
 
 STORAGE_DIRNAME = ".cache"
+APP_STATE_DIRNAME = "youtube-toolkit"
 DATABASE_FILENAME = "youtube.sqlite3"
 
 SCHEMA_SQL = """
@@ -58,6 +59,7 @@ CREATE TABLE IF NOT EXISTS channels_blacklist (
 
 
 def get_connection() -> turso.Connection:
+    """Open the toolkit SQLite database and ensure the schema exists."""
     storage_dir = resolve_storage_dir()
     storage_dir.mkdir(parents=True, exist_ok=True)
     connection = turso.connect(str(storage_dir / DATABASE_FILENAME))
@@ -68,28 +70,17 @@ def get_connection() -> turso.Connection:
 
 
 def resolve_storage_dir() -> Path:
-    for environment_variable in (
-        "YOUTUBE_TOOLKIT_STORAGE_HOME",
-        "YOUTUBE_TOOLKIT_STATE_HOME",
-        "YOUTUBE_MEMORY_HOME",
-    ):
-        configured_home = os.environ.get(environment_variable)
-        if configured_home:
-            return Path(configured_home).expanduser().resolve()
+    """Resolve the directory that owns the toolkit SQLite database."""
+    configured_storage_home = os.environ.get("YOUTUBE_TOOLKIT_STORAGE_HOME")
+    if configured_storage_home:
+        return Path(configured_storage_home).expanduser().resolve()
 
-    current_repo_root = find_repo_root(Path.cwd())
-    if current_repo_root is not None:
-        return current_repo_root / STORAGE_DIRNAME
-
-    package_repo_root = find_repo_root(Path(__file__))
-    if package_repo_root is not None:
-        return package_repo_root / STORAGE_DIRNAME
-    return Path(__file__).resolve().parents[2] / STORAGE_DIRNAME
+    source_root = Path(__file__).resolve().parents[2]
+    if (source_root / ".git").exists() or (source_root / "pyproject.toml").exists():
+        return source_root / STORAGE_DIRNAME
+    return _resolve_user_state_dir()
 
 
-def find_repo_root(start_dir: Path) -> Path | None:
-    current_dir = start_dir.resolve()
-    for candidate_dir in (current_dir, *current_dir.parents):
-        if (candidate_dir / ".git").exists():
-            return candidate_dir
-    return None
+def _resolve_user_state_dir() -> Path:
+    """Resolve the per-user app state directory for installed CLI usage."""
+    return Path.home() / "Library" / "Application Support" / APP_STATE_DIRNAME

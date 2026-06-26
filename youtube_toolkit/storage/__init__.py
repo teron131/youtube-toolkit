@@ -1,4 +1,4 @@
-"""Public storage API for repo-local YouTube toolkit state."""
+"""Public storage API for YouTube toolkit state."""
 
 from __future__ import annotations
 
@@ -22,7 +22,6 @@ from .catalog import (
 from .connection import (
     DATABASE_FILENAME,
     STORAGE_DIRNAME,
-    find_repo_root,
     get_connection,
     resolve_storage_dir,
 )
@@ -43,7 +42,6 @@ __all__ = [
     "delete_blacklist_channel",
     "delete_watchlist_channel",
     "embed_text_with_gemini",
-    "find_repo_root",
     "get_connection",
     "get_stored_video",
     "index_video_embedding",

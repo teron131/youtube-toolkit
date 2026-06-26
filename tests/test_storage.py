@@ -1,11 +1,13 @@
+from pathlib import Path
+
 import pytest
 
+import youtube_toolkit.storage.connection as storage_connection
 from youtube_toolkit import EmbeddingConfig
 from youtube_toolkit.storage import (
     DATABASE_FILENAME,
     STORAGE_DIRNAME,
     embed_text_with_gemini,
-    find_repo_root,
     get_connection,
     get_stored_video,
     index_video_embedding,
@@ -17,26 +19,28 @@ from youtube_toolkit.storage import (
 
 
 def test_default_storage_path_is_repo_cache(monkeypatch, tmp_path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    (repo_root / ".git").mkdir()
-    monkeypatch.chdir(repo_root)
+    toolkit_root = Path(__file__).resolve().parents[1]
+    outside_repo = tmp_path / "other"
+    outside_repo.mkdir()
+    (outside_repo / ".git").mkdir()
+    monkeypatch.chdir(outside_repo)
     monkeypatch.delenv("YOUTUBE_TOOLKIT_STORAGE_HOME", raising=False)
-    monkeypatch.delenv("YOUTUBE_TOOLKIT_STATE_HOME", raising=False)
-    monkeypatch.delenv("YOUTUBE_MEMORY_HOME", raising=False)
 
     assert STORAGE_DIRNAME == ".cache"
     assert DATABASE_FILENAME == "youtube.sqlite3"
-    assert resolve_storage_dir() == repo_root / ".cache"
+    assert resolve_storage_dir() == toolkit_root / ".cache"
 
 
-def test_find_repo_root_returns_nearest_git_parent(tmp_path) -> None:
-    repo_root = tmp_path / "repo"
-    nested = repo_root / "a" / "b"
-    nested.mkdir(parents=True)
-    (repo_root / ".git").mkdir()
+def test_installed_storage_path_is_user_app_state(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(storage_connection, "__file__", str(installed_connection_file(tmp_path)))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("YOUTUBE_TOOLKIT_STORAGE_HOME", raising=False)
 
-    assert find_repo_root(nested) == repo_root
+    assert resolve_storage_dir() == tmp_path / "home" / "Library" / "Application Support" / "youtube-toolkit"
+
+
+def installed_connection_file(tmp_path: Path) -> Path:
+    return tmp_path / "tool" / "site-packages" / "youtube_toolkit" / "storage" / "connection.py"
 
 
 def test_upsert_video_converts_title_to_hong_kong_traditional(
