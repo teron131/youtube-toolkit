@@ -25,6 +25,8 @@ The toolkit intentionally ships a small working surface:
 - `youtube inspect <url-or-id>` prints metadata JSON
 - `youtube channel-videos <channel>` lists recent channel uploads
 - `youtube watchlist add <channel>`, `youtube watchlist remove <channel>`, and `youtube watchlist sync` persist channel workflows
+- `youtube watchlist new --channel <channel>` returns scoped new watched videos as JSON and marks only those videos seen
+- `youtube watchlist scheduled-sync` runs the lock-aware job body, and `youtube watchlist schedule install|status|uninstall` manages its macOS LaunchAgent
 - `youtube blacklist add <channel>` and `youtube blacklist remove <channel>` manage channels excluded from future search results
 - `youtube doctor` checks the runtime can import `yt-dlp`
 
@@ -47,6 +49,8 @@ uv run youtube search "langgraph tutorial" --limit 5 --max-duration 20:00
 uv run youtube inspect https://www.youtube.com/watch?v=JpSHyEIZ_bo
 uv run youtube channel-videos @OpenAI --last 5
 uv run youtube watchlist add @OpenAI
+uv run youtube watchlist schedule install --minutes 30 --last 50 --days 2
+uv run youtube watchlist new --channel @OpenAI
 uv run youtube watchlist remove @OpenAI
 ```
 

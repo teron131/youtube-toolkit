@@ -1,3 +1,7 @@
+"""Caption selection, transcript cache, and STT fallback tests."""
+
+from pathlib import Path
+
 import pytest
 
 from youtube_toolkit.schemas import TranscriptChunk
@@ -81,6 +85,55 @@ def test_fetch_transcript_does_not_use_stored_transcript_for_custom_options(
         )
 
 
+def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Normal transcript acquisition should use STT when captions are unavailable."""
+    audio_path = tmp_path / "JpSHyEIZ_bo.m4a"
+    audio_path.write_bytes(b"audio")
+
+    class FakeClient:
+        def metadata(self, video: str) -> dict:
+            assert video == "JpSHyEIZ_bo"
+            return {
+                "id": "JpSHyEIZ_bo",
+                "title": "No captions",
+                "automatic_captions": {},
+                "subtitles": {},
+            }
+
+        def download_transcription_audio(self, video_id: str) -> Path:
+            assert video_id == "JpSHyEIZ_bo"
+            return audio_path
+
+    def fake_transcribe_audio_to_db(path: Path) -> dict:
+        assert path == audio_path
+        return {
+            "video_id": "JpSHyEIZ_bo",
+            "database_row_id": 1,
+            "title": "No captions",
+            "upload_date": None,
+            "view_count": None,
+            "channel_id": None,
+            "channel_handle": None,
+            "transcript": "STT transcript",
+            "language": "zh",
+            "duration_seconds": 12.5,
+            "word_count": 2,
+        }
+
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+    monkeypatch.setattr("youtube_toolkit.ytdlp.caption.transcribe_audio_to_db", fake_transcribe_audio_to_db)
+
+    document = fetch_transcript("JpSHyEIZ_bo", client=FakeClient())
+
+    assert document.metadata.video_id == "JpSHyEIZ_bo"
+    assert document.source == "speech-to-text"
+    assert document.language == "zh"
+    assert document.text == "STT transcript"
+
+
 def test_any_caption_source_falls_back_to_manual_subtitles() -> None:
     """Default caption selection can use manual subtitles when automatic captions are absent."""
     metadata = {
@@ -119,5 +172,60 @@ def test_default_languages_include_chinese_caption_fallbacks() -> None:
     assert select_caption_track(metadata, list(DEFAULT_TRANSCRIPT_LANGUAGES), "any") == (
         "https://www.youtube.com/api/timedtext?v=example&lang=zh-Hant",
         "zh-Hant",
+        "subtitles",
+    )
+
+
+def test_default_languages_prefer_hong_kong_and_cantonese_before_simplified() -> None:
+    """Default transcript language selection prefers Traditional/HK keys before Simplified Chinese."""
+    metadata = {
+        "automatic_captions": {},
+        "subtitles": {
+            "zh-Hans": [
+                {
+                    "ext": "json3",
+                    "url": "https://www.youtube.com/api/timedtext?v=example&lang=zh-Hans",
+                }
+            ],
+            "yue-HK": [
+                {
+                    "ext": "json3",
+                    "url": "https://www.youtube.com/api/timedtext?v=example&lang=yue-HK",
+                }
+            ],
+        },
+    }
+
+    assert select_caption_track(metadata, list(DEFAULT_TRANSCRIPT_LANGUAGES), "any") == (
+        "https://www.youtube.com/api/timedtext?v=example&lang=yue-HK",
+        "yue-HK",
+        "subtitles",
+    )
+
+
+def test_default_languages_prefer_manual_english_before_automatic_chinese() -> None:
+    """Default transcript language selection prefers English even across caption sources."""
+    metadata = {
+        "automatic_captions": {
+            "zh-Hant": [
+                {
+                    "ext": "json3",
+                    "url": "https://www.youtube.com/api/timedtext?v=example&lang=zh-Hant",
+                }
+            ]
+        },
+        "subtitles": {
+            "en": [
+                {
+                    "ext": "json3",
+                    "url": "https://www.youtube.com/api/timedtext?v=example&lang=en",
+                }
+            ]
+        },
+    }
+
+    assert select_caption_track(metadata, list(DEFAULT_TRANSCRIPT_LANGUAGES), "any") == (
+        "https://www.youtube.com/api/timedtext?v=example&lang=en",
+        "en",
         "subtitles",
     )

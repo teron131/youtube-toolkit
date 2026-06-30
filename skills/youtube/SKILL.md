@@ -29,7 +29,10 @@ Commands:
 - `channel-videos <channel>`: list recent videos from a YouTube channel URL, handle, or channel ID
 - `watchlist add <channel>`: persist a channel for later sync
 - `watchlist remove <channel>`: stop watching a channel without deleting stored catalog data
-- `watchlist sync`: refresh watched channels and fetch missing transcripts
+- `watchlist sync`: refresh watched channels, mark new videos, and fetch missing transcripts
+- `watchlist scheduled-sync`: run the lock-aware scheduler job body
+- `watchlist schedule install|status|uninstall`: manage the macOS LaunchAgent for scheduled sync
+- `watchlist new --channel <channel>` / `watchlist new --all`: return new watched videos as JSON and mark only returned rows seen
 - `blacklist add <channel>`: exclude a channel from future search results
 - `blacklist remove <channel>`: stop excluding a channel from future search results
 
@@ -52,6 +55,7 @@ Useful channel/watchlist options:
 
 - `--last N`; default `10`
 - `--days N`
+- `watchlist schedule install --minutes N`; default `30`, with `--last 50 --days 2`
 
 ## Storage
 
