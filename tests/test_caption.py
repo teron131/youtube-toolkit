@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 
 from youtube_toolkit.schemas import TranscriptChunk
-from youtube_toolkit.storage import get_connection, upsert_video
+from youtube_toolkit.storage import get_connection, get_stored_video, upsert_video
+from youtube_toolkit.stt import SpeechTranscription
 from youtube_toolkit.youtube.caption import DEFAULT_TRANSCRIPT_LANGUAGES, TranscriptOptions, fetch_transcript, remove_sponsorblock_chunks, select_caption_track
 
 
@@ -107,20 +108,30 @@ def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
             assert video_id == "JpSHyEIZ_bo"
             return audio_path
 
-    def fake_transcribe_audio(path: Path) -> str:
+    def fake_transcribe_audio_details(path: Path) -> SpeechTranscription:
         assert path == audio_path
-        return "数据库"
+        return SpeechTranscription(
+            text="数据库",
+            language="zh",
+        )
 
     monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
-    monkeypatch.setattr("youtube_toolkit.youtube.caption.transcribe_audio", fake_transcribe_audio)
+    monkeypatch.setattr("youtube_toolkit.audio_transcription.transcribe_audio_details", fake_transcribe_audio_details)
 
     document = fetch_transcript("JpSHyEIZ_bo", client=FakeClient())
 
     assert document.metadata.video_id == "JpSHyEIZ_bo"
+    assert document.metadata.title == "No captions"
     assert document.source == "speech-to-text"
     assert document.language == "speech-to-text"
     assert document.text == "數據庫"
     assert not audio_path.exists()
+
+    with get_connection() as connection:
+        stored_video = get_stored_video(connection, "JpSHyEIZ_bo")
+    assert stored_video is not None
+    assert stored_video["title"] == "No captions"
+    assert stored_video["transcript"] == "數據庫"
 
 
 def test_any_caption_source_falls_back_to_manual_subtitles() -> None:

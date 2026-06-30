@@ -8,10 +8,9 @@ import json
 import urllib.error
 import urllib.request
 
-from ..convert_zh import convert_zh
+from ..audio_transcription import store_audio_transcript
 from ..schemas import TranscriptChunk, TranscriptDocument, TranscriptSection, VideoMetadata
 from ..storage import get_connection, get_stored_video, upsert_video
-from ..stt import transcribe_audio
 from ..url import ALLOWED_CAPTION_HOST_SUFFIXES, validate_url
 from .client import YtDlpClient
 
@@ -49,7 +48,7 @@ def fetch_transcript(
             options=options,
         )
     except CaptionTranscriptUnavailable:
-        document = fetch_stt_transcript(
+        return fetch_stt_transcript(
             metadata_payload,
             client=client,
         )
@@ -99,11 +98,12 @@ def fetch_stt_transcript(
 ) -> TranscriptDocument:
     metadata = VideoMetadata.from_yt_dlp(metadata_payload)
     audio_path = client.download_transcription_audio(metadata.video_id)
-    transcript = convert_zh(transcribe_audio(audio_path), "s2hk")
-    audio_path.unlink()
-    return transcript_document_from_text(
-        metadata,
-        transcript,
+    stored_video = store_audio_transcript(
+        audio_path,
+        metadata=metadata_payload,
+    )
+    return stored_transcript_document(
+        stored_video,
         language="speech-to-text",
         source="speech-to-text",
     )
