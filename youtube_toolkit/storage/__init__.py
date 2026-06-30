@@ -7,19 +7,10 @@ from ..model_config import (
     DEFAULT_EMBEDDING_MODEL,
     EMBEDDING_BASE_URL,
 )
-from .catalog import (
-    consume_new_watchlist_videos,
+from .blacklist import (
     delete_blacklist_channel,
-    delete_watchlist_channel,
     list_blacklist_channel_identities,
-    list_missing_watchlist_video_ids,
-    list_watchlist_channel_inputs,
-    store_channel_listing,
-    store_watchlist_channel_listing,
     upsert_blacklist_channel,
-    upsert_video,
-    upsert_video_summary,
-    upsert_watchlist_channel,
 )
 from .connection import (
     DATABASE_FILENAME,
@@ -32,6 +23,15 @@ from .semantic import (
     EmbeddingSearchError,
     embed_text_with_gemini,
     index_video_embedding,
+)
+from .videos import store_channel_listing, upsert_video, upsert_video_summary
+from .watchlist import (
+    consume_new_watchlist_videos,
+    delete_watchlist_channel,
+    list_missing_watchlist_video_ids,
+    list_watchlist_channel_inputs,
+    store_watchlist_channel_listing,
+    upsert_watchlist_channel,
 )
 
 __all__ = [
