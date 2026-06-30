@@ -8,9 +8,10 @@ import json
 import urllib.error
 import urllib.request
 
+from ..convert_zh import convert_zh
 from ..schemas import TranscriptChunk, TranscriptDocument, TranscriptSection, VideoMetadata
 from ..storage import get_connection, get_stored_video, upsert_video
-from ..stt import transcribe_audio_to_db
+from ..stt import transcribe_audio
 from ..url import ALLOWED_CAPTION_HOST_SUFFIXES, validate_url
 from .client import YtDlpClient
 
@@ -98,10 +99,12 @@ def fetch_stt_transcript(
 ) -> TranscriptDocument:
     metadata = VideoMetadata.from_yt_dlp(metadata_payload)
     audio_path = client.download_transcription_audio(metadata.video_id)
-    payload = transcribe_audio_to_db(audio_path)
-    return stored_transcript_document(
-        payload,
-        language=payload["language"] or "unknown",
+    transcript = convert_zh(transcribe_audio(audio_path), "s2hk")
+    audio_path.unlink()
+    return transcript_document_from_text(
+        metadata,
+        transcript,
+        language="speech-to-text",
         source="speech-to-text",
     )
 
@@ -137,6 +140,22 @@ def stored_transcript_document(
         upload_date=stored_video["upload_date"],
         view_count=stored_video["view_count"],
     )
+    return transcript_document_from_text(
+        metadata,
+        transcript,
+        language=language,
+        source=source,
+    )
+
+
+def transcript_document_from_text(
+    metadata: VideoMetadata,
+    transcript: str,
+    *,
+    language: str,
+    source: str,
+) -> TranscriptDocument:
+    """Wrap flat transcript text in the document shape used by caption callers."""
     return TranscriptDocument(
         metadata=metadata,
         language=language,

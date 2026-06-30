@@ -6,7 +6,7 @@ import pytest
 
 from youtube_toolkit.schemas import TranscriptChunk
 from youtube_toolkit.storage import get_connection, upsert_video
-from youtube_toolkit.ytdlp.caption import DEFAULT_TRANSCRIPT_LANGUAGES, TranscriptOptions, fetch_transcript, remove_sponsorblock_chunks, select_caption_track
+from youtube_toolkit.youtube.caption import DEFAULT_TRANSCRIPT_LANGUAGES, TranscriptOptions, fetch_transcript, remove_sponsorblock_chunks, select_caption_track
 
 
 def test_remove_sponsorblock_chunks_drops_overlapping_chunks() -> None:
@@ -107,31 +107,20 @@ def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
             assert video_id == "JpSHyEIZ_bo"
             return audio_path
 
-    def fake_transcribe_audio_to_db(path: Path) -> dict:
+    def fake_transcribe_audio(path: Path) -> str:
         assert path == audio_path
-        return {
-            "video_id": "JpSHyEIZ_bo",
-            "database_row_id": 1,
-            "title": "No captions",
-            "upload_date": None,
-            "view_count": None,
-            "channel_id": None,
-            "channel_handle": None,
-            "transcript": "STT transcript",
-            "language": "zh",
-            "duration_seconds": 12.5,
-            "word_count": 2,
-        }
+        return "数据库"
 
     monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
-    monkeypatch.setattr("youtube_toolkit.ytdlp.caption.transcribe_audio_to_db", fake_transcribe_audio_to_db)
+    monkeypatch.setattr("youtube_toolkit.youtube.caption.transcribe_audio", fake_transcribe_audio)
 
     document = fetch_transcript("JpSHyEIZ_bo", client=FakeClient())
 
     assert document.metadata.video_id == "JpSHyEIZ_bo"
     assert document.source == "speech-to-text"
-    assert document.language == "zh"
-    assert document.text == "STT transcript"
+    assert document.language == "speech-to-text"
+    assert document.text == "數據庫"
+    assert not audio_path.exists()
 
 
 def test_any_caption_source_falls_back_to_manual_subtitles() -> None:

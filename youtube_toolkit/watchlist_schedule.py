@@ -16,7 +16,7 @@ import sys
 from typing import Any
 
 from .storage import resolve_storage_dir
-from .ytdlp.channels import ChannelOptions, sync_watchlist
+from .youtube.channels import ChannelOptions, sync_watchlist
 
 DEFAULT_WATCHLIST_SCHEDULE_LABEL = "com.teron.youtube-toolkit.watchlist"
 DEFAULT_WATCHLIST_SCHEDULE_MINUTES = 30

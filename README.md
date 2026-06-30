@@ -20,7 +20,7 @@ The toolkit intentionally ships a small working surface:
 
 - `youtube transcript <url-or-id>` fetches and stores a transcript, then prints JSON
 - `youtube audio <url-or-id>` downloads provider-compatible audio for STT models without conversion
-- `youtube transcribe-audio <audio-path>` transcribes local audio with xAI STT, applies `s2hk` Chinese conversion, stores the transcript in SQLite, returns JSON, and removes generated `.cache/audio` input
+- `youtube transcribe-audio <audio-path>` transcribes local audio with STT, stores the transcript in SQLite, returns JSON, and removes generated `.cache/audio` input
 - `youtube search "<query>"` searches videos with local metadata filters
 - `youtube inspect <url-or-id>` prints metadata JSON
 - `youtube channel-videos <channel>` lists recent channel uploads
