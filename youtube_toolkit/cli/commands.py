@@ -6,7 +6,7 @@ import argparse
 from dataclasses import asdict
 import json
 
-from ..audio_transcription import transcribe_audio_to_storage
+from ..audio_transcription import store_audio_transcript
 from ..watchlist_schedule import (
     WatchlistScheduleOptions,
     install_watchlist_schedule,
@@ -46,7 +46,7 @@ def run_audio(args: argparse.Namespace) -> int:
 
 
 def run_transcribe_audio(args: argparse.Namespace) -> int:
-    payload = transcribe_audio_to_storage(args.audio)
+    payload = store_audio_transcript(args.audio)
     print_json(payload)
     return 0
 
