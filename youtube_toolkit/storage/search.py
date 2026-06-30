@@ -9,7 +9,7 @@ import turso
 
 from ..model_config import EmbeddingConfig
 from ..url import extract_video_id
-from .catalog import stored_video_payload
+from .payloads import stored_video_payload
 from .semantic import embed_text_with_gemini, encode_vector
 
 EmbedText = Callable[[str], list[float]]
