@@ -15,6 +15,7 @@ from .semantic import embed_text_with_gemini, encode_vector
 EmbedText = Callable[[str], list[float]]
 SearchSort = Literal["views", "upload_date", "relevance"]
 SEARCH_SORTS = {"views", "upload_date", "relevance"}
+STORED_VIDEO_RESULT_COLUMNS = "videos.*, channels.youtube_channel_id, channels.channel_handle"
 
 
 def search_stored_videos(
@@ -86,16 +87,23 @@ def get_stored_video(
     video_id = extract_video_id(video)
     if video_id is None:
         return None
-    rows = search_video_rows_by_id(
-        connection,
-        video_id,
-        limit=1,
-        require_transcript=require_transcript,
-        sort="upload_date",
-    )
-    if not rows:
+    row = connection.execute(
+        f"""
+        SELECT {STORED_VIDEO_RESULT_COLUMNS}
+        FROM videos AS videos
+        LEFT JOIN channels AS channels ON channels.id = videos.channel_id
+        WHERE videos.youtube_video_id = ?
+            AND (
+                ? = 0
+                OR (videos.transcript IS NOT NULL AND videos.transcript != '')
+            )
+        LIMIT 1
+        """,
+        (video_id, int(require_transcript)),
+    ).fetchone()
+    if row is None:
         return None
-    return stored_video_payload(rows[0])
+    return stored_video_payload(row)
 
 
 def search_video_rows_by_id(
@@ -107,16 +115,8 @@ def search_video_rows_by_id(
     sort: SearchSort,
 ) -> list[turso.Row]:
     return connection.execute(
-        """
-        SELECT
-            videos.id,
-            videos.youtube_video_id,
-            videos.title,
-            videos.upload_date,
-            videos.view_count,
-            videos.transcript,
-            channels.youtube_channel_id,
-            channels.channel_handle
+        f"""
+        SELECT {STORED_VIDEO_RESULT_COLUMNS}
         FROM videos AS videos
         LEFT JOIN channels AS channels ON channels.id = videos.channel_id
         WHERE videos.youtube_video_id = ?
@@ -144,16 +144,8 @@ def search_video_rows_by_keyword(
 ) -> list[turso.Row]:
     like_pattern = f"%{escape_like(keyword)}%"
     return connection.execute(
-        """
-        SELECT
-            videos.id,
-            videos.youtube_video_id,
-            videos.title,
-            videos.upload_date,
-            videos.view_count,
-            videos.transcript,
-            channels.youtube_channel_id,
-            channels.channel_handle
+        f"""
+        SELECT {STORED_VIDEO_RESULT_COLUMNS}
         FROM videos AS videos
         LEFT JOIN channels AS channels ON channels.id = videos.channel_id
         WHERE (
@@ -248,16 +240,9 @@ def list_semantic_video_rows(
     require_transcript: bool,
 ) -> list[turso.Row]:
     return connection.execute(
-        """
+        f"""
         SELECT
-            videos.id,
-            videos.youtube_video_id,
-            videos.title,
-            videos.upload_date,
-            videos.view_count,
-            videos.transcript,
-            channels.youtube_channel_id,
-            channels.channel_handle,
+            {STORED_VIDEO_RESULT_COLUMNS},
             1.0 - vector_distance_cos(videos.embedding, vector32(?)) AS semantic_score
         FROM videos AS videos
         LEFT JOIN channels AS channels ON channels.id = videos.channel_id
