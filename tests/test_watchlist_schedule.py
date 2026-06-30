@@ -5,7 +5,7 @@ import plistlib
 import subprocess
 import sys
 
-from youtube_toolkit.ytdlp.channels import ChannelOptions
+from youtube_toolkit.youtube.channels import ChannelOptions
 from youtube_toolkit.cli.parser import build_parser
 from youtube_toolkit.watchlist_schedule import (
     WatchlistScheduleOptions,

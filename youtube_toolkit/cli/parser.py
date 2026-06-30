@@ -13,14 +13,22 @@ from ..watchlist_schedule import (
 )
 from .commands import (
     run_audio,
-    run_blacklist,
+    run_blacklist_add,
+    run_blacklist_remove,
     run_channel_videos,
     run_doctor,
     run_inspect,
     run_search,
     run_transcribe_audio,
     run_transcript,
-    run_watchlist,
+    run_watchlist_add,
+    run_watchlist_new,
+    run_watchlist_remove,
+    run_watchlist_schedule_install,
+    run_watchlist_schedule_status,
+    run_watchlist_schedule_uninstall,
+    run_watchlist_scheduled_sync,
+    run_watchlist_sync,
 )
 
 
@@ -91,17 +99,21 @@ def add_watchlist_parser(subparsers: argparse._SubParsersAction) -> None:
     watchlist_subparsers = watchlist_parser.add_subparsers(dest="watchlist_command", required=True)
     watchlist_add_parser = watchlist_subparsers.add_parser("add", help="Add a channel to the watchlist")
     watchlist_add_parser.add_argument("channel", help="YouTube channel URL, handle, or channel ID")
+    watchlist_add_parser.set_defaults(handler=run_watchlist_add)
     watchlist_remove_parser = watchlist_subparsers.add_parser("remove", help="Remove a channel from the watchlist")
     watchlist_remove_parser.add_argument("channel", help="YouTube channel URL, handle, or channel ID")
+    watchlist_remove_parser.set_defaults(handler=run_watchlist_remove)
     watchlist_sync_parser = watchlist_subparsers.add_parser("sync", help="Sync watchlist videos and transcripts")
     add_channel_window_args(watchlist_sync_parser)
+    watchlist_sync_parser.set_defaults(handler=run_watchlist_sync)
     watchlist_scheduled_parser = watchlist_subparsers.add_parser("scheduled-sync", help="Run a lock-aware watchlist sync for schedulers")
     add_channel_window_args(watchlist_scheduled_parser)
+    watchlist_scheduled_parser.set_defaults(handler=run_watchlist_scheduled_sync)
     watchlist_new_parser = watchlist_subparsers.add_parser("new", help="Return and mark new watched videos")
     watchlist_new_parser.add_argument("--channel", action="append", default=[], help="Consume new videos from one watched channel")
     watchlist_new_parser.add_argument("--all", action="store_true", help="Consume new videos from all watched channels")
+    watchlist_new_parser.set_defaults(handler=run_watchlist_new)
     add_watchlist_schedule_parser(watchlist_subparsers)
-    watchlist_parser.set_defaults(handler=run_watchlist)
 
 
 def add_watchlist_schedule_parser(subparsers: argparse._SubParsersAction) -> None:
@@ -113,10 +125,13 @@ def add_watchlist_schedule_parser(subparsers: argparse._SubParsersAction) -> Non
     install_parser.add_argument("--days", type=int, default=DEFAULT_WATCHLIST_SCHEDULE_DAYS, help="Look back this many days")
     install_parser.add_argument("--label", default=DEFAULT_WATCHLIST_SCHEDULE_LABEL, help="LaunchAgent label")
     install_parser.add_argument("--no-load", action="store_true", help="Write the plist without loading it")
+    install_parser.set_defaults(handler=run_watchlist_schedule_install)
     status_parser = schedule_subparsers.add_parser("status", help="Show watchlist scheduled sync status")
     status_parser.add_argument("--label", default=DEFAULT_WATCHLIST_SCHEDULE_LABEL, help="LaunchAgent label")
+    status_parser.set_defaults(handler=run_watchlist_schedule_status)
     uninstall_parser = schedule_subparsers.add_parser("uninstall", help="Unload and remove the watchlist scheduled sync job")
     uninstall_parser.add_argument("--label", default=DEFAULT_WATCHLIST_SCHEDULE_LABEL, help="LaunchAgent label")
+    uninstall_parser.set_defaults(handler=run_watchlist_schedule_uninstall)
 
 
 def add_blacklist_parser(subparsers: argparse._SubParsersAction) -> None:
@@ -125,9 +140,10 @@ def add_blacklist_parser(subparsers: argparse._SubParsersAction) -> None:
     blacklist_subparsers = blacklist_parser.add_subparsers(dest="blacklist_command", required=True)
     blacklist_add_parser = blacklist_subparsers.add_parser("add", help="Add a channel to the search blacklist")
     blacklist_add_parser.add_argument("channel", help="YouTube channel URL, handle, or channel ID")
+    blacklist_add_parser.set_defaults(handler=run_blacklist_add)
     blacklist_remove_parser = blacklist_subparsers.add_parser("remove", help="Remove a channel from the search blacklist")
     blacklist_remove_parser.add_argument("channel", help="YouTube channel URL, handle, or channel ID")
-    blacklist_parser.set_defaults(handler=run_blacklist)
+    blacklist_remove_parser.set_defaults(handler=run_blacklist_remove)
 
 
 def add_doctor_parser(subparsers: argparse._SubParsersAction) -> None:

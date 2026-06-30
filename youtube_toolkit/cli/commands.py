@@ -6,7 +6,7 @@ import argparse
 from dataclasses import asdict
 import json
 
-from ..stt import transcribe_audio_to_db
+from ..audio_transcription import transcribe_audio_to_storage
 from ..watchlist_schedule import (
     WatchlistScheduleOptions,
     install_watchlist_schedule,
@@ -14,9 +14,9 @@ from ..watchlist_schedule import (
     uninstall_watchlist_schedule,
     watchlist_schedule_status,
 )
-from ..ytdlp import YtDlpClient
-from ..ytdlp.caption import fetch_transcript
-from ..ytdlp.channels import (
+from ..youtube import YtDlpClient
+from ..youtube.caption import fetch_transcript
+from ..youtube.channels import (
     ChannelOptions,
     add_blacklist_channel,
     add_watchlist_channel,
@@ -26,31 +26,28 @@ from ..ytdlp.channels import (
     sync_watchlist,
     watch_new_videos,
 )
-from ..ytdlp.search import SearchOptions, search_videos
+from ..youtube.search import SearchOptions, search_videos
 
 
 def run_transcript(args: argparse.Namespace) -> int:
     document = fetch_transcript(args.video)
-    print(json.dumps(asdict(document), indent=2, ensure_ascii=False))
+    print_json(asdict(document))
     return 0
 
 
 def run_inspect(args: argparse.Namespace) -> int:
-    metadata = YtDlpClient().metadata(args.video)
-    print(json.dumps(metadata, indent=2, ensure_ascii=False))
+    print_json(YtDlpClient().metadata(args.video))
     return 0
 
 
 def run_audio(args: argparse.Namespace) -> int:
-    output_path = YtDlpClient().download_transcription_audio(args.video)
-    print(output_path)
+    print(YtDlpClient().download_transcription_audio(args.video))
     return 0
 
 
 def run_transcribe_audio(args: argparse.Namespace) -> int:
-    payload = transcribe_audio_to_db(args.audio)
-    output = json.dumps(payload, indent=2, ensure_ascii=False)
-    print(output)
+    payload = transcribe_audio_to_storage(args.audio)
+    print_json(payload)
     return 0
 
 
@@ -69,7 +66,7 @@ def run_search(args: argparse.Namespace) -> int:
             exclude_title=tuple(args.exclude_title),
         ),
     )
-    print(json.dumps(entries, indent=2, ensure_ascii=False))
+    print_json(entries)
     return 0
 
 
@@ -81,47 +78,43 @@ def run_channel_videos(args: argparse.Namespace) -> int:
             days=args.days,
         ),
     )
-    print(json.dumps(metadata, indent=2, ensure_ascii=False))
+    print_json(metadata)
     return 0
 
 
-def run_watchlist(args: argparse.Namespace) -> int:
-    """Dispatch watchlist membership, sync, scheduler, and new-video subcommands."""
-    if args.watchlist_command == "add":
-        print(add_watchlist_channel(args.channel))
-        return 0
-    if args.watchlist_command == "remove":
-        print(remove_watchlist_channel(args.channel))
-        return 0
-    if args.watchlist_command == "new":
-        videos = watch_new_videos(
+def run_watchlist_add(args: argparse.Namespace) -> int:
+    print(add_watchlist_channel(args.channel))
+    return 0
+
+
+def run_watchlist_remove(args: argparse.Namespace) -> int:
+    print(remove_watchlist_channel(args.channel))
+    return 0
+
+
+def run_watchlist_sync(args: argparse.Namespace) -> int:
+    print_json(sync_watchlist(options=channel_options_from_args(args)))
+    return 0
+
+
+def run_watchlist_scheduled_sync(args: argparse.Namespace) -> int:
+    print_json(scheduled_sync_watchlist(options=channel_options_from_args(args)))
+    return 0
+
+
+def run_watchlist_new(args: argparse.Namespace) -> int:
+    print_json(
+        watch_new_videos(
             channels=args.channel,
             include_all=args.all,
         )
-        print(json.dumps(videos, indent=2, ensure_ascii=False))
-        return 0
-    if args.watchlist_command == "schedule":
-        result = run_watchlist_schedule(args)
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-        return 0
-
-    options = ChannelOptions(
-        last=args.last,
-        days=args.days,
     )
-    if args.watchlist_command == "scheduled-sync":
-        result = scheduled_sync_watchlist(options=options)
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-        return 0
-
-    result = sync_watchlist(options=options)
-    print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0
 
 
-def run_watchlist_schedule(args: argparse.Namespace) -> dict[str, object]:
-    if args.schedule_command == "install":
-        return install_watchlist_schedule(
+def run_watchlist_schedule_install(args: argparse.Namespace) -> int:
+    print_json(
+        install_watchlist_schedule(
             options=WatchlistScheduleOptions(
                 minutes=args.minutes,
                 last=args.last,
@@ -130,17 +123,26 @@ def run_watchlist_schedule(args: argparse.Namespace) -> dict[str, object]:
                 load=not args.no_load,
             )
         )
-    if args.schedule_command == "uninstall":
-        return uninstall_watchlist_schedule(label=args.label)
-    return watchlist_schedule_status(label=args.label)
+    )
+    return 0
 
 
-def run_blacklist(args: argparse.Namespace) -> int:
-    """Dispatch blacklist add and remove subcommands."""
-    if args.blacklist_command == "add":
-        print(add_blacklist_channel(args.channel))
-        return 0
+def run_watchlist_schedule_status(args: argparse.Namespace) -> int:
+    print_json(watchlist_schedule_status(label=args.label))
+    return 0
 
+
+def run_watchlist_schedule_uninstall(args: argparse.Namespace) -> int:
+    print_json(uninstall_watchlist_schedule(label=args.label))
+    return 0
+
+
+def run_blacklist_add(args: argparse.Namespace) -> int:
+    print(add_blacklist_channel(args.channel))
+    return 0
+
+
+def run_blacklist_remove(args: argparse.Namespace) -> int:
     print(remove_blacklist_channel(args.channel))
     return 0
 
@@ -150,3 +152,14 @@ def run_doctor(_args: argparse.Namespace) -> int:
 
     print(f"yt-dlp import ok: {yt_dlp.version.__version__}")
     return 0
+
+
+def channel_options_from_args(args: argparse.Namespace) -> ChannelOptions:
+    return ChannelOptions(
+        last=args.last,
+        days=args.days,
+    )
+
+
+def print_json(payload: object) -> None:
+    print(json.dumps(payload, indent=2, ensure_ascii=False))

@@ -1,7 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from youtube_toolkit.ytdlp.client import STT_AUDIO_FORMAT_SELECTOR, YtDlpClient
+from youtube_toolkit.youtube.client import STT_AUDIO_FORMAT_SELECTOR, YtDlpClient
 
 
 def test_stt_audio_format_prefers_xai_and_elevenlabs_compatible_containers() -> None:
@@ -30,7 +30,7 @@ def test_download_transcription_audio_uses_default_cache_stem(
         audio_path.write_bytes(b"audio")
         return SimpleNamespace(returncode=0, stderr="")
 
-    monkeypatch.setattr("youtube_toolkit.ytdlp.client.subprocess.run", fake_run)
+    monkeypatch.setattr("youtube_toolkit.youtube.client.subprocess.run", fake_run)
 
     assert YtDlpClient().download_transcription_audio("JpSHyEIZ_bo") == Path(
         ".cache/audio/JpSHyEIZ_bo.m4a",

@@ -13,7 +13,7 @@ from youtube_toolkit.storage import (
     upsert_blacklist_channel,
     upsert_watchlist_channel,
 )
-from youtube_toolkit.ytdlp.channels import (
+from youtube_toolkit.youtube.channels import (
     ChannelOptions,
     normalize_channel_url,
     remove_blacklist_channel,
@@ -165,7 +165,7 @@ def test_remove_watchlist_channel_resolves_ambiguous_url(
         }
 
     monkeypatch.setattr(
-        "youtube_toolkit.ytdlp.channels.fetch_channel_videos",
+        "youtube_toolkit.youtube.channels.fetch_channel_videos",
         fake_fetch_channel_videos,
     )
 
@@ -324,11 +324,11 @@ def test_sync_watchlist_marks_new_videos_and_hydrates_missing(
         return ([{"video_id": "video-openai", "source": "database", "language": "stored"}], [])
 
     monkeypatch.setattr(
-        "youtube_toolkit.ytdlp.channels.fetch_channel_metadata",
+        "youtube_toolkit.youtube.channels.fetch_channel_metadata",
         fake_fetch_channel_metadata,
     )
     monkeypatch.setattr(
-        "youtube_toolkit.ytdlp.channels.hydrate_watchlist_transcripts",
+        "youtube_toolkit.youtube.channels.hydrate_watchlist_transcripts",
         fake_hydrate_watchlist_transcripts,
     )
 

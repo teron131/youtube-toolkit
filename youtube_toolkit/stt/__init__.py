@@ -2,14 +2,14 @@
 
 from .common import (
     SpeechToTextOptions,
-    transcribe_audio_file,
-    transcribe_audio_to_db,
+    transcribe_audio,
+    transcribe_audio_details,
 )
 from .schemas import SpeechTranscription
 
 __all__ = [
     "SpeechToTextOptions",
     "SpeechTranscription",
-    "transcribe_audio_file",
-    "transcribe_audio_to_db",
+    "transcribe_audio",
+    "transcribe_audio_details",
 ]

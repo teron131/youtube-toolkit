@@ -1,7 +1,6 @@
 ---
 name: youtube
-description: |
-  Use this repo-local YouTube toolkit for transcript-first research workflows: fetch normalized transcripts, search YouTube videos, inspect metadata, list recent channel uploads, manage watchlists/blacklists, and persist state in the local database.
+description: Use this repo-local YouTube toolkit for transcript-first research workflows: fetch normalized transcripts, search YouTube videos, inspect metadata, list recent channel uploads, manage watchlists/blacklists, and persist state in the local database.
 ---
 
 # YouTube
@@ -40,7 +39,7 @@ Transcript language selection is hardcoded to English first, then common Chinese
 
 Audio downloads prefer M4A/MP4/AAC containers for xAI and ElevenLabs compatibility without conversion.
 
-Speech-to-text uses `XAI_API_KEY`, hardcodes the English language hint, stores transcripts in SQLite, returns the stored video payload as JSON, and removes generated `.cache/audio` input after successful transcription.
+Speech-to-text uses `XAI_API_KEY`, hardcodes the English language hint, and normalizes provider output with `s2hk`; CLI and transcript workflows own SQLite persistence and generated `.cache/audio` cleanup.
 
 Useful search options:
 

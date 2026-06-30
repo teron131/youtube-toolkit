@@ -1,7 +1,7 @@
 import pytest
 
 from youtube_toolkit.schemas import ChannelIdentity
-from youtube_toolkit.ytdlp.search import SearchOptions, filter_entries, parse_duration
+from youtube_toolkit.youtube.search import SearchOptions, filter_entries, parse_duration
 
 
 def test_parse_duration_accepts_seconds_and_colon_values() -> None:
