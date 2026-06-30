@@ -9,12 +9,14 @@ from urllib.parse import urlparse
 
 from ..schemas import extract_channel_identity, parse_channel_identity_input
 from ..storage import (
+    consume_new_watchlist_videos,
     delete_blacklist_channel,
     delete_watchlist_channel,
     get_connection,
     list_missing_watchlist_video_ids,
     list_watchlist_channel_inputs,
     store_channel_listing,
+    store_watchlist_channel_listing,
     upsert_blacklist_channel,
     upsert_watchlist_channel,
 )
@@ -72,18 +74,31 @@ def fetch_channel_videos(
     options: ChannelOptions | None = None,
     client: YtDlpClient | None = None,
 ) -> dict[str, Any]:
-    options = options or ChannelOptions()
-    client = client or YtDlpClient()
-    validate_channel_options(options)
-    channel_url = normalize_channel_url(channel_input)
-    metadata = get_recent_channel_entries(
-        client,
-        channel_url,
+    metadata = fetch_channel_metadata(
+        channel_input,
         options=options,
+        client=client,
     )
     with get_connection() as connection:
         store_channel_listing(connection, metadata)
     return metadata
+
+
+def fetch_channel_metadata(
+    channel_input: str,
+    *,
+    options: ChannelOptions | None = None,
+    client: YtDlpClient | None = None,
+) -> dict[str, Any]:
+    options = options or ChannelOptions()
+    client = client or YtDlpClient()
+    validate_channel_options(options)
+    channel_url = normalize_channel_url(channel_input)
+    return get_recent_channel_entries(
+        client,
+        channel_url,
+        options=options,
+    )
 
 
 def validate_channel_options(options: ChannelOptions) -> None:
@@ -219,22 +234,73 @@ def remove_blacklist_channel(channel_input: str) -> str:
 def sync_watchlist(
     *,
     options: ChannelOptions,
-) -> list[str]:
+) -> dict[str, Any]:
     with get_connection() as connection:
         watched_channel_inputs = list_watchlist_channel_inputs(connection)
 
     if not watched_channel_inputs:
-        return []
+        return {
+            "watched_channels": [],
+            "new_video_ids": [],
+            "hydrated_transcripts": [],
+            "failed_transcripts": [],
+        }
 
+    new_video_ids: list[str] = []
     for channel_input in watched_channel_inputs:
-        fetch_channel_videos(
+        metadata = fetch_channel_metadata(
             channel_input,
             options=options,
         )
+        with get_connection() as connection:
+            new_video_ids.extend(store_watchlist_channel_listing(connection, metadata))
 
     with get_connection() as connection:
         missing_video_ids = list_missing_watchlist_video_ids(connection)
 
-    for video_id in missing_video_ids:
-        fetch_transcript(video_id)
-    return missing_video_ids
+    hydrated_transcripts, failed_transcripts = hydrate_watchlist_transcripts(missing_video_ids)
+    return {
+        "watched_channels": watched_channel_inputs,
+        "new_video_ids": new_video_ids,
+        "hydrated_transcripts": hydrated_transcripts,
+        "failed_transcripts": failed_transcripts,
+    }
+
+
+def hydrate_watchlist_transcripts(
+    video_ids: list[str],
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    hydrated_transcripts: list[dict[str, Any]] = []
+    failed_transcripts: list[dict[str, str]] = []
+    for video_id in video_ids:
+        try:
+            document = fetch_transcript(video_id)
+            hydrated_transcripts.append(
+                {
+                    "video_id": document.metadata.video_id,
+                    "source": document.source,
+                    "language": document.language,
+                }
+            )
+        except Exception as exc:
+            failed_transcripts.append(
+                {
+                    "video_id": video_id,
+                    "error": str(exc),
+                }
+            )
+    return hydrated_transcripts, failed_transcripts
+
+
+def watch_new_videos(
+    *,
+    channels: list[str] | None = None,
+    include_all: bool = False,
+) -> list[dict[str, Any]]:
+    channel_identities = [parse_channel_identity_input(channel) for channel in channels or []]
+    with get_connection() as connection:
+        return consume_new_watchlist_videos(
+            connection,
+            channel_identities=channel_identities or None,
+            include_all=include_all,
+        )

@@ -10,17 +10,22 @@ import urllib.request
 
 from ..schemas import TranscriptChunk, TranscriptDocument, TranscriptSection, VideoMetadata
 from ..storage import get_connection, get_stored_video, upsert_video
+from ..stt import transcribe_audio_to_db
 from ..url import ALLOWED_CAPTION_HOST_SUFFIXES, validate_url
 from .client import YtDlpClient
 
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-DEFAULT_TRANSCRIPT_LANGUAGES = ("en-orig", "en", "zh-Hant", "zh-Hans", "zh-HK", "zh-TW", "zh-CN", "zh")
+DEFAULT_TRANSCRIPT_LANGUAGES = ("en-orig", "en", "zh-Hant", "zh-HK", "yue-HK", "yue", "zh-TW", "zh-Hans", "zh-CN", "zh")
 
 
 @dataclass(frozen=True, slots=True)
 class TranscriptOptions:
     languages: tuple[str, ...] = DEFAULT_TRANSCRIPT_LANGUAGES
     source: str = "any"
+
+
+class CaptionTranscriptUnavailable(RuntimeError):
+    """Raised when metadata has no usable caption transcript for the requested policy."""
 
 
 def fetch_transcript(
@@ -37,6 +42,31 @@ def fetch_transcript(
 
     client = client or YtDlpClient()
     metadata_payload = client.metadata(video)
+    try:
+        document = fetch_caption_transcript(
+            metadata_payload,
+            options=options,
+        )
+    except CaptionTranscriptUnavailable:
+        document = fetch_stt_transcript(
+            metadata_payload,
+            client=client,
+        )
+
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            metadata_payload,
+            transcript=document.text,
+        )
+    return document
+
+
+def fetch_caption_transcript(
+    metadata_payload: dict,
+    *,
+    options: TranscriptOptions,
+) -> TranscriptDocument:
     metadata = VideoMetadata.from_yt_dlp(metadata_payload)
     caption_url, language, caption_source = select_caption_track(
         metadata_payload,
@@ -50,22 +80,30 @@ def fetch_transcript(
         extract_sponsorblock_intervals(metadata_payload),
     )
     if not chunks:
-        raise RuntimeError(f"Caption track resolved from {caption_source}:{language}, but no transcript text was found")
+        raise CaptionTranscriptUnavailable(f"Caption track resolved from {caption_source}:{language}, but no transcript text was found")
 
-    document = TranscriptDocument(
+    return TranscriptDocument(
         metadata=metadata,
         language=language,
         source=caption_source,
         chunks=chunks,
         sections=build_sections(metadata_payload, chunks),
     )
-    with get_connection() as connection:
-        upsert_video(
-            connection,
-            metadata_payload,
-            transcript=document.text,
-        )
-    return document
+
+
+def fetch_stt_transcript(
+    metadata_payload: dict,
+    *,
+    client: YtDlpClient,
+) -> TranscriptDocument:
+    metadata = VideoMetadata.from_yt_dlp(metadata_payload)
+    audio_path = client.download_transcription_audio(metadata.video_id)
+    payload = transcribe_audio_to_db(audio_path)
+    return stored_transcript_document(
+        payload,
+        language=payload["language"] or "unknown",
+        source="speech-to-text",
+    )
 
 
 def fetch_stored_transcript(video: str) -> TranscriptDocument | None:
@@ -81,7 +119,12 @@ def fetch_stored_transcript(video: str) -> TranscriptDocument | None:
     return stored_transcript_document(stored_video)
 
 
-def stored_transcript_document(stored_video: dict) -> TranscriptDocument:
+def stored_transcript_document(
+    stored_video: dict,
+    *,
+    language: str = "stored",
+    source: str = "database",
+) -> TranscriptDocument:
     """Build a transcript document from stored flat transcript text."""
     transcript = stored_video["transcript"]
     metadata = VideoMetadata(
@@ -96,8 +139,8 @@ def stored_transcript_document(stored_video: dict) -> TranscriptDocument:
     )
     return TranscriptDocument(
         metadata=metadata,
-        language="stored",
-        source="database",
+        language=language,
+        source=source,
         chunks=[
             TranscriptChunk(
                 start_seconds=0,
@@ -122,8 +165,8 @@ def select_caption_track(
     source: str,
 ) -> tuple[str, str, str]:
     caption_sources = iter_caption_sources(metadata, source)
-    for source_name, caption_pool in caption_sources:
-        for language in languages:
+    for language in languages:
+        for source_name, caption_pool in caption_sources:
             tracks = caption_pool.get(language) or []
             for track in tracks:
                 if track.get("ext") == "json3" and track.get("url"):
@@ -135,7 +178,7 @@ def select_caption_track(
     available_languages = sorted({language for _, caption_pool in caption_sources for language in caption_pool})
     available_summary = ", ".join(available_languages) or "none"
     requested = ", ".join(languages)
-    raise RuntimeError(f"No caption track found for requested languages [{requested}]. Available languages: {available_summary}")
+    raise CaptionTranscriptUnavailable(f"No caption track found for requested languages [{requested}]. Available languages: {available_summary}")
 
 
 def iter_caption_sources(metadata: dict, source: str) -> list[tuple[str, dict]]:

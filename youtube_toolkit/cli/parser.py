@@ -5,6 +5,12 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from ..watchlist_schedule import (
+    DEFAULT_WATCHLIST_SCHEDULE_DAYS,
+    DEFAULT_WATCHLIST_SCHEDULE_LABEL,
+    DEFAULT_WATCHLIST_SCHEDULE_LAST,
+    DEFAULT_WATCHLIST_SCHEDULE_MINUTES,
+)
 from .commands import (
     run_audio,
     run_blacklist,
@@ -89,7 +95,28 @@ def add_watchlist_parser(subparsers: argparse._SubParsersAction) -> None:
     watchlist_remove_parser.add_argument("channel", help="YouTube channel URL, handle, or channel ID")
     watchlist_sync_parser = watchlist_subparsers.add_parser("sync", help="Sync watchlist videos and transcripts")
     add_channel_window_args(watchlist_sync_parser)
+    watchlist_scheduled_parser = watchlist_subparsers.add_parser("scheduled-sync", help="Run a lock-aware watchlist sync for schedulers")
+    add_channel_window_args(watchlist_scheduled_parser)
+    watchlist_new_parser = watchlist_subparsers.add_parser("new", help="Return and mark new watched videos")
+    watchlist_new_parser.add_argument("--channel", action="append", default=[], help="Consume new videos from one watched channel")
+    watchlist_new_parser.add_argument("--all", action="store_true", help="Consume new videos from all watched channels")
+    add_watchlist_schedule_parser(watchlist_subparsers)
     watchlist_parser.set_defaults(handler=run_watchlist)
+
+
+def add_watchlist_schedule_parser(subparsers: argparse._SubParsersAction) -> None:
+    schedule_parser = subparsers.add_parser("schedule", help="Manage the watchlist scheduled sync LaunchAgent")
+    schedule_subparsers = schedule_parser.add_subparsers(dest="schedule_command", required=True)
+    install_parser = schedule_subparsers.add_parser("install", help="Install and load the watchlist scheduled sync job")
+    install_parser.add_argument("--minutes", type=int, default=DEFAULT_WATCHLIST_SCHEDULE_MINUTES, help="Run interval in minutes")
+    install_parser.add_argument("--last", type=int, default=DEFAULT_WATCHLIST_SCHEDULE_LAST, help="Fetch the latest N videos per watched channel")
+    install_parser.add_argument("--days", type=int, default=DEFAULT_WATCHLIST_SCHEDULE_DAYS, help="Look back this many days")
+    install_parser.add_argument("--label", default=DEFAULT_WATCHLIST_SCHEDULE_LABEL, help="LaunchAgent label")
+    install_parser.add_argument("--no-load", action="store_true", help="Write the plist without loading it")
+    status_parser = schedule_subparsers.add_parser("status", help="Show watchlist scheduled sync status")
+    status_parser.add_argument("--label", default=DEFAULT_WATCHLIST_SCHEDULE_LABEL, help="LaunchAgent label")
+    uninstall_parser = schedule_subparsers.add_parser("uninstall", help="Unload and remove the watchlist scheduled sync job")
+    uninstall_parser.add_argument("--label", default=DEFAULT_WATCHLIST_SCHEDULE_LABEL, help="LaunchAgent label")
 
 
 def add_blacklist_parser(subparsers: argparse._SubParsersAction) -> None:

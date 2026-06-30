@@ -7,6 +7,13 @@ from dataclasses import asdict
 import json
 
 from ..stt import transcribe_audio_to_db
+from ..watchlist_schedule import (
+    WatchlistScheduleOptions,
+    install_watchlist_schedule,
+    scheduled_sync_watchlist,
+    uninstall_watchlist_schedule,
+    watchlist_schedule_status,
+)
 from ..ytdlp import YtDlpClient
 from ..ytdlp.caption import fetch_transcript
 from ..ytdlp.channels import (
@@ -17,6 +24,7 @@ from ..ytdlp.channels import (
     remove_blacklist_channel,
     remove_watchlist_channel,
     sync_watchlist,
+    watch_new_videos,
 )
 from ..ytdlp.search import SearchOptions, search_videos
 
@@ -78,24 +86,53 @@ def run_channel_videos(args: argparse.Namespace) -> int:
 
 
 def run_watchlist(args: argparse.Namespace) -> int:
-    """Dispatch watchlist add, remove, and sync subcommands."""
+    """Dispatch watchlist membership, sync, scheduler, and new-video subcommands."""
     if args.watchlist_command == "add":
         print(add_watchlist_channel(args.channel))
         return 0
     if args.watchlist_command == "remove":
         print(remove_watchlist_channel(args.channel))
         return 0
-
-    fetched_video_ids = sync_watchlist(
-        options=ChannelOptions(
-            last=args.last,
-            days=args.days,
+    if args.watchlist_command == "new":
+        videos = watch_new_videos(
+            channels=args.channel,
+            include_all=args.all,
         )
+        print(json.dumps(videos, indent=2, ensure_ascii=False))
+        return 0
+    if args.watchlist_command == "schedule":
+        result = run_watchlist_schedule(args)
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0
+
+    options = ChannelOptions(
+        last=args.last,
+        days=args.days,
     )
-    print(
-        "\n".join(fetched_video_ids) if fetched_video_ids else "No missing watched-channel transcripts found.",
-    )
+    if args.watchlist_command == "scheduled-sync":
+        result = scheduled_sync_watchlist(options=options)
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0
+
+    result = sync_watchlist(options=options)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0
+
+
+def run_watchlist_schedule(args: argparse.Namespace) -> dict[str, object]:
+    if args.schedule_command == "install":
+        return install_watchlist_schedule(
+            options=WatchlistScheduleOptions(
+                minutes=args.minutes,
+                last=args.last,
+                days=args.days,
+                label=args.label,
+                load=not args.no_load,
+            )
+        )
+    if args.schedule_command == "uninstall":
+        return uninstall_watchlist_schedule(label=args.label)
+    return watchlist_schedule_status(label=args.label)
 
 
 def run_blacklist(args: argparse.Namespace) -> int:
