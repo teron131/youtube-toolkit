@@ -119,35 +119,6 @@ def extract_channel_identity(
     )
 
 
-def parse_channel_identity_input(channel_input: str) -> ChannelIdentity:
-    """Parse a channel handle or id from a user channel argument."""
-    channel_handle = normalize_handle(channel_input)
-    if channel_handle is not None:
-        return ChannelIdentity(
-            youtube_channel_id=None,
-            channel_handle=channel_handle,
-        )
-
-    stripped_channel_input = channel_input.strip()
-    if stripped_channel_input.startswith(("http://", "https://")):
-        parsed_url = urlparse(stripped_channel_input)
-        path_parts = [path_part for path_part in parsed_url.path.split("/") if path_part]
-        if len(path_parts) >= 2 and path_parts[0] == "channel":
-            return ChannelIdentity(
-                youtube_channel_id=normalize_channel_id(path_parts[1]),
-                channel_handle=None,
-            )
-        return ChannelIdentity(
-            youtube_channel_id=None,
-            channel_handle=None,
-        )
-
-    return ChannelIdentity(
-        youtube_channel_id=normalize_channel_id(stripped_channel_input),
-        channel_handle=None,
-    )
-
-
 def extract_video_record(
     metadata: dict[str, Any],
     *,

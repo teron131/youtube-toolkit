@@ -95,8 +95,8 @@ def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
     audio_path.write_bytes(b"audio")
 
     class FakeClient:
-        def metadata(self, video: str) -> dict:
-            assert video == "JpSHyEIZ_bo"
+        def metadata(self, video_ref: str) -> dict:
+            assert video_ref == "JpSHyEIZ_bo"
             return {
                 "id": "JpSHyEIZ_bo",
                 "title": "No captions",

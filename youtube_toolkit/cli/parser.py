@@ -49,19 +49,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 def add_transcript_parser(subparsers: argparse._SubParsersAction) -> None:
     transcript_parser = subparsers.add_parser("transcript", help="Fetch a normalized transcript")
-    transcript_parser.add_argument("video", help="YouTube video URL or ID")
+    transcript_parser.add_argument("video_ref", help="YouTube video URL or ID")
     transcript_parser.set_defaults(handler=run_transcript)
 
 
 def add_inspect_parser(subparsers: argparse._SubParsersAction) -> None:
     inspect_parser = subparsers.add_parser("inspect", help="Fetch video metadata JSON")
-    inspect_parser.add_argument("video", help="YouTube video URL or ID")
+    inspect_parser.add_argument("video_ref", help="YouTube video URL or ID")
     inspect_parser.set_defaults(handler=run_inspect)
 
 
 def add_audio_parser(subparsers: argparse._SubParsersAction) -> None:
     audio_parser = subparsers.add_parser("audio", help="Download provider-compatible audio for STT")
-    audio_parser.add_argument("video", help="YouTube video URL or ID")
+    audio_parser.add_argument("video_ref", help="YouTube video URL or ID")
     audio_parser.set_defaults(handler=run_audio)
 
 
@@ -88,7 +88,7 @@ def add_search_parser(subparsers: argparse._SubParsersAction) -> None:
 
 def add_channel_videos_parser(subparsers: argparse._SubParsersAction) -> None:
     channel_parser = subparsers.add_parser("channel-videos", help="List recent videos from a YouTube channel")
-    channel_parser.add_argument("channel", help="YouTube channel URL, handle, or channel ID")
+    channel_parser.add_argument("channel_ref", help="YouTube channel URL, handle, or channel ID")
     add_channel_window_args(channel_parser)
     channel_parser.set_defaults(handler=run_channel_videos)
 
@@ -98,10 +98,10 @@ def add_watchlist_parser(subparsers: argparse._SubParsersAction) -> None:
     watchlist_parser = subparsers.add_parser("watchlist", help="Manage or sync watchlist channels")
     watchlist_subparsers = watchlist_parser.add_subparsers(dest="watchlist_command", required=True)
     watchlist_add_parser = watchlist_subparsers.add_parser("add", help="Add a channel to the watchlist")
-    watchlist_add_parser.add_argument("channel", help="YouTube channel URL, handle, or channel ID")
+    watchlist_add_parser.add_argument("channel_refs", nargs="+", help="YouTube channel URLs, handles, or channel IDs")
     watchlist_add_parser.set_defaults(handler=run_watchlist_add)
     watchlist_remove_parser = watchlist_subparsers.add_parser("remove", help="Remove a channel from the watchlist")
-    watchlist_remove_parser.add_argument("channel", help="YouTube channel URL, handle, or channel ID")
+    watchlist_remove_parser.add_argument("channel_refs", nargs="+", help="YouTube channel URLs, handles, or channel IDs")
     watchlist_remove_parser.set_defaults(handler=run_watchlist_remove)
     watchlist_sync_parser = watchlist_subparsers.add_parser("sync", help="Sync watchlist videos and transcripts")
     add_channel_window_args(watchlist_sync_parser)
@@ -110,7 +110,7 @@ def add_watchlist_parser(subparsers: argparse._SubParsersAction) -> None:
     add_channel_window_args(watchlist_scheduled_parser)
     watchlist_scheduled_parser.set_defaults(handler=run_watchlist_scheduled_sync)
     watchlist_new_parser = watchlist_subparsers.add_parser("new", help="Return and mark new watched videos")
-    watchlist_new_parser.add_argument("--channel", action="append", default=[], help="Consume new videos from one watched channel")
+    watchlist_new_parser.add_argument("--channel", action="append", default=[], dest="channel_refs", help="Consume new videos from one watched channel")
     watchlist_new_parser.add_argument("--all", action="store_true", help="Consume new videos from all watched channels")
     watchlist_new_parser.set_defaults(handler=run_watchlist_new)
     add_watchlist_schedule_parser(watchlist_subparsers)
@@ -139,10 +139,10 @@ def add_blacklist_parser(subparsers: argparse._SubParsersAction) -> None:
     blacklist_parser = subparsers.add_parser("blacklist", help="Manage search blacklist channels")
     blacklist_subparsers = blacklist_parser.add_subparsers(dest="blacklist_command", required=True)
     blacklist_add_parser = blacklist_subparsers.add_parser("add", help="Add a channel to the search blacklist")
-    blacklist_add_parser.add_argument("channel", help="YouTube channel URL, handle, or channel ID")
+    blacklist_add_parser.add_argument("channel_refs", nargs="+", help="YouTube channel URLs, handles, or channel IDs")
     blacklist_add_parser.set_defaults(handler=run_blacklist_add)
     blacklist_remove_parser = blacklist_subparsers.add_parser("remove", help="Remove a channel from the search blacklist")
-    blacklist_remove_parser.add_argument("channel", help="YouTube channel URL, handle, or channel ID")
+    blacklist_remove_parser.add_argument("channel_refs", nargs="+", help="YouTube channel URLs, handles, or channel IDs")
     blacklist_remove_parser.set_defaults(handler=run_blacklist_remove)
 
 

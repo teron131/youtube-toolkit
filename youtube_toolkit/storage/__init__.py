@@ -29,7 +29,7 @@ from .watchlist import (
     consume_new_watchlist_videos,
     delete_watchlist_channel,
     list_missing_watchlist_video_ids,
-    list_watchlist_channel_inputs,
+    list_watchlist_channel_refs,
     store_watchlist_channel_listing,
     upsert_watchlist_channel,
 )
@@ -50,7 +50,7 @@ __all__ = [
     "index_video_embedding",
     "list_blacklist_channel_identities",
     "list_missing_watchlist_video_ids",
-    "list_watchlist_channel_inputs",
+    "list_watchlist_channel_refs",
     "resolve_storage_dir",
     "search_stored_videos",
     "store_channel_listing",

@@ -3,21 +3,22 @@
 import pytest
 
 from youtube_toolkit.cli.parser import build_parser
-from youtube_toolkit.schemas import ChannelIdentity, parse_channel_identity_input
+from youtube_toolkit.identity import YouTubeRefs, normalize_channel_url, parse_channel_ref
+from youtube_toolkit.schemas import ChannelIdentity
 from youtube_toolkit.storage import (
     consume_new_watchlist_videos,
     get_connection,
     list_blacklist_channel_identities,
-    list_watchlist_channel_inputs,
+    list_watchlist_channel_refs,
     store_watchlist_channel_listing,
     upsert_blacklist_channel,
     upsert_watchlist_channel,
 )
 from youtube_toolkit.youtube.channels import (
     ChannelOptions,
-    normalize_channel_url,
-    remove_blacklist_channel,
-    remove_watchlist_channel,
+    add_watchlist_channels,
+    remove_blacklist_channels,
+    remove_watchlist_channels,
     sync_watchlist,
     validate_channel_options,
     watch_new_videos,
@@ -31,31 +32,49 @@ def test_normalize_channel_url_from_common_inputs() -> None:
     assert normalize_channel_url("https://www.youtube.com/@example/videos") == "https://www.youtube.com/@example/videos"
 
 
-def test_parse_channel_identity_input_normalizes_removal_inputs() -> None:
+def test_parse_channel_ref_normalizes_public_channel_refs() -> None:
     """Normalize handles and channel URLs without fetching remote metadata."""
-    assert parse_channel_identity_input("@OpenAI") == ChannelIdentity(
+    assert parse_channel_ref("@OpenAI") == ChannelIdentity(
         youtube_channel_id=None,
         channel_handle="@OpenAI",
     )
-    assert parse_channel_identity_input("https://www.youtube.com/@OpenAI") == ChannelIdentity(
+    assert parse_channel_ref("https://www.youtube.com/@OpenAI") == ChannelIdentity(
         youtube_channel_id=None,
         channel_handle="@OpenAI",
     )
-    assert parse_channel_identity_input("https://www.youtube.com/channel/UC123") == ChannelIdentity(
+    assert parse_channel_ref("https://www.youtube.com/channel/UC123") == ChannelIdentity(
         youtube_channel_id="UC123",
         channel_handle=None,
     )
 
 
+def test_channel_refs_normalize_refs_and_parse_identities() -> None:
+    """Normalize one-or-many channel refs and parse URL, handle, or ID identity."""
+    refs = YouTubeRefs.parse(["@OpenAI", "https://www.youtube.com/channel/UC123"])
+
+    assert list(YouTubeRefs.parse("@OpenAI")) == ["@OpenAI"]
+    assert list(YouTubeRefs.parse(None)) == []
+    assert refs.channel_identities() == [
+        ChannelIdentity(
+            youtube_channel_id=None,
+            channel_handle="@OpenAI",
+        ),
+        ChannelIdentity(
+            youtube_channel_id="UC123",
+            channel_handle=None,
+        ),
+    ]
+
+
 def test_parser_accepts_watchlist_and_blacklist_remove() -> None:
     """Parse remove commands for both channel membership lists."""
-    watchlist_args = build_parser().parse_args(["watchlist", "remove", "@OpenAI"])
-    blacklist_args = build_parser().parse_args(["blacklist", "remove", "@OpenAI"])
+    watchlist_args = build_parser().parse_args(["watchlist", "remove", "@OpenAI", "UC123"])
+    blacklist_args = build_parser().parse_args(["blacklist", "remove", "@OpenAI", "UC123"])
 
     assert watchlist_args.watchlist_command == "remove"
-    assert watchlist_args.channel == "@OpenAI"
+    assert watchlist_args.channel_refs == ["@OpenAI", "UC123"]
     assert blacklist_args.blacklist_command == "remove"
-    assert blacklist_args.channel == "@OpenAI"
+    assert blacklist_args.channel_refs == ["@OpenAI", "UC123"]
 
 
 def test_parser_accepts_watchlist_new_and_scheduled_sync() -> None:
@@ -64,9 +83,51 @@ def test_parser_accepts_watchlist_new_and_scheduled_sync() -> None:
     scheduled_args = build_parser().parse_args(["watchlist", "scheduled-sync", "--last", "5"])
 
     assert new_args.watchlist_command == "new"
-    assert new_args.channel == ["@OpenAI"]
+    assert new_args.channel_refs == ["@OpenAI"]
     assert scheduled_args.watchlist_command == "scheduled-sync"
     assert scheduled_args.last == 5
+
+
+def test_add_watchlist_channels_accepts_single_and_batch_channel_refs(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Add one or many public channel refs through normalized stored identities."""
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    listings = {
+        "@OpenAI": openai_listing(),
+        "https://www.youtube.com/channel/UC456": anthropic_listing(),
+    }
+
+    def fake_fetch_channel_metadata(
+        channel_ref: str,
+        *,
+        options: ChannelOptions,
+    ) -> dict:
+        assert options.last == 1
+        return listings[channel_ref]
+
+    monkeypatch.setattr(
+        "youtube_toolkit.youtube.channels.fetch_channel_metadata",
+        fake_fetch_channel_metadata,
+    )
+
+    assert add_watchlist_channels("@OpenAI") == [
+        {
+            "channel_ref": "@OpenAI",
+            "channel": "@OpenAI",
+        },
+    ]
+    assert add_watchlist_channels(["https://www.youtube.com/channel/UC456"]) == [
+        {
+            "channel_ref": "https://www.youtube.com/channel/UC456",
+            "channel": "@Anthropic",
+        },
+    ]
+
+    with get_connection() as connection:
+        assert list_watchlist_channel_refs(connection) == ["@Anthropic", "@OpenAI"]
 
 
 def test_remove_watchlist_channel_deletes_membership_only(
@@ -85,7 +146,13 @@ def test_remove_watchlist_channel_deletes_membership_only(
             ),
         )
 
-    assert remove_watchlist_channel("@OpenAI") == "Removed @OpenAI from watchlist"
+    assert remove_watchlist_channels("@OpenAI") == [
+        {
+            "channel_ref": "@OpenAI",
+            "channel": "@OpenAI",
+            "removed": True,
+        }
+    ]
 
     with get_connection() as connection:
         channel_row = connection.execute(
@@ -96,7 +163,7 @@ def test_remove_watchlist_channel_deletes_membership_only(
             """,
             (channel_id,),
         ).fetchone()
-        watched_channels = list_watchlist_channel_inputs(connection)
+        watched_channels = list_watchlist_channel_refs(connection)
 
     assert channel_row is not None
     assert watched_channels == []
@@ -119,7 +186,13 @@ def test_remove_watchlist_channel_deletes_queue_only(
         )
         store_watchlist_channel_listing(connection, openai_listing())
 
-    assert remove_watchlist_channel("@OpenAI") == "Removed @OpenAI from watchlist"
+    assert remove_watchlist_channels(["@OpenAI"]) == [
+        {
+            "channel_ref": "@OpenAI",
+            "channel": "@OpenAI",
+            "removed": True,
+        }
+    ]
 
     with get_connection() as connection:
         video_row = connection.execute(
@@ -152,12 +225,12 @@ def test_remove_watchlist_channel_resolves_ambiguous_url(
             ),
         )
 
-    def fake_fetch_channel_videos(
-        channel_input: str,
+    def fake_fetch_channel_metadata(
+        channel_ref: str,
         *,
         options: ChannelOptions,
     ) -> dict:
-        assert channel_input == "https://www.youtube.com/c/OpenAI"
+        assert channel_ref == "https://www.youtube.com/c/OpenAI"
         assert options.last == 1
         return {
             "channel_id": "UC123",
@@ -165,11 +238,17 @@ def test_remove_watchlist_channel_resolves_ambiguous_url(
         }
 
     monkeypatch.setattr(
-        "youtube_toolkit.youtube.channels.fetch_channel_videos",
-        fake_fetch_channel_videos,
+        "youtube_toolkit.youtube.channels.fetch_channel_metadata",
+        fake_fetch_channel_metadata,
     )
 
-    assert remove_watchlist_channel("https://www.youtube.com/c/OpenAI") == "Removed @OpenAI from watchlist"
+    assert remove_watchlist_channels(["https://www.youtube.com/c/OpenAI"]) == [
+        {
+            "channel_ref": "https://www.youtube.com/c/OpenAI",
+            "channel": "@OpenAI",
+            "removed": True,
+        }
+    ]
 
 
 def test_remove_blacklist_channel_deletes_membership_only(
@@ -188,7 +267,13 @@ def test_remove_blacklist_channel_deletes_membership_only(
             ),
         )
 
-    assert remove_blacklist_channel("https://www.youtube.com/channel/UC123") == "Removed UC123 from blacklist"
+    assert remove_blacklist_channels(["https://www.youtube.com/channel/UC123"]) == [
+        {
+            "channel_ref": "https://www.youtube.com/channel/UC123",
+            "channel": "UC123",
+            "removed": True,
+        }
+    ]
 
     with get_connection() as connection:
         channel_row = connection.execute(
@@ -212,7 +297,13 @@ def test_remove_missing_channel_reports_no_membership(
     """Report a no-op when the requested channel is not in the list."""
     monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
 
-    assert remove_watchlist_channel("@Missing") == "@Missing was not in watchlist"
+    assert remove_watchlist_channels(["@Missing"]) == [
+        {
+            "channel_ref": "@Missing",
+            "channel": "@Missing",
+            "removed": False,
+        }
+    ]
 
 
 def test_store_watchlist_channel_listing_marks_only_new_video_ids(
@@ -264,7 +355,7 @@ def test_watch_new_videos_consumes_only_scoped_channels(
         store_watchlist_channel_listing(connection, openai_listing())
         store_watchlist_channel_listing(connection, anthropic_listing())
 
-    videos = watch_new_videos(channels=["@OpenAI"])
+    videos = watch_new_videos(channel_refs="@OpenAI")
 
     assert [video["video_id"] for video in videos] == ["video-openai"]
     assert videos[0]["transcript_status"] == "missing"
@@ -311,11 +402,11 @@ def test_sync_watchlist_marks_new_videos_and_hydrates_missing(
         )
 
     def fake_fetch_channel_metadata(
-        channel_input: str,
+        channel_ref: str,
         *,
         options: ChannelOptions,
     ) -> dict:
-        assert channel_input == "@OpenAI"
+        assert channel_ref == "@OpenAI"
         assert options.last == 3
         return openai_listing()
 

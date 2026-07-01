@@ -9,9 +9,9 @@ import urllib.error
 import urllib.request
 
 from ..audio_transcription import store_audio_transcript
+from ..identity import ALLOWED_CAPTION_HOST_SUFFIXES, VideoRef, validate_url
 from ..schemas import TranscriptChunk, TranscriptDocument, TranscriptSection, VideoMetadata
 from ..storage import get_connection, get_stored_video, upsert_video
-from ..url import ALLOWED_CAPTION_HOST_SUFFIXES, validate_url
 from .client import YtDlpClient
 
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
@@ -29,19 +29,19 @@ class CaptionTranscriptUnavailable(RuntimeError):
 
 
 def fetch_transcript(
-    video: str,
+    video_ref: VideoRef,
     *,
     options: TranscriptOptions | None = None,
     client: YtDlpClient | None = None,
 ) -> TranscriptDocument:
     options = options or TranscriptOptions()
     if options == TranscriptOptions():
-        stored_document = fetch_stored_transcript(video)
+        stored_document = fetch_stored_transcript(video_ref)
         if stored_document is not None:
             return stored_document
 
     client = client or YtDlpClient()
-    metadata_payload = client.metadata(video)
+    metadata_payload = client.metadata(video_ref)
     try:
         document = fetch_caption_transcript(
             metadata_payload,
@@ -109,12 +109,12 @@ def fetch_stt_transcript(
     )
 
 
-def fetch_stored_transcript(video: str) -> TranscriptDocument | None:
+def fetch_stored_transcript(video_ref: VideoRef) -> TranscriptDocument | None:
     """Return a stored transcript document when the DB already has one."""
     with get_connection() as connection:
         stored_video = get_stored_video(
             connection,
-            video,
+            video_ref,
             require_transcript=True,
         )
     if stored_video is None:

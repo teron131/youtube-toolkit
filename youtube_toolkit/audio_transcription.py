@@ -6,9 +6,9 @@ from pathlib import Path
 from typing import Any
 
 from .convert_zh import convert_zh
+from .identity import extract_video_id
 from .storage import get_connection, upsert_video
 from .stt import transcribe_audio_details
-from .url import extract_video_id
 
 
 def store_audio_transcript(

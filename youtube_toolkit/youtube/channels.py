@@ -2,19 +2,22 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
-from urllib.parse import urlparse
+from typing import Any, TypedDict
 
-from ..schemas import extract_channel_identity, parse_channel_identity_input
+import turso
+
+from ..identity import ChannelRef, ChannelRefInput, YouTubeRefs, normalize_channel_url, parse_channel_ref
+from ..schemas import ChannelIdentity, extract_channel_identity
 from ..storage import (
     consume_new_watchlist_videos,
     delete_blacklist_channel,
     delete_watchlist_channel,
     get_connection,
     list_missing_watchlist_video_ids,
-    list_watchlist_channel_inputs,
+    list_watchlist_channel_refs,
     store_channel_listing,
     store_watchlist_channel_listing,
     upsert_blacklist_channel,
@@ -25,13 +28,6 @@ from .client import YtDlpClient
 
 DEFAULT_LAST_VIDEOS = 10
 MIN_DAYS_WINDOW = 10
-ALLOWED_CHANNEL_HOSTS = {
-    "youtube.com",
-    "www.youtube.com",
-    "m.youtube.com",
-    "music.youtube.com",
-}
-CHANNEL_PREFIXES = ("/@", "/channel/", "/user/", "/c/")
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,42 +36,23 @@ class ChannelOptions:
     days: int | None = None
 
 
-def normalize_channel_url(channel_input: str) -> str:
-    candidate = channel_input.strip()
-    if not candidate:
-        raise ValueError("Expected a non-empty YouTube channel input")
+class ChannelMembershipResult(TypedDict):
+    channel_ref: ChannelRef
+    channel: str
 
-    parsed = urlparse(candidate)
-    if parsed.scheme in {"https", "http"}:
-        hostname = (parsed.hostname or "").lower()
-        if hostname not in ALLOWED_CHANNEL_HOSTS:
-            raise ValueError(f"Unsupported YouTube host: {hostname or 'missing'}")
-        path = parsed.path.rstrip("/")
-    else:
-        stripped_candidate = candidate.lstrip("/")
-        if candidate.startswith("@"):
-            path = f"/{candidate}"
-        elif stripped_candidate.startswith(("channel/", "user/", "c/")):
-            path = f"/{stripped_candidate}"
-        elif stripped_candidate.startswith("UC"):
-            path = f"/channel/{stripped_candidate}"
-        else:
-            path = f"/@{stripped_candidate.lstrip('@')}"
 
-    base_path = path[: -len("/videos")] if path.endswith("/videos") else path
-    if not any(base_path.startswith(prefix) for prefix in CHANNEL_PREFIXES):
-        raise ValueError("Expected a YouTube channel URL, handle, or channel ID")
-    return f"https://www.youtube.com{base_path}/videos"
+class ChannelRemovalResult(ChannelMembershipResult):
+    removed: bool
 
 
 def fetch_channel_videos(
-    channel_input: str,
+    channel_ref: ChannelRef,
     *,
     options: ChannelOptions | None = None,
     client: YtDlpClient | None = None,
 ) -> dict[str, Any]:
     metadata = fetch_channel_metadata(
-        channel_input,
+        channel_ref,
         options=options,
         client=client,
     )
@@ -85,7 +62,7 @@ def fetch_channel_videos(
 
 
 def fetch_channel_metadata(
-    channel_input: str,
+    channel_ref: ChannelRef,
     *,
     options: ChannelOptions | None = None,
     client: YtDlpClient | None = None,
@@ -93,7 +70,7 @@ def fetch_channel_metadata(
     options = options or ChannelOptions()
     client = client or YtDlpClient()
     validate_channel_options(options)
-    channel_url = normalize_channel_url(channel_input)
+    channel_url = normalize_channel_url(channel_ref)
     return get_recent_channel_entries(
         client,
         channel_url,
@@ -173,62 +150,94 @@ def should_expand_window(
     return min(dated_entries) >= cutoff_date_for_days(days)
 
 
-def add_watchlist_channel(channel_input: str) -> str:
-    metadata = fetch_channel_videos(
-        channel_input,
+def add_watchlist_channels(channel_refs: ChannelRefInput) -> list[ChannelMembershipResult]:
+    return [
+        _add_channel_membership(
+            channel_ref,
+            add_membership=upsert_watchlist_channel,
+        )
+        for channel_ref in YouTubeRefs.parse(channel_refs)
+    ]
+
+
+def add_blacklist_channels(channel_refs: ChannelRefInput) -> list[ChannelMembershipResult]:
+    return [
+        _add_channel_membership(
+            channel_ref,
+            add_membership=upsert_blacklist_channel,
+        )
+        for channel_ref in YouTubeRefs.parse(channel_refs)
+    ]
+
+
+def _add_channel_membership(
+    channel_ref: ChannelRef,
+    *,
+    add_membership: Callable[[turso.Connection, ChannelIdentity], int | None],
+) -> ChannelMembershipResult:
+    metadata = fetch_channel_metadata(
+        channel_ref,
         options=ChannelOptions(last=1),
     )
     channel_identity = extract_channel_identity(metadata)
     with get_connection() as connection:
         store_channel_listing(connection, metadata)
-        upsert_watchlist_channel(connection, channel_identity)
-    return channel_identity.channel_handle or channel_identity.youtube_channel_id or channel_input
+        add_membership(connection, channel_identity)
+    return {
+        "channel_ref": channel_ref,
+        "channel": _channel_label(channel_identity, fallback=channel_ref),
+    }
 
 
-def add_blacklist_channel(channel_input: str) -> str:
-    metadata = fetch_channel_videos(
-        channel_input,
-        options=ChannelOptions(last=1),
-    )
-    channel_identity = extract_channel_identity(metadata)
-    with get_connection() as connection:
-        store_channel_listing(connection, metadata)
-        upsert_blacklist_channel(connection, channel_identity)
-    return channel_identity.channel_handle or channel_identity.youtube_channel_id or channel_input
+def remove_watchlist_channels(channel_refs: ChannelRefInput) -> list[ChannelRemovalResult]:
+    """Remove channels from the local watchlist without deleting catalog data."""
+    return [
+        _remove_channel_membership(
+            channel_ref,
+            remove_membership=delete_watchlist_channel,
+        )
+        for channel_ref in YouTubeRefs.parse(channel_refs)
+    ]
 
 
-def remove_watchlist_channel(channel_input: str) -> str:
-    """Remove a channel from the local watchlist without deleting catalog data."""
-    channel_identity = parse_channel_identity_input(channel_input)
+def remove_blacklist_channels(channel_refs: ChannelRefInput) -> list[ChannelRemovalResult]:
+    """Remove channels from the local search blacklist without deleting catalog data."""
+    return [
+        _remove_channel_membership(
+            channel_ref,
+            remove_membership=delete_blacklist_channel,
+        )
+        for channel_ref in YouTubeRefs.parse(channel_refs)
+    ]
+
+
+def _remove_channel_membership(
+    channel_ref: ChannelRef,
+    *,
+    remove_membership: Callable[[turso.Connection, ChannelIdentity], bool],
+) -> ChannelRemovalResult:
+    channel_identity = parse_channel_ref(channel_ref)
     if not channel_identity.has_identity():
-        metadata = fetch_channel_videos(
-            channel_input,
+        metadata = fetch_channel_metadata(
+            channel_ref,
             options=ChannelOptions(last=1),
         )
         channel_identity = extract_channel_identity(metadata)
     with get_connection() as connection:
-        removed = delete_watchlist_channel(connection, channel_identity)
-    label = channel_identity.channel_handle or channel_identity.youtube_channel_id or channel_input
-    if removed:
-        return f"Removed {label} from watchlist"
-    return f"{label} was not in watchlist"
+        removed = remove_membership(connection, channel_identity)
+    return {
+        "channel_ref": channel_ref,
+        "channel": _channel_label(channel_identity, fallback=channel_ref),
+        "removed": removed,
+    }
 
 
-def remove_blacklist_channel(channel_input: str) -> str:
-    """Remove a channel from the local search blacklist without deleting catalog data."""
-    channel_identity = parse_channel_identity_input(channel_input)
-    if not channel_identity.has_identity():
-        metadata = fetch_channel_videos(
-            channel_input,
-            options=ChannelOptions(last=1),
-        )
-        channel_identity = extract_channel_identity(metadata)
-    with get_connection() as connection:
-        removed = delete_blacklist_channel(connection, channel_identity)
-    label = channel_identity.channel_handle or channel_identity.youtube_channel_id or channel_input
-    if removed:
-        return f"Removed {label} from blacklist"
-    return f"{label} was not in blacklist"
+def _channel_label(
+    channel_identity: ChannelIdentity,
+    *,
+    fallback: str,
+) -> str:
+    return channel_identity.channel_handle or channel_identity.youtube_channel_id or fallback
 
 
 def sync_watchlist(
@@ -236,9 +245,9 @@ def sync_watchlist(
     options: ChannelOptions,
 ) -> dict[str, Any]:
     with get_connection() as connection:
-        watched_channel_inputs = list_watchlist_channel_inputs(connection)
+        watched_channel_refs = list_watchlist_channel_refs(connection)
 
-    if not watched_channel_inputs:
+    if not watched_channel_refs:
         return {
             "watched_channels": [],
             "new_video_ids": [],
@@ -247,9 +256,9 @@ def sync_watchlist(
         }
 
     new_video_ids: list[str] = []
-    for channel_input in watched_channel_inputs:
+    for channel_ref in watched_channel_refs:
         metadata = fetch_channel_metadata(
-            channel_input,
+            channel_ref,
             options=options,
         )
         with get_connection() as connection:
@@ -260,7 +269,7 @@ def sync_watchlist(
 
     hydrated_transcripts, failed_transcripts = hydrate_watchlist_transcripts(missing_video_ids)
     return {
-        "watched_channels": watched_channel_inputs,
+        "watched_channels": watched_channel_refs,
         "new_video_ids": new_video_ids,
         "hydrated_transcripts": hydrated_transcripts,
         "failed_transcripts": failed_transcripts,
@@ -294,10 +303,10 @@ def hydrate_watchlist_transcripts(
 
 def watch_new_videos(
     *,
-    channels: list[str] | None = None,
+    channel_refs: ChannelRefInput | None = None,
     include_all: bool = False,
 ) -> list[dict[str, Any]]:
-    channel_identities = [parse_channel_identity_input(channel) for channel in channels or []]
+    channel_identities = YouTubeRefs.parse(channel_refs).channel_identities()
     with get_connection() as connection:
         return consume_new_watchlist_videos(
             connection,
