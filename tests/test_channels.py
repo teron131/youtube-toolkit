@@ -1,10 +1,12 @@
 """Channel URL, list membership, and option validation tests."""
 
+import threading
+
 import pytest
 
 from youtube_toolkit.cli.parser import build_parser
 from youtube_toolkit.identity import YouTubeRefs, normalize_channel_url, parse_channel_ref
-from youtube_toolkit.schemas import ChannelIdentity
+from youtube_toolkit.schemas import ChannelIdentity, TranscriptDocument, VideoMetadata
 from youtube_toolkit.storage import (
     consume_new_watchlist_videos,
     get_connection,
@@ -17,6 +19,7 @@ from youtube_toolkit.storage import (
 from youtube_toolkit.youtube.channels import (
     ChannelOptions,
     add_watchlist_channels,
+    hydrate_watchlist_transcripts,
     remove_blacklist_channels,
     remove_watchlist_channels,
     sync_watchlist,
@@ -88,7 +91,7 @@ def test_parser_accepts_watchlist_new_and_scheduled_sync() -> None:
     assert scheduled_args.last == 5
 
 
-def test_add_watchlist_channels_accepts_single_and_batch_channel_refs(
+def test_add_watchlist_channels_accepts_single_and_list_channel_refs(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -122,6 +125,47 @@ def test_add_watchlist_channels_accepts_single_and_batch_channel_refs(
     assert add_watchlist_channels(["https://www.youtube.com/channel/UC456"]) == [
         {
             "channel_ref": "https://www.youtube.com/channel/UC456",
+            "channel": "@Anthropic",
+        },
+    ]
+
+    with get_connection() as connection:
+        assert list_watchlist_channel_refs(connection) == ["@Anthropic", "@OpenAI"]
+
+
+def test_add_watchlist_channels_fetches_refs_concurrently(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Fan out yt-dlp metadata fetches while preserving ordered membership writes."""
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    both_refs_started = threading.Barrier(2)
+
+    def fake_fetch_channel_metadata(
+        channel_ref: str,
+        *,
+        options: ChannelOptions,
+    ) -> dict:
+        assert options.last == 1
+        both_refs_started.wait(timeout=1)
+        return {
+            "channel_id": f"UC{channel_ref.removeprefix('@')}",
+            "channel_handle": channel_ref,
+        }
+
+    monkeypatch.setattr(
+        "youtube_toolkit.youtube.channels.fetch_channel_metadata",
+        fake_fetch_channel_metadata,
+    )
+
+    assert add_watchlist_channels(["@OpenAI", "@Anthropic"]) == [
+        {
+            "channel_ref": "@OpenAI",
+            "channel": "@OpenAI",
+        },
+        {
+            "channel_ref": "@Anthropic",
             "channel": "@Anthropic",
         },
     ]
@@ -437,6 +481,123 @@ def test_sync_watchlist_marks_new_videos_and_hydrates_missing(
         ],
         "failed_transcripts": [],
     }
+
+
+def test_sync_watchlist_fetches_channels_concurrently(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Fan out watched-channel yt-dlp fetches before ordered storage updates."""
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        upsert_watchlist_channel(
+            connection,
+            ChannelIdentity(
+                youtube_channel_id="UC123",
+                channel_handle="@OpenAI",
+            ),
+        )
+        upsert_watchlist_channel(
+            connection,
+            ChannelIdentity(
+                youtube_channel_id="UC456",
+                channel_handle="@Anthropic",
+            ),
+        )
+
+    both_refs_started = threading.Barrier(2)
+    stored_refs: list[str] = []
+
+    listings = {
+        "@Anthropic": anthropic_listing(),
+        "@OpenAI": openai_listing(),
+    }
+
+    def fake_fetch_channel_metadata(
+        channel_ref: str,
+        *,
+        options: ChannelOptions,
+    ) -> dict:
+        assert options.last == 2
+        both_refs_started.wait(timeout=1)
+        return listings[channel_ref]
+
+    def fake_store_watchlist_channel_listing(
+        connection,
+        metadata: dict,
+    ) -> list[str]:
+        stored_refs.append(metadata["channel_handle"])
+        return [metadata["entries"][0]["id"]]
+
+    def fake_hydrate_watchlist_transcripts(video_ids: list[str]):
+        assert video_ids == []
+        return ([], [])
+
+    monkeypatch.setattr(
+        "youtube_toolkit.youtube.channels.fetch_channel_metadata",
+        fake_fetch_channel_metadata,
+    )
+    monkeypatch.setattr(
+        "youtube_toolkit.youtube.channels.store_watchlist_channel_listing",
+        fake_store_watchlist_channel_listing,
+    )
+    monkeypatch.setattr(
+        "youtube_toolkit.youtube.channels.hydrate_watchlist_transcripts",
+        fake_hydrate_watchlist_transcripts,
+    )
+
+    result = sync_watchlist(options=ChannelOptions(last=2))
+
+    assert result["watched_channels"] == ["@Anthropic", "@OpenAI"]
+    assert result["new_video_ids"] == ["video-anthropic", "video-openai"]
+    assert stored_refs == ["@Anthropic", "@OpenAI"]
+
+
+def test_hydrate_watchlist_transcripts_fetches_videos_concurrently(monkeypatch) -> None:
+    """Fan out transcript acquisition for missing watchlist videos."""
+    both_videos_started = threading.Barrier(2)
+
+    def fake_fetch_transcript(video_id: str) -> TranscriptDocument:
+        both_videos_started.wait(timeout=1)
+        if video_id == "video-failed":
+            raise RuntimeError("caption missing")
+        return TranscriptDocument(
+            metadata=VideoMetadata(
+                video_id=video_id,
+                url=f"https://www.youtube.com/watch?v={video_id}",
+            ),
+            language="stored",
+            source="database",
+            chunks=[],
+            sections=[],
+        )
+
+    monkeypatch.setattr(
+        "youtube_toolkit.youtube.channels.fetch_transcript",
+        fake_fetch_transcript,
+    )
+
+    hydrated_transcripts, failed_transcripts = hydrate_watchlist_transcripts(
+        [
+            "video-openai",
+            "video-failed",
+        ]
+    )
+
+    assert hydrated_transcripts == [
+        {
+            "video_id": "video-openai",
+            "source": "database",
+            "language": "stored",
+        }
+    ]
+    assert failed_transcripts == [
+        {
+            "video_id": "video-failed",
+            "error": "caption missing",
+        }
+    ]
 
 
 def test_validate_channel_options_rejects_non_positive_values() -> None:
