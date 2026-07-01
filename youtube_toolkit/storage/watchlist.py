@@ -132,7 +132,7 @@ def insert_watchlist_video(
     )
 
 
-def list_watchlist_channel_inputs(connection: turso.Connection) -> list[str]:
+def list_watchlist_channel_refs(connection: turso.Connection) -> list[str]:
     rows = connection.execute(
         """
         SELECT channels.youtube_channel_id, channels.channel_handle

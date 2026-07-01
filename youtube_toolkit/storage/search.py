@@ -7,8 +7,8 @@ from typing import Any, Literal
 
 import turso
 
+from ..identity import VideoRef, extract_video_id
 from ..model_config import EmbeddingConfig
-from ..url import extract_video_id
 from .payloads import stored_video_payload
 from .semantic import embed_text_with_gemini, encode_vector
 
@@ -79,12 +79,12 @@ def search_stored_videos(
 
 def get_stored_video(
     connection: turso.Connection,
-    video: str,
+    video_ref: VideoRef,
     *,
     require_transcript: bool = False,
 ) -> dict[str, Any] | None:
     """Return one stored video payload by ID or URL."""
-    video_id = extract_video_id(video)
+    video_id = extract_video_id(video_ref)
     if video_id is None:
         return None
     row = connection.execute(

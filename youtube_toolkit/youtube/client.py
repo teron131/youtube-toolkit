@@ -9,7 +9,7 @@ import sys
 from typing import Any
 from urllib.parse import urlencode
 
-from ..url import ALLOWED_VIDEO_HOSTS, extract_video_id, normalize_youtube_url, validate_url
+from ..identity import ALLOWED_VIDEO_HOSTS, VideoRef, normalize_youtube_url, require_video_id, validate_url
 
 SEARCH_SORT_PARAMS = {
     "relevance": "EgIQAQ==",  # boolean "true"
@@ -23,8 +23,8 @@ class YtDlpClient:
     def command_prefix(self) -> list[str]:
         return [sys.executable, "-m", "yt_dlp"]
 
-    def metadata(self, video: str) -> dict[str, Any]:
-        url = normalize_youtube_url(video)
+    def metadata(self, video_ref: VideoRef) -> dict[str, Any]:
+        url = normalize_youtube_url(video_ref)
         validate_url(url, allowed_hosts=ALLOWED_VIDEO_HOSTS)
         return self._json(
             [
@@ -83,11 +83,9 @@ class YtDlpClient:
             error_message="yt-dlp channel query failed",
         )
 
-    def download_transcription_audio(self, video: str) -> Path:
-        video_id = extract_video_id(video)
-        if video_id is None:
-            raise ValueError("Could not find a YouTube video ID")
-        url = normalize_youtube_url(video)
+    def download_transcription_audio(self, video_ref: VideoRef) -> Path:
+        video_id = require_video_id(video_ref)
+        url = normalize_youtube_url(video_ref)
         validate_url(url, allowed_hosts=ALLOWED_VIDEO_HOSTS)
         output_stem = DEFAULT_AUDIO_DIR / video_id
         output_stem.parent.mkdir(parents=True, exist_ok=True)

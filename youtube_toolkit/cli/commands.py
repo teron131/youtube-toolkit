@@ -18,11 +18,11 @@ from ..youtube import YtDlpClient
 from ..youtube.caption import fetch_transcript
 from ..youtube.channels import (
     ChannelOptions,
-    add_blacklist_channel,
-    add_watchlist_channel,
+    add_blacklist_channels,
+    add_watchlist_channels,
     fetch_channel_videos,
-    remove_blacklist_channel,
-    remove_watchlist_channel,
+    remove_blacklist_channels,
+    remove_watchlist_channels,
     sync_watchlist,
     watch_new_videos,
 )
@@ -30,18 +30,18 @@ from ..youtube.search import SearchOptions, search_videos
 
 
 def run_transcript(args: argparse.Namespace) -> int:
-    document = fetch_transcript(args.video)
+    document = fetch_transcript(args.video_ref)
     print_json(asdict(document))
     return 0
 
 
 def run_inspect(args: argparse.Namespace) -> int:
-    print_json(YtDlpClient().metadata(args.video))
+    print_json(YtDlpClient().metadata(args.video_ref))
     return 0
 
 
 def run_audio(args: argparse.Namespace) -> int:
-    print(YtDlpClient().download_transcription_audio(args.video))
+    print(YtDlpClient().download_transcription_audio(args.video_ref))
     return 0
 
 
@@ -72,7 +72,7 @@ def run_search(args: argparse.Namespace) -> int:
 
 def run_channel_videos(args: argparse.Namespace) -> int:
     metadata = fetch_channel_videos(
-        args.channel,
+        args.channel_ref,
         options=ChannelOptions(
             last=args.last,
             days=args.days,
@@ -83,29 +83,43 @@ def run_channel_videos(args: argparse.Namespace) -> int:
 
 
 def run_watchlist_add(args: argparse.Namespace) -> int:
-    print(add_watchlist_channel(args.channel))
+    print_json(add_watchlist_channels(args.channel_refs))
     return 0
 
 
 def run_watchlist_remove(args: argparse.Namespace) -> int:
-    print(remove_watchlist_channel(args.channel))
+    print_json(remove_watchlist_channels(args.channel_refs))
     return 0
 
 
 def run_watchlist_sync(args: argparse.Namespace) -> int:
-    print_json(sync_watchlist(options=channel_options_from_args(args)))
+    print_json(
+        sync_watchlist(
+            options=ChannelOptions(
+                last=args.last,
+                days=args.days,
+            )
+        )
+    )
     return 0
 
 
 def run_watchlist_scheduled_sync(args: argparse.Namespace) -> int:
-    print_json(scheduled_sync_watchlist(options=channel_options_from_args(args)))
+    print_json(
+        scheduled_sync_watchlist(
+            options=ChannelOptions(
+                last=args.last,
+                days=args.days,
+            )
+        )
+    )
     return 0
 
 
 def run_watchlist_new(args: argparse.Namespace) -> int:
     print_json(
         watch_new_videos(
-            channels=args.channel,
+            channel_refs=args.channel_refs,
             include_all=args.all,
         )
     )
@@ -138,12 +152,12 @@ def run_watchlist_schedule_uninstall(args: argparse.Namespace) -> int:
 
 
 def run_blacklist_add(args: argparse.Namespace) -> int:
-    print(add_blacklist_channel(args.channel))
+    print_json(add_blacklist_channels(args.channel_refs))
     return 0
 
 
 def run_blacklist_remove(args: argparse.Namespace) -> int:
-    print(remove_blacklist_channel(args.channel))
+    print_json(remove_blacklist_channels(args.channel_refs))
     return 0
 
 
@@ -152,13 +166,6 @@ def run_doctor(_args: argparse.Namespace) -> int:
 
     print(f"yt-dlp import ok: {yt_dlp.version.__version__}")
     return 0
-
-
-def channel_options_from_args(args: argparse.Namespace) -> ChannelOptions:
-    return ChannelOptions(
-        last=args.last,
-        days=args.days,
-    )
 
 
 def print_json(payload: object) -> None:
