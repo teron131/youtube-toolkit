@@ -137,17 +137,26 @@ def test_emit_json_truncates_long_text_fields(capsys, monkeypatch) -> None:
     }
 
 
-def test_watchlist_new_accepts_repeated_channel_filters() -> None:
-    """New-video consumption can be scoped to multiple watched channels."""
+def test_watchlist_recent_accepts_optional_channel_filters() -> None:
+    """Recent watchlist videos can be scoped to multiple watched channels."""
+    default_args = build_parser().parse_args(["watchlist", "recent"])
     args = build_parser().parse_args(
         [
             "watchlist",
-            "new",
-            "--channel",
+            "recent",
             "@OpenAI",
-            "--channel",
             "UC123",
         ]
     )
 
+    assert default_args.channel_refs == []
+    assert default_args.days == 3
     assert args.channel_refs == ["@OpenAI", "UC123"]
+    assert args.days == 3
+
+
+@pytest.mark.parametrize("command", ["new", "read"])
+def test_old_watchlist_newness_commands_are_not_public(command: str) -> None:
+    """Old subjective-newness command names are not kept as aliases."""
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["watchlist", command])

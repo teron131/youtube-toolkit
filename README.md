@@ -23,7 +23,7 @@ The toolkit intentionally ships a small working surface:
 - `youtube video metadata <url-or-id>` prints metadata JSON
 - `youtube channel videos <channel>` lists recent videos for one channel
 - `youtube watchlist add <channel...>`, `youtube watchlist list`, `youtube watchlist remove <channel...>`, and `youtube watchlist sync` persist channel workflows
-- `youtube watchlist new --channel <channel>` accepts repeated `--channel` flags; `youtube watchlist new --all` returns all new watched videos
+- `youtube watchlist recent --days 3` returns recently uploaded videos from watched channels without mutating storage; pass channels after `recent` to narrow the scope
 - `youtube watchlist schedule install|status|uninstall` manages its macOS LaunchAgent
 - `youtube blacklist add <channel...>` and `youtube blacklist remove <channel...>` manage channels excluded from future search results
 - `youtube doctor` returns JSON with the `yt-dlp` version and active database path
@@ -43,7 +43,7 @@ youtube doctor
 Use `uv tool install --force .` when refreshing an existing install.
 Use `uv run youtube ...` only when intentionally testing the checkout without reinstalling. Normal usage below assumes the installed `youtube` command.
 
-For `<channel...>` arguments, pass separate shell words: `@OpenAI @Anthropic UC123`. Do not use commas or `[a,b,c]` list syntax. For repeated options, write the option each time: `--channel @OpenAI --channel @Anthropic`.
+For `<channel...>` arguments, pass separate shell words: `@OpenAI @Anthropic UC123`. Do not use commas or `[a,b,c]` list syntax. For repeated options, write the option each time: `--include-channel OpenAI --include-channel Anthropic`.
 
 ## Examples
 
@@ -55,8 +55,8 @@ youtube channel videos @OpenAI --last 5
 youtube watchlist add @OpenAI @Anthropic
 youtube watchlist list
 youtube watchlist schedule install
-youtube watchlist new --channel @OpenAI --channel @Anthropic
-youtube watchlist new --all
+youtube watchlist recent --days 3
+youtube watchlist recent @OpenAI @Anthropic --days 3
 youtube watchlist remove @OpenAI @Anthropic
 youtube blacklist add @SpamChannel UC123
 ```

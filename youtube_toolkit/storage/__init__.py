@@ -26,9 +26,9 @@ from .semantic import (
 )
 from .videos import store_channel_listing, upsert_video, upsert_video_summary
 from .watchlist import (
-    consume_new_watchlist_videos,
     delete_watchlist_channel,
     list_missing_watchlist_video_ids,
+    list_recent_watchlist_video_payloads,
     list_watchlist_channel_refs,
     store_watchlist_channel_listing,
     upsert_watchlist_channel,
@@ -41,7 +41,6 @@ __all__ = [
     "EMBEDDING_BASE_URL",
     "STORAGE_DIRNAME",
     "EmbeddingSearchError",
-    "consume_new_watchlist_videos",
     "delete_blacklist_channel",
     "delete_watchlist_channel",
     "embed_text_with_gemini",
@@ -50,6 +49,7 @@ __all__ = [
     "index_video_embedding",
     "list_blacklist_channel_identities",
     "list_missing_watchlist_video_ids",
+    "list_recent_watchlist_video_payloads",
     "list_watchlist_channel_refs",
     "resolve_storage_dir",
     "search_stored_videos",
