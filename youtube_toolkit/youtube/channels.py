@@ -6,12 +6,18 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from typing import Any, TypedDict
+from typing import Any
 
 import turso
 
 from ..identity import ChannelRef, ChannelRefInput, YouTubeRefs, normalize_channel_url, parse_channel_ref
-from ..schemas import ChannelIdentity, extract_channel_identity
+from ..schemas import (
+    ChannelIdentity,
+    ChannelRemovalResult,
+    TranscriptFetchResult,
+    WatchlistSyncResult,
+    extract_channel_identity,
+)
 from ..storage import (
     consume_new_watchlist_videos,
     delete_blacklist_channel,
@@ -36,15 +42,6 @@ MAX_CONCURRENT_LIST_WORKERS = 5
 class ChannelOptions:
     last: int = DEFAULT_LAST_VIDEOS
     days: int | None = None
-
-
-class ChannelMembershipResult(TypedDict):
-    channel_ref: ChannelRef
-    channel: str
-
-
-class ChannelRemovalResult(ChannelMembershipResult):
-    removed: bool
 
 
 def fetch_channel_videos(
@@ -152,14 +149,14 @@ def should_expand_window(
     return min(dated_entries) >= cutoff_date_for_days(days)
 
 
-def add_watchlist_channels(channel_refs: ChannelRefInput) -> list[ChannelMembershipResult]:
+def add_watchlist_channels(channel_refs: ChannelRefInput) -> list[str]:
     return _add_channel_memberships(
         channel_refs,
         add_membership=upsert_watchlist_channel,
     )
 
 
-def add_blacklist_channels(channel_refs: ChannelRefInput) -> list[ChannelMembershipResult]:
+def add_blacklist_channels(channel_refs: ChannelRefInput) -> list[str]:
     return _add_channel_memberships(
         channel_refs,
         add_membership=upsert_blacklist_channel,
@@ -170,7 +167,7 @@ def _add_channel_memberships(
     channel_refs: ChannelRefInput,
     *,
     add_membership: Callable[[turso.Connection, ChannelIdentity], int | None],
-) -> list[ChannelMembershipResult]:
+) -> list[str]:
     fetched_channels = _map_concurrently(
         list(YouTubeRefs.parse(channel_refs)),
         lambda channel_ref: (
@@ -182,20 +179,15 @@ def _add_channel_memberships(
         ),
     )
 
-    results: list[ChannelMembershipResult] = []
+    channels: list[str] = []
     for channel_ref, metadata in fetched_channels:
         channel_identity = extract_channel_identity(metadata)
         channel = channel_identity.channel_handle or channel_identity.youtube_channel_id or channel_ref
         with get_connection() as connection:
             store_channel_listing(connection, metadata)
             add_membership(connection, channel_identity)
-        results.append(
-            {
-                "channel_ref": channel_ref,
-                "channel": channel,
-            }
-        )
-    return results
+        channels.append(channel)
+    return channels
 
 
 def remove_watchlist_channels(channel_refs: ChannelRefInput) -> list[ChannelRemovalResult]:
@@ -231,7 +223,6 @@ def _remove_channel_memberships(
             removed = remove_membership(connection, channel_identity)
         results.append(
             {
-                "channel_ref": channel_ref,
                 "channel": channel,
                 "removed": removed,
             }
@@ -264,16 +255,15 @@ def _map_concurrently[WorkItem, WorkResult](
 def sync_watchlist(
     *,
     options: ChannelOptions,
-) -> dict[str, Any]:
+) -> WatchlistSyncResult:
     with get_connection() as connection:
         watched_channel_refs = list_watchlist_channel_refs(connection)
 
     if not watched_channel_refs:
         return {
-            "watched_channels": [],
-            "new_video_ids": [],
-            "hydrated_transcripts": [],
-            "failed_transcripts": [],
+            "channels": [],
+            "new_videos": [],
+            "transcripts": [],
         }
 
     fetched_channels = _map_concurrently(
@@ -295,46 +285,32 @@ def sync_watchlist(
     with get_connection() as connection:
         missing_video_ids = list_missing_watchlist_video_ids(connection)
 
-    hydrated_transcripts, failed_transcripts = hydrate_watchlist_transcripts(missing_video_ids)
+    transcripts = fetch_watchlist_transcripts(missing_video_ids)
     return {
-        "watched_channels": watched_channel_refs,
-        "new_video_ids": new_video_ids,
-        "hydrated_transcripts": hydrated_transcripts,
-        "failed_transcripts": failed_transcripts,
+        "channels": watched_channel_refs,
+        "new_videos": new_video_ids,
+        "transcripts": transcripts,
     }
 
 
-def hydrate_watchlist_transcripts(
+def fetch_watchlist_transcripts(
     video_ids: list[str],
-) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
-    def hydrate(video_id: str) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
+) -> list[TranscriptFetchResult]:
+    def fetch(video_id: str) -> TranscriptFetchResult:
         try:
             document = fetch_transcript(video_id)
-            return (
-                {
-                    "video_id": document.metadata.video_id,
-                    "source": document.source,
-                    "language": document.language,
-                },
-                None,
-            )
+            return {
+                "status": "stored",
+                "video_id": document.metadata.video_id,
+            }
         except Exception as exc:
-            return (
-                None,
-                {
-                    "video_id": video_id,
-                    "error": str(exc),
-                },
-            )
+            return {
+                "status": "failed",
+                "video_id": video_id,
+                "error": str(exc),
+            }
 
-    hydrated_transcripts: list[dict[str, Any]] = []
-    failed_transcripts: list[dict[str, str]] = []
-    for hydrated, failed in _map_concurrently(video_ids, hydrate):
-        if hydrated is not None:
-            hydrated_transcripts.append(hydrated)
-        if failed is not None:
-            failed_transcripts.append(failed)
-    return hydrated_transcripts, failed_transcripts
+    return _map_concurrently(video_ids, fetch)
 
 
 def watch_new_videos(

@@ -19,7 +19,7 @@ from youtube_toolkit.storage import (
 from youtube_toolkit.youtube.channels import (
     ChannelOptions,
     add_watchlist_channels,
-    hydrate_watchlist_transcripts,
+    fetch_watchlist_transcripts,
     remove_blacklist_channels,
     remove_watchlist_channels,
     sync_watchlist,
@@ -116,18 +116,8 @@ def test_add_watchlist_channels_accepts_single_and_list_channel_refs(
         fake_fetch_channel_metadata,
     )
 
-    assert add_watchlist_channels("@OpenAI") == [
-        {
-            "channel_ref": "@OpenAI",
-            "channel": "@OpenAI",
-        },
-    ]
-    assert add_watchlist_channels(["https://www.youtube.com/channel/UC456"]) == [
-        {
-            "channel_ref": "https://www.youtube.com/channel/UC456",
-            "channel": "@Anthropic",
-        },
-    ]
+    assert add_watchlist_channels("@OpenAI") == ["@OpenAI"]
+    assert add_watchlist_channels(["https://www.youtube.com/channel/UC456"]) == ["@Anthropic"]
 
     with get_connection() as connection:
         assert list_watchlist_channel_refs(connection) == ["@Anthropic", "@OpenAI"]
@@ -159,16 +149,7 @@ def test_add_watchlist_channels_fetches_refs_concurrently(
         fake_fetch_channel_metadata,
     )
 
-    assert add_watchlist_channels(["@OpenAI", "@Anthropic"]) == [
-        {
-            "channel_ref": "@OpenAI",
-            "channel": "@OpenAI",
-        },
-        {
-            "channel_ref": "@Anthropic",
-            "channel": "@Anthropic",
-        },
-    ]
+    assert add_watchlist_channels(["@OpenAI", "@Anthropic"]) == ["@OpenAI", "@Anthropic"]
 
     with get_connection() as connection:
         assert list_watchlist_channel_refs(connection) == ["@Anthropic", "@OpenAI"]
@@ -192,7 +173,6 @@ def test_remove_watchlist_channel_deletes_membership_only(
 
     assert remove_watchlist_channels("@OpenAI") == [
         {
-            "channel_ref": "@OpenAI",
             "channel": "@OpenAI",
             "removed": True,
         }
@@ -232,7 +212,6 @@ def test_remove_watchlist_channel_deletes_queue_only(
 
     assert remove_watchlist_channels(["@OpenAI"]) == [
         {
-            "channel_ref": "@OpenAI",
             "channel": "@OpenAI",
             "removed": True,
         }
@@ -288,7 +267,6 @@ def test_remove_watchlist_channel_resolves_ambiguous_url(
 
     assert remove_watchlist_channels(["https://www.youtube.com/c/OpenAI"]) == [
         {
-            "channel_ref": "https://www.youtube.com/c/OpenAI",
             "channel": "@OpenAI",
             "removed": True,
         }
@@ -313,7 +291,6 @@ def test_remove_blacklist_channel_deletes_membership_only(
 
     assert remove_blacklist_channels(["https://www.youtube.com/channel/UC123"]) == [
         {
-            "channel_ref": "https://www.youtube.com/channel/UC123",
             "channel": "UC123",
             "removed": True,
         }
@@ -343,7 +320,6 @@ def test_remove_missing_channel_reports_no_membership(
 
     assert remove_watchlist_channels(["@Missing"]) == [
         {
-            "channel_ref": "@Missing",
             "channel": "@Missing",
             "removed": False,
         }
@@ -454,32 +430,35 @@ def test_sync_watchlist_marks_new_videos_and_hydrates_missing(
         assert options.last == 3
         return openai_listing()
 
-    def fake_hydrate_watchlist_transcripts(video_ids: list[str]):
+    def fake_fetch_watchlist_transcripts(video_ids: list[str]):
         assert video_ids == ["video-openai"]
-        return ([{"video_id": "video-openai", "source": "database", "language": "stored"}], [])
+        return [
+            {
+                "status": "stored",
+                "video_id": "video-openai",
+            }
+        ]
 
     monkeypatch.setattr(
         "youtube_toolkit.youtube.channels.fetch_channel_metadata",
         fake_fetch_channel_metadata,
     )
     monkeypatch.setattr(
-        "youtube_toolkit.youtube.channels.hydrate_watchlist_transcripts",
-        fake_hydrate_watchlist_transcripts,
+        "youtube_toolkit.youtube.channels.fetch_watchlist_transcripts",
+        fake_fetch_watchlist_transcripts,
     )
 
     result = sync_watchlist(options=ChannelOptions(last=3))
 
     assert result == {
-        "watched_channels": ["@OpenAI"],
-        "new_video_ids": ["video-openai"],
-        "hydrated_transcripts": [
+        "channels": ["@OpenAI"],
+        "new_videos": ["video-openai"],
+        "transcripts": [
             {
+                "status": "stored",
                 "video_id": "video-openai",
-                "source": "database",
-                "language": "stored",
             }
         ],
-        "failed_transcripts": [],
     }
 
 
@@ -530,9 +509,9 @@ def test_sync_watchlist_fetches_channels_concurrently(
         stored_refs.append(metadata["channel_handle"])
         return [metadata["entries"][0]["id"]]
 
-    def fake_hydrate_watchlist_transcripts(video_ids: list[str]):
+    def fake_fetch_watchlist_transcripts(video_ids: list[str]):
         assert video_ids == []
-        return ([], [])
+        return []
 
     monkeypatch.setattr(
         "youtube_toolkit.youtube.channels.fetch_channel_metadata",
@@ -543,18 +522,18 @@ def test_sync_watchlist_fetches_channels_concurrently(
         fake_store_watchlist_channel_listing,
     )
     monkeypatch.setattr(
-        "youtube_toolkit.youtube.channels.hydrate_watchlist_transcripts",
-        fake_hydrate_watchlist_transcripts,
+        "youtube_toolkit.youtube.channels.fetch_watchlist_transcripts",
+        fake_fetch_watchlist_transcripts,
     )
 
     result = sync_watchlist(options=ChannelOptions(last=2))
 
-    assert result["watched_channels"] == ["@Anthropic", "@OpenAI"]
-    assert result["new_video_ids"] == ["video-anthropic", "video-openai"]
+    assert result["channels"] == ["@Anthropic", "@OpenAI"]
+    assert result["new_videos"] == ["video-anthropic", "video-openai"]
     assert stored_refs == ["@Anthropic", "@OpenAI"]
 
 
-def test_hydrate_watchlist_transcripts_fetches_videos_concurrently(monkeypatch) -> None:
+def test_fetch_watchlist_transcripts_fetches_videos_concurrently(monkeypatch) -> None:
     """Fan out transcript acquisition for missing watchlist videos."""
     both_videos_started = threading.Barrier(2)
 
@@ -578,25 +557,23 @@ def test_hydrate_watchlist_transcripts_fetches_videos_concurrently(monkeypatch) 
         fake_fetch_transcript,
     )
 
-    hydrated_transcripts, failed_transcripts = hydrate_watchlist_transcripts(
+    transcripts = fetch_watchlist_transcripts(
         [
             "video-openai",
             "video-failed",
         ]
     )
 
-    assert hydrated_transcripts == [
+    assert transcripts == [
         {
+            "status": "stored",
             "video_id": "video-openai",
-            "source": "database",
-            "language": "stored",
-        }
-    ]
-    assert failed_transcripts == [
+        },
         {
+            "status": "failed",
             "video_id": "video-failed",
             "error": "caption missing",
-        }
+        },
     ]
 
 

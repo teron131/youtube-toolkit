@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal, NotRequired, TypedDict
 from urllib.parse import urlparse
 
 from .convert_zh import convert_zh
@@ -92,6 +92,23 @@ class VideoRecord:
     upload_date: str | None
     view_count: int | None
     transcript: str | None
+
+
+class ChannelRemovalResult(TypedDict):
+    channel: str
+    removed: bool
+
+
+class TranscriptFetchResult(TypedDict):
+    status: Literal["stored", "failed"]
+    video_id: str
+    error: NotRequired[str]
+
+
+class WatchlistSyncResult(TypedDict):
+    channels: list[str]
+    new_videos: list[str]
+    transcripts: list[TranscriptFetchResult]
 
 
 def extract_channel_identity(

@@ -88,7 +88,7 @@ def test_install_watchlist_schedule_writes_plist_without_loading(
     plist_path = home / "Library" / "LaunchAgents" / "com.example.youtube-watch.plist"
     assert result["plist_path"] == str(plist_path)
     assert result["loaded"] is False
-    assert result["load_error"] is None
+    assert "load_error" not in result
     with plist_path.open("rb") as plist_file:
         plist = plistlib.load(plist_file)
     assert plist["ProgramArguments"] == [

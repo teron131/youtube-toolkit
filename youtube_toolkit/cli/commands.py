@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict
-import json
+from typing import Any, TypedDict
 
-from ..audio_transcription import store_audio_transcript
+from ..schemas import ChannelRemovalResult, WatchlistSyncResult
 from ..storage import DATABASE_FILENAME, resolve_storage_dir
 from ..watchlist_schedule import (
+    ScheduledSyncResult,
+    WatchlistScheduleInstallResult,
     WatchlistScheduleOptions,
+    WatchlistScheduleStatusResult,
+    WatchlistScheduleUninstallResult,
     install_watchlist_schedule,
     scheduled_sync_watchlist,
     uninstall_watchlist_schedule,
@@ -30,30 +34,21 @@ from ..youtube.channels import (
 from ..youtube.search import SearchOptions, search_videos
 
 
-def run_transcript(args: argparse.Namespace) -> int:
-    document = fetch_transcript(args.video_ref)
-    print_json(asdict(document))
-    return 0
+class DoctorResult(TypedDict):
+    yt_dlp_version: str
+    database: str
 
 
-def run_inspect(args: argparse.Namespace) -> int:
-    print_json(YtDlpClient().metadata(args.video_ref))
-    return 0
+def run_transcript(args: argparse.Namespace) -> dict[str, Any]:
+    return asdict(fetch_transcript(args.video_ref))
 
 
-def run_audio(args: argparse.Namespace) -> int:
-    print(YtDlpClient().download_transcription_audio(args.video_ref))
-    return 0
+def run_inspect(args: argparse.Namespace) -> dict[str, Any]:
+    return YtDlpClient().metadata(args.video_ref)
 
 
-def run_transcribe_audio(args: argparse.Namespace) -> int:
-    payload = store_audio_transcript(args.audio)
-    print_json(payload)
-    return 0
-
-
-def run_search(args: argparse.Namespace) -> int:
-    entries = search_videos(
+def run_search(args: argparse.Namespace) -> list[dict[str, Any]]:
+    return search_videos(
         args.query,
         options=SearchOptions(
             limit=args.limit,
@@ -67,108 +62,71 @@ def run_search(args: argparse.Namespace) -> int:
             exclude_title=tuple(args.exclude_title),
         ),
     )
-    print_json(entries)
-    return 0
 
 
-def run_channel_videos(args: argparse.Namespace) -> int:
-    metadata = fetch_channel_videos(
-        args.channel_ref,
-        options=ChannelOptions(
+def run_channel_videos(args: argparse.Namespace) -> dict[str, Any]:
+    return fetch_channel_videos(args.channel_ref, options=channel_options(args))
+
+
+def run_watchlist_add(args: argparse.Namespace) -> list[str]:
+    return add_watchlist_channels(args.channel_refs)
+
+
+def run_watchlist_remove(args: argparse.Namespace) -> list[ChannelRemovalResult]:
+    return remove_watchlist_channels(args.channel_refs)
+
+
+def run_watchlist_sync(args: argparse.Namespace) -> WatchlistSyncResult:
+    return sync_watchlist(options=channel_options(args))
+
+
+def run_watchlist_scheduled_sync(args: argparse.Namespace) -> ScheduledSyncResult:
+    return scheduled_sync_watchlist(options=channel_options(args))
+
+
+def run_watchlist_new(args: argparse.Namespace) -> list[dict[str, Any]]:
+    return watch_new_videos(
+        channel_refs=args.channel_refs,
+        include_all=args.all,
+    )
+
+
+def run_watchlist_schedule_install(args: argparse.Namespace) -> WatchlistScheduleInstallResult:
+    return install_watchlist_schedule(
+        options=WatchlistScheduleOptions(
+            minutes=args.minutes,
             last=args.last,
             days=args.days,
-        ),
-    )
-    print_json(metadata)
-    return 0
-
-
-def run_watchlist_add(args: argparse.Namespace) -> int:
-    print_json(add_watchlist_channels(args.channel_refs))
-    return 0
-
-
-def run_watchlist_remove(args: argparse.Namespace) -> int:
-    print_json(remove_watchlist_channels(args.channel_refs))
-    return 0
-
-
-def run_watchlist_sync(args: argparse.Namespace) -> int:
-    print_json(
-        sync_watchlist(
-            options=ChannelOptions(
-                last=args.last,
-                days=args.days,
-            )
+            label=args.label,
+            load=not args.no_load,
         )
     )
-    return 0
 
 
-def run_watchlist_scheduled_sync(args: argparse.Namespace) -> int:
-    print_json(
-        scheduled_sync_watchlist(
-            options=ChannelOptions(
-                last=args.last,
-                days=args.days,
-            )
-        )
-    )
-    return 0
+def run_watchlist_schedule_status(args: argparse.Namespace) -> WatchlistScheduleStatusResult:
+    return watchlist_schedule_status(label=args.label)
 
 
-def run_watchlist_new(args: argparse.Namespace) -> int:
-    print_json(
-        watch_new_videos(
-            channel_refs=args.channel_refs,
-            include_all=args.all,
-        )
-    )
-    return 0
+def run_watchlist_schedule_uninstall(args: argparse.Namespace) -> WatchlistScheduleUninstallResult:
+    return uninstall_watchlist_schedule(label=args.label)
 
 
-def run_watchlist_schedule_install(args: argparse.Namespace) -> int:
-    print_json(
-        install_watchlist_schedule(
-            options=WatchlistScheduleOptions(
-                minutes=args.minutes,
-                last=args.last,
-                days=args.days,
-                label=args.label,
-                load=not args.no_load,
-            )
-        )
-    )
-    return 0
+def run_blacklist_add(args: argparse.Namespace) -> list[str]:
+    return add_blacklist_channels(args.channel_refs)
 
 
-def run_watchlist_schedule_status(args: argparse.Namespace) -> int:
-    print_json(watchlist_schedule_status(label=args.label))
-    return 0
+def run_blacklist_remove(args: argparse.Namespace) -> list[ChannelRemovalResult]:
+    return remove_blacklist_channels(args.channel_refs)
 
 
-def run_watchlist_schedule_uninstall(args: argparse.Namespace) -> int:
-    print_json(uninstall_watchlist_schedule(label=args.label))
-    return 0
-
-
-def run_blacklist_add(args: argparse.Namespace) -> int:
-    print_json(add_blacklist_channels(args.channel_refs))
-    return 0
-
-
-def run_blacklist_remove(args: argparse.Namespace) -> int:
-    print_json(remove_blacklist_channels(args.channel_refs))
-    return 0
-
-
-def run_doctor(_args: argparse.Namespace) -> int:
+def run_doctor(_args: argparse.Namespace) -> DoctorResult:
     import yt_dlp
 
-    print(f"yt-dlp import ok: {yt_dlp.version.__version__}")
-    print(f"database: {resolve_storage_dir() / DATABASE_FILENAME}")
-    return 0
+    return {
+        "yt_dlp_version": yt_dlp.version.__version__,
+        "database": str(resolve_storage_dir() / DATABASE_FILENAME),
+    }
 
 
-def print_json(payload: object) -> None:
-    print(json.dumps(payload, indent=2, ensure_ascii=False))
+def channel_options(args: argparse.Namespace) -> ChannelOptions:
+    return ChannelOptions(last=args.last, days=args.days)
