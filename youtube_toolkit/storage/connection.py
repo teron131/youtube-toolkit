@@ -53,12 +53,8 @@ CREATE TABLE IF NOT EXISTS watchlist_videos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     video_id INTEGER NOT NULL UNIQUE,
     discovered_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    seen_at TEXT,
     FOREIGN KEY (video_id) REFERENCES videos (id)
 );
-
-CREATE INDEX IF NOT EXISTS idx_watchlist_videos_seen_at
-ON watchlist_videos (seen_at);
 
 CREATE TABLE IF NOT EXISTS channels_blacklist (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

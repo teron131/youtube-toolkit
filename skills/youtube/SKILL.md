@@ -32,9 +32,9 @@ Commands:
 - `channel videos <channel>`: list recent videos from one YouTube channel URL, handle, or channel ID
 - `watchlist add <channel...>`: persist one or more channels for later sync
 - `watchlist remove <channel...>`: stop watching one or more channels without deleting stored catalog data
-- `watchlist sync`: refresh watched channels, mark new videos, and fetch missing transcripts
+- `watchlist sync`: refresh watched channels, record discovered videos, and fetch missing transcripts
 - `watchlist schedule install|status|uninstall`: manage the macOS LaunchAgent for scheduled sync
-- `watchlist new --channel <channel>` / `watchlist new --all`: return new watched videos as JSON and mark only returned rows seen; repeat `--channel` for multiple channels
+- `watchlist recent [channel...] --days N`: return objectively recent watched videos from the local DB without mutating storage
 - `blacklist add <channel...>`: exclude one or more channels from future search results
 - `blacklist remove <channel...>`: stop excluding one or more channels from future search results
 
@@ -58,7 +58,7 @@ Useful channel/watchlist options:
 - `--last N`; default `10`
 - `--days N`
 - `watchlist add/remove` and `blacklist add/remove` accept multiple channel URLs, handles, or channel IDs as space-separated arguments: `@OpenAI @Anthropic UC123`
-- `watchlist new --channel <channel>` can be repeated as `--channel @OpenAI --channel @Anthropic`
+- `watchlist recent` accepts optional watched-channel filters as space-separated arguments: `watchlist recent @OpenAI @Anthropic`
 - `watchlist schedule install --minutes N`; default `720`, with no `--last` cap and `--days 3`
 
 ## Storage

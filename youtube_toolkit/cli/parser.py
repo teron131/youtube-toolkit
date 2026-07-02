@@ -89,7 +89,7 @@ class WatchlistCommandParser:
         watchlist_subparsers = watchlist_parser.add_subparsers(
             dest="watchlist_command",
             required=True,
-            metavar="{add,list,remove,sync,new,schedule}",
+            metavar="{add,list,remove,sync,recent,schedule}",
         )
         watchlist_add_parser = watchlist_subparsers.add_parser("add", help="Add one or more channels to the watchlist")
         add_channel_refs_arg(watchlist_add_parser)
@@ -111,10 +111,16 @@ class WatchlistCommandParser:
         watchlist_scheduled_parser.set_defaults(handler=WatchlistCommands.scheduled_sync)
         # argparse has no public API for hidden-but-parseable subcommands.
         watchlist_subparsers._choices_actions = [action for action in watchlist_subparsers._choices_actions if action.dest != "scheduled-sync"]
-        watchlist_new_parser = watchlist_subparsers.add_parser("new", help="Return and mark new watched videos")
-        watchlist_new_parser.add_argument("--channel", action="append", default=[], dest="channel_refs", help="Consume new videos from a watched channel; repeat for more channels")
-        watchlist_new_parser.add_argument("--all", action="store_true", help="Consume new videos from all watched channels")
-        watchlist_new_parser.set_defaults(handler=WatchlistCommands.new)
+        watchlist_recent_parser = watchlist_subparsers.add_parser("recent", help="Show recently uploaded videos from watched channels")
+        watchlist_recent_parser.add_argument("channel_refs", nargs="*", metavar="channel", help="Limit recent videos to watched channels")
+        watchlist_recent_parser.add_argument(
+            "--days",
+            type=int,
+            default=DEFAULT_WATCHLIST_SCHEDULE_DAYS,
+            metavar="N",
+            help="Return videos uploaded in the last N days",
+        )
+        watchlist_recent_parser.set_defaults(handler=WatchlistCommands.recent)
         WatchlistCommandParser.add_schedule(watchlist_subparsers)
 
     @staticmethod

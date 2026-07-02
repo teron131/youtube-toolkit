@@ -19,11 +19,11 @@ from ..schemas import (
     extract_channel_identity,
 )
 from ..storage import (
-    consume_new_watchlist_videos,
     delete_blacklist_channel,
     delete_watchlist_channel,
     get_connection,
     list_missing_watchlist_video_ids,
+    list_recent_watchlist_video_payloads,
     list_watchlist_channel_refs,
     store_channel_listing,
     store_watchlist_channel_listing,
@@ -324,15 +324,17 @@ def fetch_watchlist_transcripts(
     return _map_concurrently(video_ids, fetch)
 
 
-def watch_new_videos(
+def list_recent_watchlist_videos(
     *,
     channel_refs: ChannelRefInput | None = None,
-    include_all: bool = False,
+    days: int,
 ) -> list[dict[str, Any]]:
+    if days <= 0:
+        raise ValueError("--days must be greater than 0")
     channel_identities = YouTubeRefs.parse(channel_refs).channel_identities()
     with get_connection() as connection:
-        return consume_new_watchlist_videos(
+        return list_recent_watchlist_video_payloads(
             connection,
+            cutoff_upload_date=cutoff_date_for_days(days).isoformat(),
             channel_identities=channel_identities or None,
-            include_all=include_all,
         )

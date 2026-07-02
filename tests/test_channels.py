@@ -1,5 +1,6 @@
 """Channel URL, list membership, and option validation tests."""
 
+from datetime import date
 import threading
 
 import pytest
@@ -8,7 +9,6 @@ from youtube_toolkit.cli.parser import build_parser
 from youtube_toolkit.identity import YouTubeRefs, normalize_channel_url, parse_channel_ref
 from youtube_toolkit.schemas import ChannelIdentity, TranscriptDocument, VideoMetadata
 from youtube_toolkit.storage import (
-    consume_new_watchlist_videos,
     get_connection,
     list_blacklist_channel_identities,
     list_watchlist_channel_refs,
@@ -22,12 +22,12 @@ from youtube_toolkit.youtube.channels import (
     add_watchlist_channels,
     fetch_watchlist_transcripts,
     get_recent_channel_entries,
+    list_recent_watchlist_videos,
     list_watchlist_channels,
     remove_blacklist_channels,
     remove_watchlist_channels,
     sync_watchlist,
     validate_channel_options,
-    watch_new_videos,
 )
 
 
@@ -83,15 +83,16 @@ def test_parser_accepts_watchlist_and_blacklist_remove() -> None:
     assert blacklist_args.channel_refs == ["@OpenAI", "UC123"]
 
 
-def test_parser_accepts_watchlist_new_and_scheduled_sync() -> None:
+def test_parser_accepts_watchlist_recent_and_scheduled_sync() -> None:
     """Parse agent-facing and scheduler-facing watchlist commands."""
     list_args = build_parser().parse_args(["watchlist", "list"])
-    new_args = build_parser().parse_args(["watchlist", "new", "--channel", "@OpenAI"])
+    recent_args = build_parser().parse_args(["watchlist", "recent", "@OpenAI"])
     scheduled_args = build_parser().parse_args(["watchlist", "scheduled-sync", "--last", "5"])
 
     assert list_args.watchlist_command == "list"
-    assert new_args.watchlist_command == "new"
-    assert new_args.channel_refs == ["@OpenAI"]
+    assert recent_args.watchlist_command == "recent"
+    assert recent_args.channel_refs == ["@OpenAI"]
+    assert recent_args.days == 3
     assert scheduled_args.watchlist_command == "scheduled-sync"
     assert scheduled_args.last == 5
     assert scheduled_args.days == 3
@@ -201,11 +202,11 @@ def test_remove_watchlist_channel_deletes_membership_only(
     assert watched_channels == []
 
 
-def test_remove_watchlist_channel_deletes_queue_only(
+def test_remove_watchlist_channel_deletes_watchlist_video_rows_only(
     monkeypatch,
     tmp_path,
 ) -> None:
-    """Remove a watched channel queue while preserving stored video rows."""
+    """Remove watched-channel video records while preserving stored catalog rows."""
     monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
 
     with get_connection() as connection:
@@ -234,10 +235,10 @@ def test_remove_watchlist_channel_deletes_queue_only(
             """,
             ("video-openai",),
         ).fetchone()
-        queue_rows = connection.execute("SELECT * FROM watchlist_videos").fetchall()
+        watchlist_video_rows = connection.execute("SELECT * FROM watchlist_videos").fetchall()
 
     assert video_row is not None
-    assert queue_rows == []
+    assert watchlist_video_rows == []
 
 
 def test_remove_watchlist_channel_resolves_ambiguous_url(
@@ -334,11 +335,11 @@ def test_remove_missing_channel_reports_no_membership(
     ]
 
 
-def test_store_watchlist_channel_listing_marks_only_new_video_ids(
+def test_store_watchlist_channel_listing_records_only_new_video_ids(
     monkeypatch,
     tmp_path,
 ) -> None:
-    """Queue newly discovered watched videos without re-queuing known IDs."""
+    """Record newly discovered watched videos without re-recording known IDs."""
     monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
 
     with get_connection() as connection:
@@ -352,17 +353,17 @@ def test_store_watchlist_channel_listing_marks_only_new_video_ids(
         assert store_watchlist_channel_listing(connection, openai_listing()) == ["video-openai"]
         assert store_watchlist_channel_listing(connection, openai_listing()) == []
 
-        rows = connection.execute("SELECT seen_at FROM watchlist_videos").fetchall()
+        rows = connection.execute("SELECT video_id FROM watchlist_videos").fetchall()
 
     assert len(rows) == 1
-    assert rows[0]["seen_at"] is None
+    assert rows[0]["video_id"] > 0
 
 
-def test_store_watchlist_channel_listing_queues_existing_catalog_video(
+def test_store_watchlist_channel_listing_records_existing_catalog_video(
     monkeypatch,
     tmp_path,
 ) -> None:
-    """Watchlist newness belongs to the queue, not the global video catalog."""
+    """Watchlist discovery is separate from the global video catalog."""
     monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
 
     with get_connection() as connection:
@@ -379,12 +380,16 @@ def test_store_watchlist_channel_listing_queues_existing_catalog_video(
         assert store_watchlist_channel_listing(connection, openai_listing()) == []
 
 
-def test_watch_new_videos_consumes_only_scoped_channels(
+def test_list_recent_watchlist_videos_filters_by_objective_recency(
     monkeypatch,
     tmp_path,
 ) -> None:
-    """Return and clear new rows only for the requested channel scope."""
+    """Return recent watched videos through an objective date window."""
     monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+    monkeypatch.setattr(
+        "youtube_toolkit.youtube.channels.cutoff_date_for_days",
+        lambda days: date(2026, 6, 29),
+    )
 
     with get_connection() as connection:
         upsert_watchlist_channel(
@@ -404,34 +409,25 @@ def test_watch_new_videos_consumes_only_scoped_channels(
         store_watchlist_channel_listing(connection, openai_listing())
         store_watchlist_channel_listing(connection, anthropic_listing())
 
-    videos = watch_new_videos(channel_refs="@OpenAI")
+    videos = list_recent_watchlist_videos(
+        channel_refs="@OpenAI",
+        days=3,
+    )
 
     assert [video["video_id"] for video in videos] == ["video-openai"]
     assert videos[0]["transcript_status"] == "missing"
-
-    with get_connection() as connection:
-        remaining = consume_new_watchlist_videos(
-            connection,
-            channel_identities=[
-                ChannelIdentity(
-                    youtube_channel_id=None,
-                    channel_handle="@Anthropic",
-                )
-            ],
-        )
-
-    assert [video["video_id"] for video in remaining] == ["video-anthropic"]
+    assert "transcript" not in videos[0]
 
 
-def test_watch_new_videos_requires_explicit_scope(
+def test_list_recent_watchlist_videos_rejects_non_positive_days(
     monkeypatch,
     tmp_path,
 ) -> None:
-    """Reject ambiguous consumes that could clear the wrong queue."""
+    """Reject non-positive objective recency windows."""
     monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
 
-    with pytest.raises(ValueError, match="include_all"):
-        watch_new_videos()
+    with pytest.raises(ValueError, match="--days"):
+        list_recent_watchlist_videos(days=0)
 
 
 def test_unlimited_days_window_uses_bounded_first_fetch() -> None:

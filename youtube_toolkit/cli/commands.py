@@ -26,11 +26,11 @@ from ..youtube.channels import (
     add_blacklist_channels,
     add_watchlist_channels,
     fetch_channel_videos,
+    list_recent_watchlist_videos,
     list_watchlist_channels,
     remove_blacklist_channels,
     remove_watchlist_channels,
     sync_watchlist,
-    watch_new_videos,
 )
 from ..youtube.search import SearchOptions, search_videos
 
@@ -79,10 +79,10 @@ class WatchlistCommands:
         return scheduled_sync_watchlist(options=channel_options(args))
 
     @staticmethod
-    def new(args: argparse.Namespace) -> list[dict[str, Any]]:
-        return watch_new_videos(
+    def recent(args: argparse.Namespace) -> list[dict[str, Any]]:
+        return list_recent_watchlist_videos(
             channel_refs=args.channel_refs,
-            include_all=args.all,
+            days=args.days,
         )
 
     @staticmethod
