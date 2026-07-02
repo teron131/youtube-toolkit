@@ -132,6 +132,98 @@ def test_add_watchlist_channels_accepts_single_and_list_channel_refs(
     assert list_watchlist_channels() == ["@Anthropic", "@OpenAI"]
 
 
+def test_watchlist_membership_stores_youtube_channel_id(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Watchlist membership uses the public YouTube channel ID as its key."""
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        channel_id = upsert_watchlist_channel(
+            connection,
+            ChannelIdentity(
+                youtube_channel_id="UC123",
+                channel_handle="@OpenAI",
+            ),
+        )
+        membership_row = connection.execute(
+            """
+            SELECT channel_id
+            FROM channels_watchlist
+            """
+        ).fetchone()
+        columns = [row["name"] for row in connection.execute("PRAGMA table_info(channels_watchlist)")]
+
+    assert channel_id == "UC123"
+    assert membership_row is not None
+    assert membership_row["channel_id"] == "UC123"
+    assert columns == ["channel_id"]
+
+
+def test_channel_merge_keeps_one_real_watchlist_channel_id(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Merging channel identities keeps membership on the final YouTube ID."""
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        upsert_watchlist_channel(
+            connection,
+            ChannelIdentity(
+                youtube_channel_id="UC123",
+                channel_handle=None,
+            ),
+        )
+        upsert_watchlist_channel(
+            connection,
+            ChannelIdentity(
+                youtube_channel_id="UCOLD",
+                channel_handle="@OpenAI",
+            ),
+        )
+        store_watchlist_channel_listing(
+            connection,
+            {
+                "channel_id": "UCOLD",
+                "channel_handle": "@OpenAI",
+                "entries": [
+                    {
+                        "id": "old-video",
+                    }
+                ],
+            },
+        )
+
+        store_channel_listing(connection, openai_listing())
+
+        channel_ids = [
+            row["channel_id"]
+            for row in connection.execute(
+                """
+                SELECT channel_id
+                FROM channels_watchlist
+                ORDER BY channel_id
+                """
+            ).fetchall()
+        ]
+        video_rows = connection.execute(
+            """
+            SELECT youtube_video_id, channel_id
+            FROM videos
+            ORDER BY youtube_video_id
+            """
+        ).fetchall()
+
+    assert channel_ids == ["UC123"]
+    assert list_watchlist_channels() == ["@OpenAI"]
+    assert [(row["youtube_video_id"], row["channel_id"]) for row in video_rows] == [
+        ("old-video", "UC123"),
+        ("video-openai", "UC123"),
+    ]
+
+
 def test_add_watchlist_channels_fetches_refs_concurrently(
     monkeypatch,
     tmp_path,
@@ -190,9 +282,9 @@ def test_remove_watchlist_channel_deletes_membership_only(
     with get_connection() as connection:
         channel_row = connection.execute(
             """
-            SELECT id
+            SELECT youtube_channel_id
             FROM channels
-            WHERE id = ?
+            WHERE youtube_channel_id = ?
             """,
             (channel_id,),
         ).fetchone()
@@ -308,9 +400,9 @@ def test_remove_blacklist_channel_deletes_membership_only(
     with get_connection() as connection:
         channel_row = connection.execute(
             """
-            SELECT id
+            SELECT youtube_channel_id
             FROM channels
-            WHERE id = ?
+            WHERE youtube_channel_id = ?
             """,
             (channel_id,),
         ).fetchone()
@@ -318,6 +410,35 @@ def test_remove_blacklist_channel_deletes_membership_only(
 
     assert channel_row is not None
     assert blacklisted_channels == []
+
+
+def test_blacklist_membership_stores_youtube_channel_id(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Blacklist membership uses the public YouTube channel ID as its key."""
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        channel_id = upsert_blacklist_channel(
+            connection,
+            ChannelIdentity(
+                youtube_channel_id="UC123",
+                channel_handle="@OpenAI",
+            ),
+        )
+        membership_row = connection.execute(
+            """
+            SELECT channel_id
+            FROM channels_blacklist
+            """
+        ).fetchone()
+        columns = [row["name"] for row in connection.execute("PRAGMA table_info(channels_blacklist)")]
+
+    assert channel_id == "UC123"
+    assert membership_row is not None
+    assert membership_row["channel_id"] == "UC123"
+    assert columns == ["channel_id"]
 
 
 def test_remove_missing_channel_reports_no_membership(
@@ -356,7 +477,7 @@ def test_store_watchlist_channel_listing_records_only_new_video_ids(
         rows = connection.execute("SELECT video_id FROM watchlist_videos").fetchall()
 
     assert len(rows) == 1
-    assert rows[0]["video_id"] > 0
+    assert rows[0]["video_id"] == "video-openai"
 
 
 def test_store_watchlist_channel_listing_records_existing_catalog_video(
@@ -656,7 +777,6 @@ def openai_listing() -> dict:
                 "id": "video-openai",
                 "title": "OpenAI update",
                 "upload_date": "20260630",
-                "view_count": 1000,
             }
         ],
     }
@@ -671,7 +791,6 @@ def anthropic_listing() -> dict:
                 "id": "video-anthropic",
                 "title": "Anthropic update",
                 "upload_date": "20260629",
-                "view_count": 900,
             }
         ],
     }

@@ -36,7 +36,6 @@ def test_fetch_transcript_returns_stored_transcript_without_client(
                 "id": "JpSHyEIZ_bo",
                 "title": "Stored title",
                 "upload_date": "20260621",
-                "view_count": 123,
             },
             transcript="Stored transcript.",
         )

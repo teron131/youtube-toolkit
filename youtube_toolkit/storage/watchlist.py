@@ -15,18 +15,18 @@ from .videos import upsert_video
 def upsert_watchlist_channel(
     connection: turso.Connection,
     channel_identity: ChannelIdentity,
-) -> int | None:
-    channel_id = upsert_channel(connection, channel_identity)
-    if channel_id is None:
+) -> str | None:
+    youtube_channel_id = upsert_channel(connection, channel_identity)
+    if youtube_channel_id is None:
         return None
     connection.execute(
         """
         INSERT OR IGNORE INTO channels_watchlist (channel_id)
         VALUES (?)
         """,
-        (channel_id,),
+        (youtube_channel_id,),
     )
-    return channel_id
+    return youtube_channel_id
 
 
 def delete_watchlist_channel(
@@ -41,7 +41,9 @@ def delete_watchlist_channel(
     if not matching_rows:
         return False
 
-    channel_ids = [int(row["id"]) for row in matching_rows]
+    channel_ids = [row["youtube_channel_id"] for row in matching_rows if row["youtube_channel_id"] is not None]
+    if not channel_ids:
+        return False
     placeholders = ", ".join("?" for _ in channel_ids)
     membership_rows = connection.execute(
         f"""
@@ -65,7 +67,7 @@ def delete_watchlist_channel(
         f"""
         DELETE FROM watchlist_videos
         WHERE video_id IN (
-            SELECT id
+            SELECT youtube_video_id
             FROM videos
             WHERE channel_id IN ({placeholders})
         )
@@ -81,8 +83,8 @@ def store_watchlist_channel_listing(
 ) -> list[str]:
     """Store a watched channel listing and return newly discovered video IDs."""
     channel_identity = extract_channel_identity(metadata)
-    channel_id = upsert_channel(connection, channel_identity)
-    if channel_id is None or not is_watchlist_channel(connection, channel_id):
+    youtube_channel_id = upsert_channel(connection, channel_identity)
+    if youtube_channel_id is None or not is_watchlist_channel(connection, youtube_channel_id):
         return []
 
     new_video_ids: list[str] = []
@@ -95,14 +97,14 @@ def store_watchlist_channel_listing(
             entry,
             channel_identity=channel_identity,
         )
-        if stored_video is not None and record_watchlist_video(connection, int(stored_video["database_row_id"])):
+        if stored_video is not None and record_watchlist_video(connection, video_record.youtube_video_id):
             new_video_ids.append(video_record.youtube_video_id)
     return new_video_ids
 
 
 def is_watchlist_channel(
     connection: turso.Connection,
-    channel_id: int,
+    youtube_channel_id: str,
 ) -> bool:
     return (
         connection.execute(
@@ -111,7 +113,7 @@ def is_watchlist_channel(
             FROM channels_watchlist
             WHERE channel_id = ?
             """,
-            (channel_id,),
+            (youtube_channel_id,),
         ).fetchone()
         is not None
     )
@@ -119,7 +121,7 @@ def is_watchlist_channel(
 
 def record_watchlist_video(
     connection: turso.Connection,
-    video_row_id: int,
+    youtube_video_id: str,
 ) -> bool:
     existing_row = connection.execute(
         """
@@ -127,7 +129,7 @@ def record_watchlist_video(
         FROM watchlist_videos
         WHERE video_id = ?
         """,
-        (video_row_id,),
+        (youtube_video_id,),
     ).fetchone()
     if existing_row is not None:
         return False
@@ -136,7 +138,7 @@ def record_watchlist_video(
         INSERT OR IGNORE INTO watchlist_videos (video_id)
         VALUES (?)
         """,
-        (video_row_id,),
+        (youtube_video_id,),
     )
     return True
 
@@ -146,7 +148,7 @@ def list_watchlist_channel_refs(connection: turso.Connection) -> list[str]:
         """
         SELECT channels.youtube_channel_id, channels.channel_handle
         FROM channels_watchlist
-        JOIN channels ON channels.id = channels_watchlist.channel_id
+        JOIN channels ON channels.youtube_channel_id = channels_watchlist.channel_id
         ORDER BY COALESCE(channels.channel_handle, channels.youtube_channel_id)
         """
     ).fetchall()
@@ -158,9 +160,9 @@ def list_missing_watchlist_video_ids(connection: turso.Connection) -> list[str]:
         """
         SELECT videos.youtube_video_id
         FROM videos
-        JOIN watchlist_videos ON watchlist_videos.video_id = videos.id
+        JOIN watchlist_videos ON watchlist_videos.video_id = videos.youtube_video_id
         WHERE videos.transcript IS NULL OR videos.transcript = ''
-        ORDER BY videos.upload_date DESC, videos.id DESC
+        ORDER BY videos.upload_date DESC, videos.youtube_video_id DESC
         """
     ).fetchall()
     return [row["youtube_video_id"] for row in rows]
@@ -182,21 +184,19 @@ def list_recent_watchlist_video_payloads(
     rows = connection.execute(
         f"""
         SELECT
-            videos.id,
             videos.youtube_video_id,
+            videos.channel_id,
             videos.title,
             videos.upload_date,
-            videos.view_count,
             videos.transcript,
-            channels.youtube_channel_id,
             channels.channel_handle
         FROM channels_watchlist
-        JOIN channels ON channels.id = channels_watchlist.channel_id
-        JOIN videos ON videos.channel_id = channels.id
+        JOIN channels ON channels.youtube_channel_id = channels_watchlist.channel_id
+        JOIN videos ON videos.channel_id = channels.youtube_channel_id
         WHERE videos.upload_date IS NOT NULL
             AND videos.upload_date >= ?
             {channel_filter_sql}
-        ORDER BY videos.upload_date DESC, videos.id DESC
+        ORDER BY videos.upload_date DESC, videos.youtube_video_id DESC
         """,
         parameters,
     ).fetchall()

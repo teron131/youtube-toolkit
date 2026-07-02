@@ -177,7 +177,7 @@ def list_watchlist_channels() -> list[str]:
 def _add_channel_memberships(
     channel_refs: ChannelRefInput,
     *,
-    add_membership: Callable[[turso.Connection, ChannelIdentity], int | None],
+    add_membership: Callable[[turso.Connection, ChannelIdentity], str | None],
 ) -> list[str]:
     fetched_channels = _map_concurrently(
         list(YouTubeRefs.parse(channel_refs)),

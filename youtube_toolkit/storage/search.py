@@ -13,9 +13,9 @@ from .payloads import stored_video_payload
 from .semantic import embed_text_with_gemini, encode_vector
 
 EmbedText = Callable[[str], list[float]]
-SearchSort = Literal["views", "upload_date", "relevance"]
-SEARCH_SORTS = {"views", "upload_date", "relevance"}
-STORED_VIDEO_RESULT_COLUMNS = "videos.*, channels.youtube_channel_id, channels.channel_handle"
+SearchSort = Literal["upload_date", "relevance"]
+SEARCH_SORTS = {"upload_date", "relevance"}
+STORED_VIDEO_RESULT_COLUMNS = "videos.*, channels.channel_handle"
 
 
 def search_stored_videos(
@@ -27,16 +27,17 @@ def search_stored_videos(
     semantic: bool = False,
     embed_text: EmbedText | None = None,
     embedding_config: EmbeddingConfig | None = None,
-    sort: SearchSort = "views",
+    sort: SearchSort | None = None,
 ) -> list[dict[str, Any]]:
     normalized_query = query.strip()
     if not normalized_query:
         raise ValueError("search query must be non-empty")
     if limit <= 0:
         raise ValueError("search limit must be greater than 0")
-    if sort not in SEARCH_SORTS:
-        raise ValueError(f"unsupported search sort: {sort}")
-    if sort == "relevance" and not semantic:
+    resolved_sort = sort or ("relevance" if semantic else "upload_date")
+    if resolved_sort not in SEARCH_SORTS:
+        raise ValueError(f"unsupported search sort: {resolved_sort}")
+    if resolved_sort == "relevance" and not semantic:
         raise ValueError("relevance sort requires semantic=True")
 
     video_id = extract_video_id(normalized_query)
@@ -46,7 +47,6 @@ def search_stored_videos(
             video_id,
             limit=limit,
             require_transcript=require_transcript,
-            sort=sort,
         )
         return [stored_video_payload(row) for row in rows]
 
@@ -57,7 +57,6 @@ def search_stored_videos(
             normalized_query,
             limit=limit,
             require_transcript=require_transcript,
-            sort=sort,
         )
     ]
     if not semantic:
@@ -72,7 +71,7 @@ def search_stored_videos(
     )
     return rank_search_payloads(
         merge_search_payloads(keyword_payloads, semantic_payloads),
-        sort=sort,
+        sort=resolved_sort,
         limit=limit,
     )
 
@@ -91,7 +90,7 @@ def get_stored_video(
         f"""
         SELECT {STORED_VIDEO_RESULT_COLUMNS}
         FROM videos AS videos
-        LEFT JOIN channels AS channels ON channels.id = videos.channel_id
+        LEFT JOIN channels AS channels ON channels.youtube_channel_id = videos.channel_id
         WHERE videos.youtube_video_id = ?
             AND (
                 ? = 0
@@ -112,25 +111,23 @@ def search_video_rows_by_id(
     *,
     limit: int,
     require_transcript: bool,
-    sort: SearchSort,
 ) -> list[turso.Row]:
     return connection.execute(
         f"""
         SELECT {STORED_VIDEO_RESULT_COLUMNS}
         FROM videos AS videos
-        LEFT JOIN channels AS channels ON channels.id = videos.channel_id
+        LEFT JOIN channels AS channels ON channels.youtube_channel_id = videos.channel_id
         WHERE videos.youtube_video_id = ?
             AND (
                 ? = 0
                 OR (videos.transcript IS NOT NULL AND videos.transcript != '')
             )
         ORDER BY
-            CASE WHEN ? = 'views' THEN videos.view_count END DESC,
             videos.upload_date DESC,
-            videos.id DESC
+            videos.youtube_video_id DESC
         LIMIT ?
         """,
-        (youtube_video_id, int(require_transcript), sort, limit),
+        (youtube_video_id, int(require_transcript), limit),
     ).fetchall()
 
 
@@ -140,21 +137,19 @@ def search_video_rows_by_keyword(
     *,
     limit: int,
     require_transcript: bool,
-    sort: SearchSort,
 ) -> list[turso.Row]:
     like_pattern = f"%{escape_like(keyword)}%"
     return connection.execute(
         f"""
         SELECT {STORED_VIDEO_RESULT_COLUMNS}
         FROM videos AS videos
-        LEFT JOIN channels AS channels ON channels.id = videos.channel_id
+        LEFT JOIN channels AS channels ON channels.youtube_channel_id = videos.channel_id
         WHERE (
             videos.youtube_video_id LIKE ? ESCAPE '\\'
             OR COALESCE(videos.title, '') LIKE ? ESCAPE '\\'
             OR COALESCE(videos.upload_date, '') LIKE ? ESCAPE '\\'
-            OR CAST(COALESCE(videos.view_count, '') AS TEXT) LIKE ? ESCAPE '\\'
             OR COALESCE(videos.transcript, '') LIKE ? ESCAPE '\\'
-            OR COALESCE(channels.youtube_channel_id, '') LIKE ? ESCAPE '\\'
+            OR COALESCE(videos.channel_id, '') LIKE ? ESCAPE '\\'
             OR COALESCE(channels.channel_handle, '') LIKE ? ESCAPE '\\'
         )
             AND (
@@ -162,9 +157,8 @@ def search_video_rows_by_keyword(
                 OR (videos.transcript IS NOT NULL AND videos.transcript != '')
             )
         ORDER BY
-            CASE WHEN ? = 'views' THEN videos.view_count END DESC,
             videos.upload_date DESC,
-            videos.id DESC
+            videos.youtube_video_id DESC
         LIMIT ?
         """,
         (
@@ -174,9 +168,7 @@ def search_video_rows_by_keyword(
             like_pattern,
             like_pattern,
             like_pattern,
-            like_pattern,
             int(require_transcript),
-            sort,
             limit,
         ),
     ).fetchall()
@@ -245,7 +237,7 @@ def list_semantic_video_rows(
             {STORED_VIDEO_RESULT_COLUMNS},
             1.0 - vector_distance_cos(videos.embedding, vector32(?)) AS semantic_score
         FROM videos AS videos
-        LEFT JOIN channels AS channels ON channels.id = videos.channel_id
+        LEFT JOIN channels AS channels ON channels.youtube_channel_id = videos.channel_id
         WHERE videos.embedding IS NOT NULL
             AND (
                 ? = 0
@@ -286,22 +278,12 @@ def rank_search_payloads(
     sort: SearchSort,
     limit: int,
 ) -> list[dict[str, Any]]:
-    if sort == "views":
-        sorted_payloads = sorted(
-            payloads,
-            key=lambda payload: (
-                payload["view_count"] if isinstance(payload["view_count"], int) else -1,
-                payload["upload_date"] or "",
-                payload["database_row_id"],
-            ),
-            reverse=True,
-        )
-    elif sort == "upload_date":
+    if sort == "upload_date":
         sorted_payloads = sorted(
             payloads,
             key=lambda payload: (
                 payload["upload_date"] or "",
-                payload["database_row_id"],
+                payload["video_id"],
             ),
             reverse=True,
         )
@@ -310,8 +292,7 @@ def rank_search_payloads(
             payloads,
             key=lambda payload: (
                 payload.get("semantic_score", float("-inf")),
-                payload["view_count"] if isinstance(payload["view_count"], int) else -1,
-                payload["database_row_id"],
+                payload["video_id"],
             ),
             reverse=True,
         )

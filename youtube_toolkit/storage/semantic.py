@@ -30,7 +30,6 @@ def index_video_embedding(
     row = connection.execute(
         """
         SELECT
-            id,
             youtube_video_id,
             title,
             upload_date,
@@ -75,12 +74,12 @@ def index_video_embedding(
         UPDATE videos
         SET embedding_content_hash = ?,
             embedding = vector32(?)
-        WHERE id = ?
+        WHERE youtube_video_id = ?
         """,
         (
             content_hash,
             encode_vector(embedding),
-            row["id"],
+            row["youtube_video_id"],
         ),
     )
     return embedding_index_payload(row, content_hash, embedding)
@@ -93,7 +92,6 @@ def embedding_index_payload(
 ) -> dict[str, Any]:
     return {
         "video_id": row["youtube_video_id"],
-        "database_row_id": int(row["id"]),
         "content_hash": content_hash,
         "dimensions": len(embedding),
     }

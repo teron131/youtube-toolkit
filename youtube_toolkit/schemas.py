@@ -90,7 +90,6 @@ class VideoRecord:
     youtube_video_id: str
     title: str | None
     upload_date: str | None
-    view_count: int | None
     transcript: str | None
 
 
@@ -148,7 +147,6 @@ def extract_video_record(
         youtube_video_id=youtube_video_id,
         title=normalize_title(metadata.get("title")),
         upload_date=normalize_upload_date(metadata.get("upload_date")),
-        view_count=normalize_view_count(metadata.get("view_count")),
         transcript=transcript,
     )
 
