@@ -26,10 +26,8 @@ def test_store_audio_transcript_stores_transcript_and_returns_json_payload(
 
     assert payload == {
         "video_id": "JpSHyEIZ_bo",
-        "database_row_id": 1,
         "title": None,
         "upload_date": None,
-        "view_count": None,
         "channel_id": None,
         "channel_handle": None,
         "transcript": "數據庫",

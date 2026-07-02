@@ -25,21 +25,21 @@ def upsert_video(
     resolved_channel = channel_identity
     if resolved_channel is None or not resolved_channel.has_identity():
         resolved_channel = extract_channel_identity(metadata)
-    channel_id = upsert_channel(connection, resolved_channel)
+    youtube_channel_id = upsert_channel(connection, resolved_channel)
     existing_row = find_video_row(connection, video_record.youtube_video_id)
     if existing_row is None:
-        row_id = insert_video(connection, video_record, channel_id)
-        return find_video_payload(connection, row_id)
+        insert_video(connection, video_record, youtube_channel_id)
+        return find_video_payload(connection, video_record.youtube_video_id)
 
-    update_video(connection, existing_row, video_record, channel_id)
-    return find_video_payload(connection, int(existing_row["id"]))
+    update_video(connection, existing_row, video_record, youtube_channel_id)
+    return find_video_payload(connection, video_record.youtube_video_id)
 
 
 def upsert_video_summary(
     connection: turso.Connection,
     youtube_video_id: str,
     summary: str,
-) -> int | None:
+) -> str | None:
     row = find_video_row(connection, youtube_video_id)
     if row is None:
         return None
@@ -52,14 +52,14 @@ def upsert_video_summary(
         """
         UPDATE videos
         SET summary = ?
-        WHERE id = ?
+        WHERE youtube_video_id = ?
         """,
         (
             clean_summary,
-            row["id"],
+            youtube_video_id,
         ),
     )
-    return int(row["id"])
+    return youtube_video_id
 
 
 def find_video_row(
@@ -68,7 +68,7 @@ def find_video_row(
 ) -> turso.Row | None:
     return connection.execute(
         """
-        SELECT id, channel_id, title, upload_date, view_count, transcript, summary
+        SELECT youtube_video_id, channel_id, title, upload_date, transcript, summary
         FROM videos
         WHERE youtube_video_id = ?
         """,
@@ -79,53 +79,48 @@ def find_video_row(
 def insert_video(
     connection: turso.Connection,
     video_record: VideoRecord,
-    channel_id: int | None,
-) -> int:
-    cursor = connection.execute(
+    youtube_channel_id: str | None,
+) -> None:
+    connection.execute(
         """
         INSERT INTO videos (
             youtube_video_id,
             channel_id,
             title,
             upload_date,
-            view_count,
             transcript
         )
-        VALUES (?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?)
         """,
         (
             video_record.youtube_video_id,
-            channel_id,
+            youtube_channel_id,
             video_record.title,
             video_record.upload_date,
-            video_record.view_count,
             video_record.transcript,
         ),
     )
-    return int(cursor.lastrowid)
 
 
 def find_video_payload(
     connection: turso.Connection,
-    video_row_id: int,
+    youtube_video_id: str,
 ) -> dict[str, Any] | None:
     """Return the caller-facing stored values for a video row."""
     row = connection.execute(
         """
         SELECT
-            videos.id,
             videos.youtube_video_id,
+            videos.channel_id,
             videos.title,
             videos.upload_date,
-            videos.view_count,
             videos.transcript,
-            channels.youtube_channel_id,
             channels.channel_handle
         FROM videos AS videos
-        LEFT JOIN channels AS channels ON channels.id = videos.channel_id
-        WHERE videos.id = ?
+        LEFT JOIN channels AS channels ON channels.youtube_channel_id = videos.channel_id
+        WHERE videos.youtube_video_id = ?
         """,
-        (video_row_id,),
+        (youtube_video_id,),
     ).fetchone()
     if row is None:
         return None
@@ -136,12 +131,11 @@ def update_video(
     connection: turso.Connection,
     existing_row: turso.Row,
     video_record: VideoRecord,
-    channel_id: int | None,
+    youtube_channel_id: str | None,
 ) -> None:
-    next_channel_id = keep_existing_if_missing(channel_id, existing_row["channel_id"])
+    next_channel_id = keep_existing_if_missing(youtube_channel_id, existing_row["channel_id"])
     next_title = keep_existing_if_missing(video_record.title, existing_row["title"])
     next_upload_date = keep_existing_if_missing(video_record.upload_date, existing_row["upload_date"])
-    next_view_count = keep_existing_if_missing(video_record.view_count, existing_row["view_count"])
     next_transcript = keep_existing_if_missing(video_record.transcript, existing_row["transcript"])
     connection.execute(
         """
@@ -149,17 +143,15 @@ def update_video(
         SET channel_id = ?,
             title = ?,
             upload_date = ?,
-            view_count = ?,
             transcript = ?
-        WHERE id = ?
+        WHERE youtube_video_id = ?
         """,
         (
             next_channel_id,
             next_title,
             next_upload_date,
-            next_view_count,
             next_transcript,
-            existing_row["id"],
+            existing_row["youtube_video_id"],
         ),
     )
     if video_embedding_source_changed(
@@ -168,9 +160,9 @@ def update_video(
         upload_date=next_upload_date,
         transcript=next_transcript,
     ):
-        clear_video_embedding(connection, int(existing_row["id"]))
+        clear_video_embedding(connection, existing_row["youtube_video_id"])
     if next_transcript != existing_row["transcript"]:
-        clear_video_summary(connection, int(existing_row["id"]))
+        clear_video_summary(connection, existing_row["youtube_video_id"])
 
 
 def keep_existing_if_missing[StoredValue](
@@ -202,7 +194,7 @@ def video_embedding_source_changed(
 
 def clear_video_embedding(
     connection: turso.Connection,
-    video_row_id: int,
+    youtube_video_id: str,
 ) -> None:
     """Clear cached embedding data for a stored video."""
     connection.execute(
@@ -210,24 +202,24 @@ def clear_video_embedding(
         UPDATE videos
         SET embedding_content_hash = NULL,
             embedding = NULL
-        WHERE id = ?
+        WHERE youtube_video_id = ?
         """,
-        (video_row_id,),
+        (youtube_video_id,),
     )
 
 
 def clear_video_summary(
     connection: turso.Connection,
-    video_row_id: int,
+    youtube_video_id: str,
 ) -> None:
     """Clear cached summary data for a stored video."""
     connection.execute(
         """
         UPDATE videos
         SET summary = NULL
-        WHERE id = ?
+        WHERE youtube_video_id = ?
         """,
-        (video_row_id,),
+        (youtube_video_id,),
     )
 
 

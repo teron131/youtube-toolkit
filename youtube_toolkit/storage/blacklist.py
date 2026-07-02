@@ -11,18 +11,18 @@ from .channels import find_matching_channel_rows, upsert_channel
 def upsert_blacklist_channel(
     connection: turso.Connection,
     channel_identity: ChannelIdentity,
-) -> int | None:
-    channel_id = upsert_channel(connection, channel_identity)
-    if channel_id is None:
+) -> str | None:
+    youtube_channel_id = upsert_channel(connection, channel_identity)
+    if youtube_channel_id is None:
         return None
     connection.execute(
         """
         INSERT OR IGNORE INTO channels_blacklist (channel_id)
         VALUES (?)
         """,
-        (channel_id,),
+        (youtube_channel_id,),
     )
-    return channel_id
+    return youtube_channel_id
 
 
 def delete_blacklist_channel(
@@ -37,7 +37,9 @@ def delete_blacklist_channel(
     if not matching_rows:
         return False
 
-    channel_ids = [int(row["id"]) for row in matching_rows]
+    channel_ids = [row["youtube_channel_id"] for row in matching_rows if row["youtube_channel_id"] is not None]
+    if not channel_ids:
+        return False
     placeholders = ", ".join("?" for _ in channel_ids)
     membership_rows = connection.execute(
         f"""
@@ -65,7 +67,7 @@ def list_blacklist_channel_identities(connection: turso.Connection) -> list[Chan
         """
         SELECT channels.youtube_channel_id, channels.channel_handle
         FROM channels_blacklist
-        JOIN channels ON channels.id = channels_blacklist.channel_id
+        JOIN channels ON channels.youtube_channel_id = channels_blacklist.channel_id
         ORDER BY COALESCE(channels.channel_handle, channels.youtube_channel_id)
         """
     ).fetchall()
