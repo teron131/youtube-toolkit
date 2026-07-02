@@ -18,10 +18,10 @@ YouTube URL -> metadata + timed transcript chunks + chapters -> durable state ->
 
 The toolkit intentionally ships a small working surface:
 
-- `youtube transcript <url-or-id>` fetches and stores a transcript, then prints JSON
-- `youtube search "<query>"` searches videos with local metadata filters
-- `youtube inspect <url-or-id>` prints metadata JSON
-- `youtube channel-videos <channel>` lists recent uploads for one channel
+- `youtube search "<query>"` queries YouTube through `yt-dlp`, then applies local filters and blacklist rules
+- `youtube video transcript <url-or-id>` fetches and stores a transcript, then prints JSON
+- `youtube video metadata <url-or-id>` prints metadata JSON
+- `youtube channel videos <channel>` lists recent videos for one channel
 - `youtube watchlist add <channel...>`, `youtube watchlist list`, `youtube watchlist remove <channel...>`, and `youtube watchlist sync` persist channel workflows
 - `youtube watchlist new --channel <channel>` accepts repeated `--channel` flags; `youtube watchlist new --all` returns all new watched videos
 - `youtube watchlist schedule install|status|uninstall` manages its macOS LaunchAgent
@@ -48,10 +48,10 @@ For `<channel...>` arguments, pass separate shell words: `@OpenAI @Anthropic UC1
 ## Examples
 
 ```bash
-youtube transcript JpSHyEIZ_bo
 youtube search "langgraph tutorial" --limit 5 --max-duration 20:00
-youtube inspect https://www.youtube.com/watch?v=JpSHyEIZ_bo
-youtube channel-videos @OpenAI --last 5
+youtube video transcript JpSHyEIZ_bo
+youtube video metadata https://www.youtube.com/watch?v=JpSHyEIZ_bo
+youtube channel videos @OpenAI --last 5
 youtube watchlist add @OpenAI @Anthropic
 youtube watchlist list
 youtube watchlist schedule install

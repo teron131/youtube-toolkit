@@ -43,11 +43,25 @@ def test_main_emits_command_payload_as_json(
     assert payload["database"] == str(storage_home / "youtube.sqlite3")
 
 
-@pytest.mark.parametrize("command", ["audio", "transcribe-audio"])
-def test_audio_stt_commands_stay_internal(command: str) -> None:
-    """STT implementation steps are not public CLI commands."""
+@pytest.mark.parametrize("command", ["audio", "transcribe-audio", "inspect", "transcript", "channel-videos"])
+def test_removed_or_internal_commands_are_not_public(command: str) -> None:
+    """Internal or renamed commands are not public CLI commands."""
     with pytest.raises(SystemExit):
         build_parser().parse_args([command, "JpSHyEIZ_bo"])
+
+
+def test_video_and_channel_command_groups_parse_public_actions() -> None:
+    metadata_args = build_parser().parse_args(["video", "metadata", "JpSHyEIZ_bo"])
+    transcript_args = build_parser().parse_args(["video", "transcript", "JpSHyEIZ_bo"])
+    channel_args = build_parser().parse_args(["channel", "videos", "@OpenAI", "--last", "5"])
+    search_args = build_parser().parse_args(["search", "langgraph tutorial"])
+
+    assert metadata_args.video_command == "metadata"
+    assert transcript_args.video_command == "transcript"
+    assert channel_args.channel_command == "videos"
+    assert channel_args.channel_ref == "@OpenAI"
+    assert channel_args.last == 5
+    assert search_args.command == "search"
 
 
 def test_scheduler_job_command_is_hidden_from_watchlist_help(capsys) -> None:
@@ -105,7 +119,7 @@ def test_watchlist_list_returns_stored_channel_refs(
             ),
         )
 
-    payload = commands.run_watchlist_list(argparse.Namespace())
+    payload = commands.WatchlistCommands.list(argparse.Namespace())
 
     assert payload == ["@OpenAI"]
 

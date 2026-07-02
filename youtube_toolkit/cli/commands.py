@@ -40,12 +40,80 @@ class DoctorResult(TypedDict):
     database: str
 
 
-def run_transcript(args: argparse.Namespace) -> dict[str, Any]:
-    return asdict(fetch_transcript(args.video_ref))
+class VideoCommands:
+    @staticmethod
+    def transcript(args: argparse.Namespace) -> dict[str, Any]:
+        return asdict(fetch_transcript(args.video_ref))
+
+    @staticmethod
+    def metadata(args: argparse.Namespace) -> dict[str, Any]:
+        return YtDlpClient().metadata(args.video_ref)
 
 
-def run_inspect(args: argparse.Namespace) -> dict[str, Any]:
-    return YtDlpClient().metadata(args.video_ref)
+class ChannelCommands:
+    @staticmethod
+    def videos(args: argparse.Namespace) -> dict[str, Any]:
+        return fetch_channel_videos(args.channel_ref, options=channel_options(args))
+
+
+class WatchlistCommands:
+    @staticmethod
+    def add(args: argparse.Namespace) -> list[str]:
+        return add_watchlist_channels(args.channel_refs)
+
+    @staticmethod
+    def list(args: argparse.Namespace) -> list[str]:
+        del args
+        return list_watchlist_channels()
+
+    @staticmethod
+    def remove(args: argparse.Namespace) -> list[ChannelRemovalResult]:
+        return remove_watchlist_channels(args.channel_refs)
+
+    @staticmethod
+    def sync(args: argparse.Namespace) -> WatchlistSyncResult:
+        return sync_watchlist(options=channel_options(args))
+
+    @staticmethod
+    def scheduled_sync(args: argparse.Namespace) -> ScheduledSyncResult:
+        return scheduled_sync_watchlist(options=channel_options(args))
+
+    @staticmethod
+    def new(args: argparse.Namespace) -> list[dict[str, Any]]:
+        return watch_new_videos(
+            channel_refs=args.channel_refs,
+            include_all=args.all,
+        )
+
+    @staticmethod
+    def install_schedule(args: argparse.Namespace) -> WatchlistScheduleInstallResult:
+        return install_watchlist_schedule(
+            options=WatchlistScheduleOptions(
+                minutes=args.minutes,
+                last=args.last,
+                days=args.days,
+                label=args.label,
+                load=not args.no_load,
+            )
+        )
+
+    @staticmethod
+    def schedule_status(args: argparse.Namespace) -> WatchlistScheduleStatusResult:
+        return watchlist_schedule_status(label=args.label)
+
+    @staticmethod
+    def uninstall_schedule(args: argparse.Namespace) -> WatchlistScheduleUninstallResult:
+        return uninstall_watchlist_schedule(label=args.label)
+
+
+class BlacklistCommands:
+    @staticmethod
+    def add(args: argparse.Namespace) -> list[str]:
+        return add_blacklist_channels(args.channel_refs)
+
+    @staticmethod
+    def remove(args: argparse.Namespace) -> list[ChannelRemovalResult]:
+        return remove_blacklist_channels(args.channel_refs)
 
 
 def run_search(args: argparse.Namespace) -> list[dict[str, Any]]:
@@ -65,66 +133,8 @@ def run_search(args: argparse.Namespace) -> list[dict[str, Any]]:
     )
 
 
-def run_channel_videos(args: argparse.Namespace) -> dict[str, Any]:
-    return fetch_channel_videos(args.channel_ref, options=channel_options(args))
-
-
-def run_watchlist_add(args: argparse.Namespace) -> list[str]:
-    return add_watchlist_channels(args.channel_refs)
-
-
-def run_watchlist_list(_args: argparse.Namespace) -> list[str]:
-    return list_watchlist_channels()
-
-
-def run_watchlist_remove(args: argparse.Namespace) -> list[ChannelRemovalResult]:
-    return remove_watchlist_channels(args.channel_refs)
-
-
-def run_watchlist_sync(args: argparse.Namespace) -> WatchlistSyncResult:
-    return sync_watchlist(options=channel_options(args))
-
-
-def run_watchlist_scheduled_sync(args: argparse.Namespace) -> ScheduledSyncResult:
-    return scheduled_sync_watchlist(options=channel_options(args))
-
-
-def run_watchlist_new(args: argparse.Namespace) -> list[dict[str, Any]]:
-    return watch_new_videos(
-        channel_refs=args.channel_refs,
-        include_all=args.all,
-    )
-
-
-def run_watchlist_schedule_install(args: argparse.Namespace) -> WatchlistScheduleInstallResult:
-    return install_watchlist_schedule(
-        options=WatchlistScheduleOptions(
-            minutes=args.minutes,
-            last=args.last,
-            days=args.days,
-            label=args.label,
-            load=not args.no_load,
-        )
-    )
-
-
-def run_watchlist_schedule_status(args: argparse.Namespace) -> WatchlistScheduleStatusResult:
-    return watchlist_schedule_status(label=args.label)
-
-
-def run_watchlist_schedule_uninstall(args: argparse.Namespace) -> WatchlistScheduleUninstallResult:
-    return uninstall_watchlist_schedule(label=args.label)
-
-
-def run_blacklist_add(args: argparse.Namespace) -> list[str]:
-    return add_blacklist_channels(args.channel_refs)
-
-
-def run_blacklist_remove(args: argparse.Namespace) -> list[ChannelRemovalResult]:
-    return remove_blacklist_channels(args.channel_refs)
-
-
-def run_doctor(_args: argparse.Namespace) -> DoctorResult:
+def run_doctor(args: argparse.Namespace) -> DoctorResult:
+    del args
     import yt_dlp
 
     return {
