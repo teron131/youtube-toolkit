@@ -13,8 +13,9 @@ import plistlib
 import platform
 import subprocess
 import sys
-from typing import Any
+from typing import Any, Literal, NotRequired, TypedDict
 
+from .schemas import WatchlistSyncResult
 from .storage import resolve_storage_dir
 from .youtube.channels import ChannelOptions, sync_watchlist
 
@@ -37,10 +38,37 @@ class WatchlistScheduleOptions:
     load: bool = True
 
 
+class WatchlistScheduleInstallResult(TypedDict):
+    label: str
+    plist_path: str
+    loaded: bool
+    load_error: NotRequired[str]
+
+
+class WatchlistScheduleUninstallResult(TypedDict):
+    label: str
+    plist_path: str
+    removed: bool
+    unloaded: bool
+
+
+class WatchlistScheduleStatusResult(TypedDict):
+    label: str
+    plist_path: str
+    installed: bool
+    loaded: bool
+
+
+class ScheduledSyncResult(TypedDict):
+    status: Literal["skipped", "synced"]
+    reason: NotRequired[str]
+    sync: NotRequired[WatchlistSyncResult]
+
+
 def install_watchlist_schedule(
     *,
     options: WatchlistScheduleOptions | None = None,
-) -> dict[str, Any]:
+) -> WatchlistScheduleInstallResult:
     """Write the LaunchAgent plist and optionally load it into the current GUI session."""
     ensure_launchd_supported()
     options = options or WatchlistScheduleOptions()
@@ -61,20 +89,20 @@ def install_watchlist_schedule(
         if not loaded:
             load_error = load_result.stderr.strip() or load_result.stdout.strip() or "launchctl bootstrap failed"
 
-    return {
+    result: WatchlistScheduleInstallResult = {
         "label": options.label,
         "plist_path": str(plist_path),
-        "storage_home": str(resolve_storage_dir()),
         "loaded": loaded,
-        "load_error": load_error,
-        "program_arguments": plist_payload["ProgramArguments"],
     }
+    if load_error is not None:
+        result["load_error"] = load_error
+    return result
 
 
 def uninstall_watchlist_schedule(
     *,
     label: str = DEFAULT_WATCHLIST_SCHEDULE_LABEL,
-) -> dict[str, Any]:
+) -> WatchlistScheduleUninstallResult:
     """Unload and remove the LaunchAgent plist if it exists."""
     ensure_launchd_supported()
     plist_path = launch_agent_path(label)
@@ -93,7 +121,7 @@ def uninstall_watchlist_schedule(
 def watchlist_schedule_status(
     *,
     label: str = DEFAULT_WATCHLIST_SCHEDULE_LABEL,
-) -> dict[str, Any]:
+) -> WatchlistScheduleStatusResult:
     """Return file and launchd load status for the watchlist LaunchAgent."""
     ensure_launchd_supported()
     plist_path = launch_agent_path(label)
@@ -109,7 +137,7 @@ def watchlist_schedule_status(
 def scheduled_sync_watchlist(
     *,
     options: ChannelOptions,
-) -> dict[str, Any]:
+) -> ScheduledSyncResult:
     """Run the scheduler entrypoint once, skipping cleanly when another run holds the lock."""
     storage_dir = resolve_storage_dir()
     storage_dir.mkdir(parents=True, exist_ok=True)
