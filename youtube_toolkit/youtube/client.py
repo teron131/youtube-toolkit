@@ -68,18 +68,27 @@ class YtDlpClient:
         self,
         channel_url: str,
         *,
-        last: int,
+        last: int | None,
+        flat: bool = True,
     ) -> dict[str, Any]:
+        command = [
+            *self.command_prefix(),
+            "--quiet",
+            "--no-warnings",
+            "--dump-single-json",
+        ]
+        if flat:
+            command.append("--flat-playlist")
+        if last is not None:
+            command.extend(
+                [
+                    "--playlist-end",
+                    str(last),
+                ]
+            )
+        command.append(channel_url)
         return self._json(
-            [
-                *self.command_prefix(),
-                "--quiet",
-                "--no-warnings",
-                "--dump-single-json",
-                "--playlist-end",
-                str(last),
-                channel_url,
-            ],
+            command,
             error_message="yt-dlp channel query failed",
         )
 
@@ -113,9 +122,15 @@ class YtDlpClient:
         candidates = [path for path in output_stem.parent.glob(f"{output_stem.name}.*") if path.is_file()]
         new_candidates = [path for path in candidates if path.resolve() not in existing_paths]
         if new_candidates:
-            return max(new_candidates, key=lambda path: path.stat().st_mtime)
+            return max(
+                new_candidates,
+                key=lambda path: path.stat().st_mtime,
+            )
         if candidates:
-            return max(candidates, key=lambda path: path.stat().st_mtime)
+            return max(
+                candidates,
+                key=lambda path: path.stat().st_mtime,
+            )
         raise RuntimeError(f"yt-dlp completed but did not create {output_stem}.*")
 
     def _json(

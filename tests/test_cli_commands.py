@@ -8,6 +8,8 @@ import pytest
 from youtube_toolkit import cli
 from youtube_toolkit.cli import commands, main
 from youtube_toolkit.cli.parser import build_parser
+from youtube_toolkit.schemas import ChannelIdentity
+from youtube_toolkit.storage import get_connection, upsert_watchlist_channel
 
 
 def test_doctor_returns_runtime_and_database_path(
@@ -64,6 +66,7 @@ def test_scheduler_job_command_stays_parseable() -> None:
 
     assert args.watchlist_command == "scheduled-sync"
     assert args.last == 5
+    assert args.days == 3
 
 
 @pytest.mark.parametrize(
@@ -84,6 +87,27 @@ def test_channel_membership_commands_accept_multiple_refs(
 
     assert getattr(args, command_attr) == argv[1]
     assert args.channel_refs == ["@OpenAI", "UC123"]
+
+
+def test_watchlist_list_returns_stored_channel_refs(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """List reads local watchlist membership without fetching YouTube."""
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        upsert_watchlist_channel(
+            connection,
+            ChannelIdentity(
+                youtube_channel_id="UC123",
+                channel_handle="@OpenAI",
+            ),
+        )
+
+    payload = commands.run_watchlist_list(argparse.Namespace())
+
+    assert payload == ["@OpenAI"]
 
 
 def test_emit_json_truncates_long_text_fields(capsys, monkeypatch) -> None:

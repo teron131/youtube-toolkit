@@ -37,3 +37,28 @@ def test_download_transcription_audio_uses_default_cache_stem(
     )
     assert calls["command"][calls["command"].index("--format") + 1] == STT_AUDIO_FORMAT_SELECTOR
     assert calls["command"][calls["command"].index("--output") + 1] == (".cache/audio/JpSHyEIZ_bo.%(ext)s")
+
+
+def test_channel_videos_omits_playlist_end_when_unlimited(monkeypatch) -> None:
+    """Unlimited channel fetches should stay flat and avoid playlist caps."""
+    calls = {}
+
+    def fake_json(
+        self,
+        command,
+        *,
+        error_message,
+    ):
+        calls["command"] = command
+        calls["error_message"] = error_message
+        return {"entries": []}
+
+    monkeypatch.setattr(YtDlpClient, "_json", fake_json)
+
+    assert YtDlpClient().channel_videos(
+        "https://www.youtube.com/@OpenAI/videos",
+        last=None,
+    ) == {"entries": []}
+    assert "--flat-playlist" in calls["command"]
+    assert "--playlist-end" not in calls["command"]
+    assert calls["command"][-1] == "https://www.youtube.com/@OpenAI/videos"

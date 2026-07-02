@@ -19,6 +19,7 @@ from .commands import (
     run_search,
     run_transcript,
     run_watchlist_add,
+    run_watchlist_list,
     run_watchlist_new,
     run_watchlist_remove,
     run_watchlist_schedule_install,
@@ -82,11 +83,13 @@ def add_watchlist_parser(subparsers: argparse._SubParsersAction) -> None:
     watchlist_subparsers = watchlist_parser.add_subparsers(
         dest="watchlist_command",
         required=True,
-        metavar="{add,remove,sync,new,schedule}",
+        metavar="{add,list,remove,sync,new,schedule}",
     )
     watchlist_add_parser = watchlist_subparsers.add_parser("add", help="Add one or more channels to the watchlist")
     add_channel_refs_arg(watchlist_add_parser)
     watchlist_add_parser.set_defaults(handler=run_watchlist_add)
+    watchlist_list_parser = watchlist_subparsers.add_parser("list", help="List watched channels")
+    watchlist_list_parser.set_defaults(handler=run_watchlist_list)
     watchlist_remove_parser = watchlist_subparsers.add_parser("remove", help="Remove one or more channels from the watchlist")
     add_channel_refs_arg(watchlist_remove_parser)
     watchlist_remove_parser.set_defaults(handler=run_watchlist_remove)
@@ -94,7 +97,11 @@ def add_watchlist_parser(subparsers: argparse._SubParsersAction) -> None:
     add_channel_window_args(watchlist_sync_parser)
     watchlist_sync_parser.set_defaults(handler=run_watchlist_sync)
     watchlist_scheduled_parser = watchlist_subparsers.add_parser("scheduled-sync", help=argparse.SUPPRESS)
-    add_channel_window_args(watchlist_scheduled_parser)
+    add_channel_window_args(
+        watchlist_scheduled_parser,
+        default_last=DEFAULT_WATCHLIST_SCHEDULE_LAST,
+        default_days=DEFAULT_WATCHLIST_SCHEDULE_DAYS,
+    )
     watchlist_scheduled_parser.set_defaults(handler=run_watchlist_scheduled_sync)
     # argparse has no public API for hidden-but-parseable subcommands.
     watchlist_subparsers._choices_actions = [action for action in watchlist_subparsers._choices_actions if action.dest != "scheduled-sync"]
@@ -110,7 +117,7 @@ def add_watchlist_schedule_parser(subparsers: argparse._SubParsersAction) -> Non
     schedule_subparsers = schedule_parser.add_subparsers(dest="schedule_command", required=True)
     install_parser = schedule_subparsers.add_parser("install", help="Install and load the watchlist scheduled sync job")
     install_parser.add_argument("--minutes", type=int, default=DEFAULT_WATCHLIST_SCHEDULE_MINUTES, help="Run interval in minutes")
-    install_parser.add_argument("--last", type=int, default=DEFAULT_WATCHLIST_SCHEDULE_LAST, help="Fetch the latest N videos per watched channel")
+    install_parser.add_argument("--last", type=int, default=DEFAULT_WATCHLIST_SCHEDULE_LAST, help="Fetch the latest N videos per watched channel; omit for no limit")
     install_parser.add_argument("--days", type=int, default=DEFAULT_WATCHLIST_SCHEDULE_DAYS, help="Look back this many days")
     install_parser.add_argument("--label", default=DEFAULT_WATCHLIST_SCHEDULE_LABEL, help="LaunchAgent label")
     install_parser.add_argument("--no-load", action="store_true", help="Write the plist without loading it")
@@ -140,9 +147,14 @@ def add_doctor_parser(subparsers: argparse._SubParsersAction) -> None:
     doctor_parser.set_defaults(handler=run_doctor)
 
 
-def add_channel_window_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--last", type=int, default=10, help="Return the latest N videos")
-    parser.add_argument("--days", type=int, help="Return videos uploaded in the last N days")
+def add_channel_window_args(
+    parser: argparse.ArgumentParser,
+    *,
+    default_last: int | None = 10,
+    default_days: int | None = None,
+) -> None:
+    parser.add_argument("--last", type=int, default=default_last, help="Return the latest N videos")
+    parser.add_argument("--days", type=int, default=default_days, help="Return videos uploaded in the last N days")
 
 
 def add_channel_refs_arg(parser: argparse.ArgumentParser) -> None:

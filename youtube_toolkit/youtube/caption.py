@@ -183,7 +183,17 @@ def select_caption_track(
     languages: list[str],
     source: str,
 ) -> tuple[str, str, str]:
-    caption_sources = iter_caption_sources(metadata, source)
+    automatic = metadata.get("automatic_captions") or {}
+    manual = metadata.get("subtitles") or {}
+    if source == "auto":
+        caption_sources = [("automatic_captions", automatic)]
+    elif source == "manual":
+        caption_sources = [("subtitles", manual)]
+    elif source == "any":
+        caption_sources = [("automatic_captions", automatic), ("subtitles", manual)]
+    else:
+        raise ValueError("caption source must be auto, manual, or any")
+
     for language in languages:
         for source_name, caption_pool in caption_sources:
             tracks = caption_pool.get(language) or []
@@ -198,18 +208,6 @@ def select_caption_track(
     available_summary = ", ".join(available_languages) or "none"
     requested = ", ".join(languages)
     raise CaptionTranscriptUnavailable(f"No caption track found for requested languages [{requested}]. Available languages: {available_summary}")
-
-
-def iter_caption_sources(metadata: dict, source: str) -> list[tuple[str, dict]]:
-    automatic = metadata.get("automatic_captions") or {}
-    manual = metadata.get("subtitles") or {}
-    if source == "auto":
-        return [("automatic_captions", automatic)]
-    if source == "manual":
-        return [("subtitles", manual)]
-    if source == "any":
-        return [("automatic_captions", automatic), ("subtitles", manual)]
-    raise ValueError("caption source must be auto, manual, or any")
 
 
 def fetch_caption_payload(url: str) -> dict:
