@@ -11,52 +11,48 @@ from ..watchlist_schedule import (
     DEFAULT_WATCHLIST_SCHEDULE_MINUTES,
 )
 from .commands import (
-    run_blacklist_add,
-    run_blacklist_remove,
-    run_channel_videos,
+    BlacklistCommands,
+    ChannelCommands,
+    VideoCommands,
+    WatchlistCommands,
     run_doctor,
-    run_inspect,
     run_search,
-    run_transcript,
-    run_watchlist_add,
-    run_watchlist_list,
-    run_watchlist_new,
-    run_watchlist_remove,
-    run_watchlist_schedule_install,
-    run_watchlist_schedule_status,
-    run_watchlist_schedule_uninstall,
-    run_watchlist_scheduled_sync,
-    run_watchlist_sync,
 )
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="youtube", description="Transcript-first YouTube toolkit.")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    add_transcript_parser(subparsers)
-    add_inspect_parser(subparsers)
+    VideoCommandParser.add_to(subparsers)
     add_search_parser(subparsers)
-    add_channel_videos_parser(subparsers)
-    add_watchlist_parser(subparsers)
-    add_blacklist_parser(subparsers)
+    ChannelCommandParser.add_to(subparsers)
+    WatchlistCommandParser.add_to(subparsers)
+    BlacklistCommandParser.add_to(subparsers)
     add_doctor_parser(subparsers)
     return parser
 
 
-def add_transcript_parser(subparsers: argparse._SubParsersAction) -> None:
-    transcript_parser = subparsers.add_parser("transcript", help="Fetch a normalized transcript")
-    transcript_parser.add_argument("video_ref", help="YouTube video URL or ID")
-    transcript_parser.set_defaults(handler=run_transcript)
+class VideoCommandParser:
+    @staticmethod
+    def add_to(subparsers: argparse._SubParsersAction) -> None:
+        video_parser = subparsers.add_parser("video", help="Fetch video metadata or transcripts")
+        video_subparsers = video_parser.add_subparsers(
+            dest="video_command",
+            required=True,
+            metavar="{metadata,transcript}",
+        )
 
+        metadata_parser = video_subparsers.add_parser("metadata", help="Fetch video metadata JSON")
+        metadata_parser.add_argument("video_ref", help="YouTube video URL or ID")
+        metadata_parser.set_defaults(handler=VideoCommands.metadata)
 
-def add_inspect_parser(subparsers: argparse._SubParsersAction) -> None:
-    inspect_parser = subparsers.add_parser("inspect", help="Fetch video metadata JSON")
-    inspect_parser.add_argument("video_ref", help="YouTube video URL or ID")
-    inspect_parser.set_defaults(handler=run_inspect)
+        transcript_parser = video_subparsers.add_parser("transcript", help="Fetch a normalized transcript")
+        transcript_parser.add_argument("video_ref", help="YouTube video URL or ID")
+        transcript_parser.set_defaults(handler=VideoCommands.transcript)
 
 
 def add_search_parser(subparsers: argparse._SubParsersAction) -> None:
-    search_parser = subparsers.add_parser("search", help="Search YouTube videos")
+    search_parser = subparsers.add_parser("search", help="Query YouTube through yt-dlp with local filters")
     search_parser.add_argument("query", help="Search query")
     search_parser.add_argument("--limit", type=int, default=10)
     search_parser.add_argument("--sort", choices=("relevance", "views"), default="relevance")
@@ -70,76 +66,87 @@ def add_search_parser(subparsers: argparse._SubParsersAction) -> None:
     search_parser.set_defaults(handler=run_search)
 
 
-def add_channel_videos_parser(subparsers: argparse._SubParsersAction) -> None:
-    channel_parser = subparsers.add_parser("channel-videos", help="List recent videos from a YouTube channel")
-    channel_parser.add_argument("channel_ref", help="YouTube channel URL, handle, or channel ID")
-    add_channel_window_args(channel_parser)
-    channel_parser.set_defaults(handler=run_channel_videos)
+class ChannelCommandParser:
+    @staticmethod
+    def add_to(subparsers: argparse._SubParsersAction) -> None:
+        channel_parser = subparsers.add_parser("channel", help="Work with YouTube channels")
+        channel_subparsers = channel_parser.add_subparsers(
+            dest="channel_command",
+            required=True,
+            metavar="{videos}",
+        )
+
+        videos_parser = channel_subparsers.add_parser("videos", help="List recent videos from a YouTube channel")
+        videos_parser.add_argument("channel_ref", help="YouTube channel URL, handle, or channel ID")
+        add_channel_window_args(videos_parser)
+        videos_parser.set_defaults(handler=ChannelCommands.videos)
 
 
-def add_watchlist_parser(subparsers: argparse._SubParsersAction) -> None:
-    """Add watchlist management subcommands to the root parser."""
-    watchlist_parser = subparsers.add_parser("watchlist", help="Manage or sync watchlist channels")
-    watchlist_subparsers = watchlist_parser.add_subparsers(
-        dest="watchlist_command",
-        required=True,
-        metavar="{add,list,remove,sync,new,schedule}",
-    )
-    watchlist_add_parser = watchlist_subparsers.add_parser("add", help="Add one or more channels to the watchlist")
-    add_channel_refs_arg(watchlist_add_parser)
-    watchlist_add_parser.set_defaults(handler=run_watchlist_add)
-    watchlist_list_parser = watchlist_subparsers.add_parser("list", help="List watched channels")
-    watchlist_list_parser.set_defaults(handler=run_watchlist_list)
-    watchlist_remove_parser = watchlist_subparsers.add_parser("remove", help="Remove one or more channels from the watchlist")
-    add_channel_refs_arg(watchlist_remove_parser)
-    watchlist_remove_parser.set_defaults(handler=run_watchlist_remove)
-    watchlist_sync_parser = watchlist_subparsers.add_parser("sync", help="Sync watchlist videos and transcripts")
-    add_channel_window_args(watchlist_sync_parser)
-    watchlist_sync_parser.set_defaults(handler=run_watchlist_sync)
-    watchlist_scheduled_parser = watchlist_subparsers.add_parser("scheduled-sync", help=argparse.SUPPRESS)
-    add_channel_window_args(
-        watchlist_scheduled_parser,
-        default_last=DEFAULT_WATCHLIST_SCHEDULE_LAST,
-        default_days=DEFAULT_WATCHLIST_SCHEDULE_DAYS,
-    )
-    watchlist_scheduled_parser.set_defaults(handler=run_watchlist_scheduled_sync)
-    # argparse has no public API for hidden-but-parseable subcommands.
-    watchlist_subparsers._choices_actions = [action for action in watchlist_subparsers._choices_actions if action.dest != "scheduled-sync"]
-    watchlist_new_parser = watchlist_subparsers.add_parser("new", help="Return and mark new watched videos")
-    watchlist_new_parser.add_argument("--channel", action="append", default=[], dest="channel_refs", help="Consume new videos from a watched channel; repeat for more channels")
-    watchlist_new_parser.add_argument("--all", action="store_true", help="Consume new videos from all watched channels")
-    watchlist_new_parser.set_defaults(handler=run_watchlist_new)
-    add_watchlist_schedule_parser(watchlist_subparsers)
+class WatchlistCommandParser:
+    @staticmethod
+    def add_to(subparsers: argparse._SubParsersAction) -> None:
+        watchlist_parser = subparsers.add_parser("watchlist", help="Manage or sync watchlist channels")
+        watchlist_subparsers = watchlist_parser.add_subparsers(
+            dest="watchlist_command",
+            required=True,
+            metavar="{add,list,remove,sync,new,schedule}",
+        )
+        watchlist_add_parser = watchlist_subparsers.add_parser("add", help="Add one or more channels to the watchlist")
+        add_channel_refs_arg(watchlist_add_parser)
+        watchlist_add_parser.set_defaults(handler=WatchlistCommands.add)
+        watchlist_list_parser = watchlist_subparsers.add_parser("list", help="List watched channels")
+        watchlist_list_parser.set_defaults(handler=WatchlistCommands.list)
+        watchlist_remove_parser = watchlist_subparsers.add_parser("remove", help="Remove one or more channels from the watchlist")
+        add_channel_refs_arg(watchlist_remove_parser)
+        watchlist_remove_parser.set_defaults(handler=WatchlistCommands.remove)
+        watchlist_sync_parser = watchlist_subparsers.add_parser("sync", help="Sync watchlist videos and transcripts")
+        add_channel_window_args(watchlist_sync_parser)
+        watchlist_sync_parser.set_defaults(handler=WatchlistCommands.sync)
+        watchlist_scheduled_parser = watchlist_subparsers.add_parser("scheduled-sync", help=argparse.SUPPRESS)
+        add_channel_window_args(
+            watchlist_scheduled_parser,
+            default_last=DEFAULT_WATCHLIST_SCHEDULE_LAST,
+            default_days=DEFAULT_WATCHLIST_SCHEDULE_DAYS,
+        )
+        watchlist_scheduled_parser.set_defaults(handler=WatchlistCommands.scheduled_sync)
+        # argparse has no public API for hidden-but-parseable subcommands.
+        watchlist_subparsers._choices_actions = [action for action in watchlist_subparsers._choices_actions if action.dest != "scheduled-sync"]
+        watchlist_new_parser = watchlist_subparsers.add_parser("new", help="Return and mark new watched videos")
+        watchlist_new_parser.add_argument("--channel", action="append", default=[], dest="channel_refs", help="Consume new videos from a watched channel; repeat for more channels")
+        watchlist_new_parser.add_argument("--all", action="store_true", help="Consume new videos from all watched channels")
+        watchlist_new_parser.set_defaults(handler=WatchlistCommands.new)
+        WatchlistCommandParser.add_schedule(watchlist_subparsers)
+
+    @staticmethod
+    def add_schedule(subparsers: argparse._SubParsersAction) -> None:
+        schedule_parser = subparsers.add_parser("schedule", help="Manage the watchlist scheduled sync LaunchAgent")
+        schedule_subparsers = schedule_parser.add_subparsers(dest="schedule_command", required=True)
+        install_parser = schedule_subparsers.add_parser("install", help="Install and load the watchlist scheduled sync job")
+        install_parser.add_argument("--minutes", type=int, default=DEFAULT_WATCHLIST_SCHEDULE_MINUTES, help="Run interval in minutes")
+        install_parser.add_argument("--last", type=int, default=DEFAULT_WATCHLIST_SCHEDULE_LAST, help="Fetch the latest N videos per watched channel; omit for no limit")
+        install_parser.add_argument("--days", type=int, default=DEFAULT_WATCHLIST_SCHEDULE_DAYS, help="Look back this many days")
+        install_parser.add_argument("--label", default=DEFAULT_WATCHLIST_SCHEDULE_LABEL, help="LaunchAgent label")
+        install_parser.add_argument("--no-load", action="store_true", help="Write the plist without loading it")
+        install_parser.set_defaults(handler=WatchlistCommands.install_schedule)
+        status_parser = schedule_subparsers.add_parser("status", help="Show watchlist scheduled sync status")
+        status_parser.add_argument("--label", default=DEFAULT_WATCHLIST_SCHEDULE_LABEL, help="LaunchAgent label")
+        status_parser.set_defaults(handler=WatchlistCommands.schedule_status)
+        uninstall_parser = schedule_subparsers.add_parser("uninstall", help="Unload and remove the watchlist scheduled sync job")
+        uninstall_parser.add_argument("--label", default=DEFAULT_WATCHLIST_SCHEDULE_LABEL, help="LaunchAgent label")
+        uninstall_parser.set_defaults(handler=WatchlistCommands.uninstall_schedule)
 
 
-def add_watchlist_schedule_parser(subparsers: argparse._SubParsersAction) -> None:
-    schedule_parser = subparsers.add_parser("schedule", help="Manage the watchlist scheduled sync LaunchAgent")
-    schedule_subparsers = schedule_parser.add_subparsers(dest="schedule_command", required=True)
-    install_parser = schedule_subparsers.add_parser("install", help="Install and load the watchlist scheduled sync job")
-    install_parser.add_argument("--minutes", type=int, default=DEFAULT_WATCHLIST_SCHEDULE_MINUTES, help="Run interval in minutes")
-    install_parser.add_argument("--last", type=int, default=DEFAULT_WATCHLIST_SCHEDULE_LAST, help="Fetch the latest N videos per watched channel; omit for no limit")
-    install_parser.add_argument("--days", type=int, default=DEFAULT_WATCHLIST_SCHEDULE_DAYS, help="Look back this many days")
-    install_parser.add_argument("--label", default=DEFAULT_WATCHLIST_SCHEDULE_LABEL, help="LaunchAgent label")
-    install_parser.add_argument("--no-load", action="store_true", help="Write the plist without loading it")
-    install_parser.set_defaults(handler=run_watchlist_schedule_install)
-    status_parser = schedule_subparsers.add_parser("status", help="Show watchlist scheduled sync status")
-    status_parser.add_argument("--label", default=DEFAULT_WATCHLIST_SCHEDULE_LABEL, help="LaunchAgent label")
-    status_parser.set_defaults(handler=run_watchlist_schedule_status)
-    uninstall_parser = schedule_subparsers.add_parser("uninstall", help="Unload and remove the watchlist scheduled sync job")
-    uninstall_parser.add_argument("--label", default=DEFAULT_WATCHLIST_SCHEDULE_LABEL, help="LaunchAgent label")
-    uninstall_parser.set_defaults(handler=run_watchlist_schedule_uninstall)
-
-
-def add_blacklist_parser(subparsers: argparse._SubParsersAction) -> None:
-    """Add blacklist management subcommands to the root parser."""
-    blacklist_parser = subparsers.add_parser("blacklist", help="Manage search blacklist channels")
-    blacklist_subparsers = blacklist_parser.add_subparsers(dest="blacklist_command", required=True)
-    blacklist_add_parser = blacklist_subparsers.add_parser("add", help="Add one or more channels to the search blacklist")
-    add_channel_refs_arg(blacklist_add_parser)
-    blacklist_add_parser.set_defaults(handler=run_blacklist_add)
-    blacklist_remove_parser = blacklist_subparsers.add_parser("remove", help="Remove one or more channels from the search blacklist")
-    add_channel_refs_arg(blacklist_remove_parser)
-    blacklist_remove_parser.set_defaults(handler=run_blacklist_remove)
+class BlacklistCommandParser:
+    @staticmethod
+    def add_to(subparsers: argparse._SubParsersAction) -> None:
+        blacklist_parser = subparsers.add_parser("blacklist", help="Manage search blacklist channels")
+        blacklist_subparsers = blacklist_parser.add_subparsers(dest="blacklist_command", required=True)
+        blacklist_add_parser = blacklist_subparsers.add_parser("add", help="Add one or more channels to the search blacklist")
+        add_channel_refs_arg(blacklist_add_parser)
+        blacklist_add_parser.set_defaults(handler=BlacklistCommands.add)
+        blacklist_remove_parser = blacklist_subparsers.add_parser("remove", help="Remove one or more channels from the search blacklist")
+        add_channel_refs_arg(blacklist_remove_parser)
+        blacklist_remove_parser.set_defaults(handler=BlacklistCommands.remove)
 
 
 def add_doctor_parser(subparsers: argparse._SubParsersAction) -> None:

@@ -1,4 +1,4 @@
-"""YouTube search with local metadata filters."""
+"""YouTube search via yt-dlp with local filters and persisted result metadata."""
 
 from __future__ import annotations
 

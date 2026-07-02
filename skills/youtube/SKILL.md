@@ -1,11 +1,11 @@
 ---
 name: youtube
-description: Use this repo-local YouTube toolkit for transcript-first research workflows: fetch normalized transcripts, search YouTube videos, inspect metadata, list recent channel uploads, manage watchlists/blacklists, and persist state in the local database.
+description: Use this repo-local YouTube toolkit for transcript-first research workflows: fetch normalized transcripts, search YouTube videos, fetch metadata, list recent channel videos, manage watchlists/blacklists, and persist state in the local database.
 ---
 
 # YouTube
 
-Use this skill for YouTube transcript retrieval, metadata inspection, filtered video search, recent channel uploads, watchlist/blacklist state, and durable local database state.
+Use this skill for YouTube transcript retrieval, metadata inspection, YouTube search via `yt-dlp` with local filters, recent channel videos, watchlist/blacklist state, and durable local database state.
 
 This repo is the toolkit source of truth. Prefer the package CLI over copying scripts from older skill installs.
 
@@ -26,10 +26,10 @@ uv run youtube <command>
 Commands:
 
 - `doctor`: return JSON with the local `yt-dlp` version and active database path
-- `transcript <url-or-id>`: fetch and store a normalized transcript, then print JSON
-- `inspect <url-or-id>`: print full `yt-dlp` metadata JSON
-- `search "<query>"`: search YouTube videos with local metadata filters
-- `channel-videos <channel>`: list recent videos from one YouTube channel URL, handle, or channel ID
+- `search "<query>"`: query YouTube through `yt-dlp`, then apply local filters and blacklist rules
+- `video transcript <url-or-id>`: fetch and store a normalized transcript, then print JSON
+- `video metadata <url-or-id>`: print full `yt-dlp` metadata JSON
+- `channel videos <channel>`: list recent videos from one YouTube channel URL, handle, or channel ID
 - `watchlist add <channel...>`: persist one or more channels for later sync
 - `watchlist remove <channel...>`: stop watching one or more channels without deleting stored catalog data
 - `watchlist sync`: refresh watched channels, mark new videos, and fetch missing transcripts
@@ -67,7 +67,7 @@ Storage lives in this checkout's `.cache/youtube.sqlite3` during source-checkout
 
 `doctor` returns the active database path. If `uv run youtube doctor` and `youtube doctor` disagree, the checkout and installed command are using different storage roots.
 
-Search automatically applies stored blacklist channels. Search, transcript, channel listing, and watchlist commands persist normalized channel/video rows for later workflows.
+YouTube search via `yt-dlp` automatically applies stored blacklist channels and persists returned video metadata for later workflows. Transcript, channel listing, and watchlist commands also persist normalized channel/video rows.
 
 ## Workflow
 
