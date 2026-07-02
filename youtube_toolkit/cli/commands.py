@@ -7,6 +7,7 @@ from dataclasses import asdict
 import json
 
 from ..audio_transcription import store_audio_transcript
+from ..storage import DATABASE_FILENAME, resolve_storage_dir
 from ..watchlist_schedule import (
     WatchlistScheduleOptions,
     install_watchlist_schedule,
@@ -165,6 +166,7 @@ def run_doctor(_args: argparse.Namespace) -> int:
     import yt_dlp
 
     print(f"yt-dlp import ok: {yt_dlp.version.__version__}")
+    print(f"database: {resolve_storage_dir() / DATABASE_FILENAME}")
     return 0
 
 
