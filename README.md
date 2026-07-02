@@ -22,13 +22,15 @@ The toolkit intentionally ships a small working surface:
 - `youtube search "<query>"` searches videos with local metadata filters
 - `youtube inspect <url-or-id>` prints metadata JSON
 - `youtube channel-videos <channel>` lists recent uploads for one channel
-- `youtube watchlist add <channel...>`, `youtube watchlist remove <channel...>`, and `youtube watchlist sync` persist channel workflows
+- `youtube watchlist add <channel...>`, `youtube watchlist list`, `youtube watchlist remove <channel...>`, and `youtube watchlist sync` persist channel workflows
 - `youtube watchlist new --channel <channel>` accepts repeated `--channel` flags; `youtube watchlist new --all` returns all new watched videos
 - `youtube watchlist schedule install|status|uninstall` manages its macOS LaunchAgent
 - `youtube blacklist add <channel...>` and `youtube blacklist remove <channel...>` manage channels excluded from future search results
 - `youtube doctor` returns JSON with the `yt-dlp` version and active database path
 
 Storage lives in this checkout's `.cache/youtube.sqlite3` during source-checkout usage. Installed CLI usage stores the database at `~/Library/Application Support/youtube-toolkit/youtube.sqlite3`. Set `YOUTUBE_TOOLKIT_STORAGE_HOME` to move it.
+
+The default watchlist schedule runs every 12 hours, scans uploads from the last 3 days, and does not cap the number of videos fetched per watched channel.
 
 ## Setup
 
@@ -51,7 +53,8 @@ youtube search "langgraph tutorial" --limit 5 --max-duration 20:00
 youtube inspect https://www.youtube.com/watch?v=JpSHyEIZ_bo
 youtube channel-videos @OpenAI --last 5
 youtube watchlist add @OpenAI @Anthropic
-youtube watchlist schedule install --minutes 30 --last 50 --days 2
+youtube watchlist list
+youtube watchlist schedule install
 youtube watchlist new --channel @OpenAI --channel @Anthropic
 youtube watchlist new --all
 youtube watchlist remove @OpenAI @Anthropic

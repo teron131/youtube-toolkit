@@ -12,6 +12,7 @@ from youtube_toolkit.storage import (
     get_connection,
     list_blacklist_channel_identities,
     list_watchlist_channel_refs,
+    store_channel_listing,
     store_watchlist_channel_listing,
     upsert_blacklist_channel,
     upsert_watchlist_channel,
@@ -20,6 +21,8 @@ from youtube_toolkit.youtube.channels import (
     ChannelOptions,
     add_watchlist_channels,
     fetch_watchlist_transcripts,
+    get_recent_channel_entries,
+    list_watchlist_channels,
     remove_blacklist_channels,
     remove_watchlist_channels,
     sync_watchlist,
@@ -82,13 +85,16 @@ def test_parser_accepts_watchlist_and_blacklist_remove() -> None:
 
 def test_parser_accepts_watchlist_new_and_scheduled_sync() -> None:
     """Parse agent-facing and scheduler-facing watchlist commands."""
+    list_args = build_parser().parse_args(["watchlist", "list"])
     new_args = build_parser().parse_args(["watchlist", "new", "--channel", "@OpenAI"])
     scheduled_args = build_parser().parse_args(["watchlist", "scheduled-sync", "--last", "5"])
 
+    assert list_args.watchlist_command == "list"
     assert new_args.watchlist_command == "new"
     assert new_args.channel_refs == ["@OpenAI"]
     assert scheduled_args.watchlist_command == "scheduled-sync"
     assert scheduled_args.last == 5
+    assert scheduled_args.days == 3
 
 
 def test_add_watchlist_channels_accepts_single_and_list_channel_refs(
@@ -121,6 +127,8 @@ def test_add_watchlist_channels_accepts_single_and_list_channel_refs(
 
     with get_connection() as connection:
         assert list_watchlist_channel_refs(connection) == ["@Anthropic", "@OpenAI"]
+
+    assert list_watchlist_channels() == ["@Anthropic", "@OpenAI"]
 
 
 def test_add_watchlist_channels_fetches_refs_concurrently(
@@ -350,6 +358,27 @@ def test_store_watchlist_channel_listing_marks_only_new_video_ids(
     assert rows[0]["seen_at"] is None
 
 
+def test_store_watchlist_channel_listing_queues_existing_catalog_video(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Watchlist newness belongs to the queue, not the global video catalog."""
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        store_channel_listing(connection, openai_listing())
+        upsert_watchlist_channel(
+            connection,
+            ChannelIdentity(
+                youtube_channel_id="UC123",
+                channel_handle="@OpenAI",
+            ),
+        )
+
+        assert store_watchlist_channel_listing(connection, openai_listing()) == ["video-openai"]
+        assert store_watchlist_channel_listing(connection, openai_listing()) == []
+
+
 def test_watch_new_videos_consumes_only_scoped_channels(
     monkeypatch,
     tmp_path,
@@ -403,6 +432,42 @@ def test_watch_new_videos_requires_explicit_scope(
 
     with pytest.raises(ValueError, match="include_all"):
         watch_new_videos()
+
+
+def test_unlimited_days_window_uses_bounded_first_fetch() -> None:
+    """A None last window has no fixed cap but still fetches bounded date windows."""
+    calls = []
+
+    class FakeClient:
+        def channel_videos(
+            self,
+            channel_url: str,
+            *,
+            last: int | None,
+            flat: bool = True,
+        ) -> dict:
+            calls.append((channel_url, last, flat))
+            return {
+                "entries": [
+                    {
+                        "id": "recent",
+                        "upload_date": "20260630",
+                    },
+                    {
+                        "id": "old",
+                        "upload_date": "20260601",
+                    },
+                ]
+            }
+
+    metadata = get_recent_channel_entries(
+        FakeClient(),
+        "https://www.youtube.com/@OpenAI/videos",
+        options=ChannelOptions(last=None, days=3),
+    )
+
+    assert calls == [("https://www.youtube.com/@OpenAI/videos", 10, False)]
+    assert [entry["id"] for entry in metadata["entries"]] == ["recent"]
 
 
 def test_sync_watchlist_marks_new_videos_and_hydrates_missing(

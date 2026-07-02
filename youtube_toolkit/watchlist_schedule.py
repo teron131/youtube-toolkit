@@ -20,9 +20,9 @@ from .storage import resolve_storage_dir
 from .youtube.channels import ChannelOptions, sync_watchlist
 
 DEFAULT_WATCHLIST_SCHEDULE_LABEL = "com.teron.youtube-toolkit.watchlist"
-DEFAULT_WATCHLIST_SCHEDULE_MINUTES = 30
-DEFAULT_WATCHLIST_SCHEDULE_LAST = 50
-DEFAULT_WATCHLIST_SCHEDULE_DAYS = 2
+DEFAULT_WATCHLIST_SCHEDULE_MINUTES = 720
+DEFAULT_WATCHLIST_SCHEDULE_LAST = None
+DEFAULT_WATCHLIST_SCHEDULE_DAYS = 3
 WATCHLIST_SYNC_LOCK_FILENAME = "watchlist-sync.lock"
 LAUNCHCTL_PATH = "/bin/launchctl"
 
@@ -32,7 +32,7 @@ class WatchlistScheduleOptions:
     """Configuration for the launchd job that runs watchlist scheduled-sync."""
 
     minutes: int = DEFAULT_WATCHLIST_SCHEDULE_MINUTES
-    last: int = DEFAULT_WATCHLIST_SCHEDULE_LAST
+    last: int | None = DEFAULT_WATCHLIST_SCHEDULE_LAST
     days: int | None = DEFAULT_WATCHLIST_SCHEDULE_DAYS
     label: str = DEFAULT_WATCHLIST_SCHEDULE_LABEL
     load: bool = True
@@ -181,9 +181,9 @@ def build_watchlist_schedule_plist(
         "youtube_toolkit.cli",
         "watchlist",
         "scheduled-sync",
-        "--last",
-        str(options.last),
     ]
+    if options.last is not None:
+        program_arguments.extend(["--last", str(options.last)])
     if options.days is not None:
         program_arguments.extend(["--days", str(options.days)])
 
@@ -204,7 +204,7 @@ def build_watchlist_schedule_plist(
 def validate_schedule_options(options: WatchlistScheduleOptions) -> None:
     if options.minutes <= 0:
         raise ValueError("--minutes must be greater than 0")
-    if options.last <= 0:
+    if options.last is not None and options.last <= 0:
         raise ValueError("--last must be greater than 0")
     if options.days is not None and options.days <= 0:
         raise ValueError("--days must be greater than 0")

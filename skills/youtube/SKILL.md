@@ -59,7 +59,7 @@ Useful channel/watchlist options:
 - `--days N`
 - `watchlist add/remove` and `blacklist add/remove` accept multiple channel URLs, handles, or channel IDs as space-separated arguments: `@OpenAI @Anthropic UC123`
 - `watchlist new --channel <channel>` can be repeated as `--channel @OpenAI --channel @Anthropic`
-- `watchlist schedule install --minutes N`; default `30`, with `--last 50 --days 2`
+- `watchlist schedule install --minutes N`; default `720`, with no `--last` cap and `--days 3`
 
 ## Storage
 

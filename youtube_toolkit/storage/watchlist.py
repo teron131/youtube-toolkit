@@ -9,7 +9,7 @@ import turso
 from ..schemas import ChannelIdentity, extract_channel_identity, extract_video_record
 from .channels import find_matching_channel_rows, upsert_channel
 from .payloads import stored_video_payload
-from .videos import find_video_row, upsert_video
+from .videos import upsert_video
 
 
 def upsert_watchlist_channel(
@@ -90,14 +90,12 @@ def store_watchlist_channel_listing(
         video_record = extract_video_record(entry)
         if video_record is None:
             continue
-        existing_row = find_video_row(connection, video_record.youtube_video_id)
         stored_video = upsert_video(
             connection,
             entry,
             channel_identity=channel_identity,
         )
-        if existing_row is None and stored_video is not None:
-            insert_watchlist_video(connection, int(stored_video["database_row_id"]))
+        if stored_video is not None and queue_watchlist_video(connection, int(stored_video["database_row_id"])):
             new_video_ids.append(video_record.youtube_video_id)
     return new_video_ids
 
@@ -119,10 +117,20 @@ def is_watchlist_channel(
     )
 
 
-def insert_watchlist_video(
+def queue_watchlist_video(
     connection: turso.Connection,
     video_row_id: int,
-) -> None:
+) -> bool:
+    existing_row = connection.execute(
+        """
+        SELECT 1
+        FROM watchlist_videos
+        WHERE video_id = ?
+        """,
+        (video_row_id,),
+    ).fetchone()
+    if existing_row is not None:
+        return False
     connection.execute(
         """
         INSERT OR IGNORE INTO watchlist_videos (video_id)
@@ -130,6 +138,7 @@ def insert_watchlist_video(
         """,
         (video_row_id,),
     )
+    return True
 
 
 def list_watchlist_channel_refs(connection: turso.Connection) -> list[str]:

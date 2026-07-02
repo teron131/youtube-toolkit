@@ -22,11 +22,19 @@ def test_parser_accepts_watchlist_schedule_defaults() -> None:
 
     assert args.watchlist_command == "schedule"
     assert args.schedule_command == "install"
-    assert args.minutes == 30
-    assert args.last == 50
-    assert args.days == 2
+    assert args.minutes == 720
+    assert args.last is None
+    assert args.days == 3
     assert args.label == "com.teron.youtube-toolkit.watchlist"
     assert args.no_load is False
+
+
+def test_parser_accepts_scheduled_sync_defaults() -> None:
+    args = build_parser().parse_args(["watchlist", "scheduled-sync"])
+
+    assert args.watchlist_command == "scheduled-sync"
+    assert args.last is None
+    assert args.days == 3
 
 
 def test_build_watchlist_schedule_plist_targets_scheduled_sync(
@@ -100,6 +108,27 @@ def test_install_watchlist_schedule_writes_plist_without_loading(
         "--last",
         "20",
     ]
+
+
+def test_default_schedule_plist_runs_every_twelve_hours_without_video_limit(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Default scheduled sync scans the last three days without a playlist cap."""
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    plist = build_watchlist_schedule_plist(WatchlistScheduleOptions())
+
+    assert plist["ProgramArguments"] == [
+        sys.executable,
+        "-m",
+        "youtube_toolkit.cli",
+        "watchlist",
+        "scheduled-sync",
+        "--days",
+        "3",
+    ]
+    assert plist["StartInterval"] == 43_200
 
 
 def test_status_reports_launchctl_state(

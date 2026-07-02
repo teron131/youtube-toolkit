@@ -40,7 +40,7 @@ MAX_CONCURRENT_LIST_WORKERS = 5
 
 @dataclass(frozen=True, slots=True)
 class ChannelOptions:
-    last: int = DEFAULT_LAST_VIDEOS
+    last: int | None = DEFAULT_LAST_VIDEOS
     days: int | None = None
 
 
@@ -78,7 +78,7 @@ def fetch_channel_metadata(
 
 
 def validate_channel_options(options: ChannelOptions) -> None:
-    if options.last <= 0:
+    if options.last is not None and options.last <= 0:
         raise ValueError("--last must be greater than 0")
     if options.days is not None and options.days <= 0:
         raise ValueError("--days must be greater than 0")
@@ -91,14 +91,28 @@ def get_recent_channel_entries(
     options: ChannelOptions,
 ) -> dict[str, Any]:
     if options.days is None:
-        return client.channel_videos(channel_url, last=options.last)
+        return client.channel_videos(
+            channel_url,
+            last=options.last,
+        )
 
-    window_size = max(options.last, MIN_DAYS_WINDOW)
+    window_size = max(options.last or MIN_DAYS_WINDOW, MIN_DAYS_WINDOW)
     while True:
-        metadata = client.channel_videos(channel_url, last=window_size)
+        metadata = client.channel_videos(
+            channel_url,
+            last=window_size,
+            flat=False,
+        )
         entries = metadata.get("entries") or []
-        metadata["entries"] = filter_entries_by_days(entries, days=options.days)
-        if not should_expand_window(entries, days=options.days, window_size=window_size):
+        dated_entries = collect_dated_entries(entries)
+        cutoff_date = cutoff_date_for_days(options.days)
+        metadata["entries"] = [entry for entry, upload_date in dated_entries if upload_date >= cutoff_date]
+        if not should_expand_window(
+            entries,
+            dated_entries,
+            days=options.days,
+            window_size=window_size,
+        ):
             return metadata
         window_size *= 2
 
@@ -126,27 +140,19 @@ def collect_dated_entries(entries: list[dict[str, Any]]) -> list[tuple[dict[str,
     return dated_entries
 
 
-def filter_entries_by_days(
-    entries: list[dict[str, Any]],
-    *,
-    days: int,
-) -> list[dict[str, Any]]:
-    cutoff_date = cutoff_date_for_days(days)
-    return [entry for entry, upload_date in collect_dated_entries(entries) if upload_date >= cutoff_date]
-
-
 def should_expand_window(
     entries: list[dict[str, Any]],
+    dated_entries: list[tuple[dict[str, Any], date]],
     *,
     days: int,
     window_size: int,
 ) -> bool:
     if len(entries) < window_size:
         return False
-    dated_entries = [upload_date for _, upload_date in collect_dated_entries(entries)]
     if not dated_entries:
         return False
-    return min(dated_entries) >= cutoff_date_for_days(days)
+    oldest_upload_date = min(upload_date for _, upload_date in dated_entries)
+    return oldest_upload_date >= cutoff_date_for_days(days)
 
 
 def add_watchlist_channels(channel_refs: ChannelRefInput) -> list[str]:
@@ -161,6 +167,11 @@ def add_blacklist_channels(channel_refs: ChannelRefInput) -> list[str]:
         channel_refs,
         add_membership=upsert_blacklist_channel,
     )
+
+
+def list_watchlist_channels() -> list[str]:
+    with get_connection() as connection:
+        return list_watchlist_channel_refs(connection)
 
 
 def _add_channel_memberships(

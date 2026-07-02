@@ -26,6 +26,7 @@ from ..youtube.channels import (
     add_blacklist_channels,
     add_watchlist_channels,
     fetch_channel_videos,
+    list_watchlist_channels,
     remove_blacklist_channels,
     remove_watchlist_channels,
     sync_watchlist,
@@ -70,6 +71,10 @@ def run_channel_videos(args: argparse.Namespace) -> dict[str, Any]:
 
 def run_watchlist_add(args: argparse.Namespace) -> list[str]:
     return add_watchlist_channels(args.channel_refs)
+
+
+def run_watchlist_list(_args: argparse.Namespace) -> list[str]:
+    return list_watchlist_channels()
 
 
 def run_watchlist_remove(args: argparse.Namespace) -> list[ChannelRemovalResult]:
