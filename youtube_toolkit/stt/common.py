@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 from uuid import uuid4
 
-from .schemas import SpeechTranscription
+from .transcription import SpeechTranscription
 
 DEFAULT_STT_LANGUAGE = "en"
 DEFAULT_STT_PROVIDER = "xai"
