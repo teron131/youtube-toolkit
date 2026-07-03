@@ -17,6 +17,7 @@ MODEL_CONFIG_ENV_KEYS = (
     "EMBEDDING_BASE_URL",
     "EMBEDDING_MODEL",
     "EMBEDDING_DIMENSIONS",
+    "EMBEDDING_AUTO_INDEX",
     "LLM_API_KEY",
     "LLM_BASE_URL",
     "LLM_MODEL",
@@ -176,6 +177,7 @@ def test_main_emits_model_setup_as_human_report(
                 "https://llm.example/v1/",
                 "--llm-model",
                 "summary-model",
+                "--no-auto-embeddings",
                 "--no-verify",
             ]
         )
@@ -188,10 +190,51 @@ def test_main_emits_model_setup_as_human_report(
     assert f"  config     {config_path}" in output
     assert "  embedding  configured (embedding-model)" in output
     assert "  llm        configured (summary-model)" in output
+    assert "Settings" in output
+    assert "  auto index off" in output
     assert "Verification" in output
     assert "  embedding  skipped" in output
     assert "  llm        skipped" in output
     assert config_path.exists()
+
+
+def test_interactive_setup_uses_section_menu(
+    capsys,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    home = tmp_path / "home"
+    keys = iter(
+        [
+            "down",
+            "down",
+            "enter",
+            "enter",
+            "down",
+            "enter",
+            "down",
+            "down",
+            "enter",
+        ]
+    )
+    monkeypatch.setenv("HOME", str(home))
+    for key in MODEL_CONFIG_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(commands, "setup_interactive_terminal", lambda: True)
+    monkeypatch.setattr(commands, "read_setup_key", lambda: next(keys))
+
+    assert main(["setup", "--no-verify"]) == 0
+
+    config_path = home / "Library" / "Application Support" / "youtube-toolkit" / "config.env"
+    output = capsys.readouterr().out
+    assert "Setup" in output
+    assert "Use Up/Down to move, Enter to select, q to quit." in output
+    assert "Use Up/Down to move, Enter to select, q to go back." in output
+    assert "> Settings" in output
+    assert "> Auto-index transcript embeddings on" in output
+    assert "> Auto-index transcript embeddings off" in output
+    assert "  auto index off" in output
+    assert "EMBEDDING_AUTO_INDEX=false\n" in config_path.read_text(encoding="utf-8")
 
 
 def test_model_api_health_reports_key_presence(monkeypatch, tmp_path) -> None:
@@ -251,7 +294,7 @@ def test_video_and_channel_command_groups_parse_public_actions() -> None:
     transcript_args = build_parser().parse_args(["video", "transcript", "JpSHyEIZ_bo"])
     channel_args = build_parser().parse_args(["channel", "videos", "@OpenAI", "--last", "5"])
     search_args = build_parser().parse_args(["search", "langgraph tutorial"])
-    setup_args = build_parser().parse_args(["setup", "--llm-model", "summary-model", "--verify"])
+    setup_args = build_parser().parse_args(["setup", "--llm-model", "summary-model", "--no-auto-embeddings", "--verify"])
 
     assert metadata_args.video_command == "metadata"
     assert transcript_args.video_command == "transcript"
@@ -261,6 +304,7 @@ def test_video_and_channel_command_groups_parse_public_actions() -> None:
     assert search_args.command == "search"
     assert setup_args.command == "setup"
     assert setup_args.llm_model == "summary-model"
+    assert setup_args.auto_embeddings is False
     assert setup_args.verify is True
 
 
@@ -309,6 +353,9 @@ def test_setup_writes_app_local_config(monkeypatch, tmp_path) -> None:
                 "detail": "LLM API is configured",
             },
         },
+        "settings": {
+            "auto_embeddings": True,
+        },
         "verification": {
             "embedding": {
                 "ok": False,
@@ -327,6 +374,7 @@ def test_setup_writes_app_local_config(monkeypatch, tmp_path) -> None:
         "EMBEDDING_BASE_URL=https://embedding.example/v1/\n"
         "EMBEDDING_MODEL=embedding-model\n"
         "EMBEDDING_DIMENSIONS=512\n"
+        "EMBEDDING_AUTO_INDEX=true\n"
         "LLM_API_KEY=llm-key\n"
         "LLM_BASE_URL=https://llm.example/v1/\n"
         "LLM_MODEL=summary-model\n"

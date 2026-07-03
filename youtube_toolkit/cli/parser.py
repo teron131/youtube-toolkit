@@ -169,6 +169,12 @@ class SetupCommandParser:
         setup_parser.add_argument("--llm-base-url")
         setup_parser.add_argument("--llm-model")
         setup_parser.add_argument(
+            "--auto-embeddings",
+            action=argparse.BooleanOptionalAction,
+            default=None,
+            help="Index transcript embeddings automatically after transcript storage",
+        )
+        setup_parser.add_argument(
             "--verify",
             action=argparse.BooleanOptionalAction,
             default=None,
