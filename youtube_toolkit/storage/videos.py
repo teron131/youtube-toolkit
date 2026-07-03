@@ -156,8 +156,8 @@ def update_video(
     )
     if video_embedding_source_changed(
         existing_row,
+        channel_id=next_channel_id,
         title=next_title,
-        upload_date=next_upload_date,
         transcript=next_transcript,
     ):
         clear_video_embedding(connection, existing_row["youtube_video_id"])
@@ -176,18 +176,18 @@ def keep_existing_if_missing[StoredValue](
 def video_embedding_source_changed(
     existing_row: turso.Row,
     *,
+    channel_id: str | None,
     title: str | None,
-    upload_date: str | None,
     transcript: str | None,
 ) -> bool:
     """Return whether video fields used for embeddings changed."""
     return (
+        channel_id,
         title,
-        upload_date,
         transcript,
     ) != (
+        existing_row["channel_id"],
         existing_row["title"],
-        existing_row["upload_date"],
         existing_row["transcript"],
     )
 

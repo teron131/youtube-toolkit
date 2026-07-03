@@ -45,6 +45,8 @@ def resolve_audio_video_id(
         return metadata_video_id.strip()
 
     video_id = extract_video_id(audio_path.stem)
+    if video_id is None and len(audio_path.stem) > 11 and audio_path.stem[11] == "-":
+        video_id = extract_video_id(audio_path.stem[:11])
     if video_id is None:
         raise ValueError("audio filename must include a YouTube video ID so the transcript can be stored")
     return video_id

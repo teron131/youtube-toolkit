@@ -13,6 +13,7 @@ from ..watchlist_schedule import (
 from .commands import (
     BlacklistCommands,
     ChannelCommands,
+    IndexCommands,
     SetupCommands,
     VideoCommands,
     WatchlistCommands,
@@ -29,6 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     ChannelCommandParser.add_to(subparsers)
     WatchlistCommandParser.add_to(subparsers)
     BlacklistCommandParser.add_to(subparsers)
+    IndexCommandParser.add_to(subparsers)
     SetupCommandParser.add_to(subparsers)
     add_doctor_parser(subparsers)
     return parser
@@ -155,6 +157,19 @@ class BlacklistCommandParser:
         blacklist_remove_parser = blacklist_subparsers.add_parser("remove", help="Remove one or more channels from the search blacklist")
         add_channel_refs_arg(blacklist_remove_parser)
         blacklist_remove_parser.set_defaults(handler=BlacklistCommands.remove)
+
+
+class IndexCommandParser:
+    @staticmethod
+    def add_to(subparsers: argparse._SubParsersAction) -> None:
+        index_parser = subparsers.add_parser("index", help="Index stored video embeddings")
+        index_parser.add_argument("video_refs", nargs="*", metavar="video", help="Stored YouTube video URL or ID")
+        index_parser.add_argument(
+            "--include-without-transcript",
+            action="store_true",
+            help="Include stored videos without transcripts when indexing all videos",
+        )
+        index_parser.set_defaults(handler=IndexCommands.videos)
 
 
 class SetupCommandParser:

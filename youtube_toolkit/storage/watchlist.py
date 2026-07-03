@@ -168,6 +168,21 @@ def list_missing_watchlist_video_ids(connection: turso.Connection) -> list[str]:
     return [row["youtube_video_id"] for row in rows]
 
 
+def list_watchlist_video_ids_missing_embeddings(connection: turso.Connection) -> list[str]:
+    rows = connection.execute(
+        """
+        SELECT videos.youtube_video_id
+        FROM videos
+        JOIN watchlist_videos ON watchlist_videos.video_id = videos.youtube_video_id
+        WHERE videos.transcript IS NOT NULL
+            AND videos.transcript != ''
+            AND videos.embedding IS NULL
+        ORDER BY videos.upload_date DESC, videos.youtube_video_id DESC
+        """
+    ).fetchall()
+    return [row["youtube_video_id"] for row in rows]
+
+
 def list_recent_watchlist_video_payloads(
     connection: turso.Connection,
     *,

@@ -11,7 +11,7 @@ import urllib.request
 from ..audio_transcription import store_audio_transcript
 from ..identity import ALLOWED_CAPTION_HOST_SUFFIXES, VideoRef, validate_url
 from ..schemas import TranscriptChunk, TranscriptDocument, TranscriptSection, VideoMetadata
-from ..storage import get_connection, get_stored_video, upsert_video
+from ..storage import auto_index_video_embedding, get_connection, get_stored_video, upsert_video
 from .client import YtDlpClient
 
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
@@ -33,11 +33,14 @@ def fetch_transcript(
     *,
     options: TranscriptOptions | None = None,
     client: YtDlpClient | None = None,
+    auto_index: bool = True,
 ) -> TranscriptDocument:
     options = options or TranscriptOptions()
     if options == TranscriptOptions():
         stored_document = fetch_stored_transcript(video_ref)
         if stored_document is not None:
+            if auto_index:
+                index_stored_transcript(stored_document.metadata.video_id)
             return stored_document
 
     client = client or YtDlpClient()
@@ -48,10 +51,13 @@ def fetch_transcript(
             options=options,
         )
     except CaptionTranscriptUnavailable:
-        return fetch_stt_transcript(
+        document = fetch_stt_transcript(
             metadata_payload,
             client=client,
         )
+        if auto_index:
+            index_stored_transcript(document.metadata.video_id)
+        return document
 
     with get_connection() as connection:
         upsert_video(
@@ -59,7 +65,14 @@ def fetch_transcript(
             metadata_payload,
             transcript=document.text,
         )
+    if auto_index:
+        index_stored_transcript(document.metadata.video_id)
     return document
+
+
+def index_stored_transcript(youtube_video_id: str) -> None:
+    with get_connection() as connection:
+        auto_index_video_embedding(connection, youtube_video_id)
 
 
 def fetch_caption_transcript(

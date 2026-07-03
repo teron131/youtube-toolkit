@@ -22,6 +22,8 @@ def main(argv: list[str] | None = None) -> int:
             print(render_doctor(payload))
         elif args.command == "setup":
             print(render_model_setup(payload))
+        elif args.command == "index":
+            print(render_index(payload))
         else:
             emit_json(payload)
         return 0
@@ -98,6 +100,54 @@ def render_model_setup(payload: object) -> str:
             f"  llm        {llm_verification_text}",
         ]
     )
+
+
+def render_index(payload: object) -> str:
+    if not isinstance(payload, dict):
+        return str(payload)
+
+    indexed = payload_list(payload.get("indexed"))
+    skipped = payload_list(payload.get("skipped"))
+    failed = payload_list(payload.get("failed"))
+    lines = [
+        "Embedding Index",
+        f"  videos   {payload.get('videos', 0)}",
+        f"  indexed  {len(indexed)}{index_dimensions_text(indexed)}",
+        f"  skipped  {len(skipped)}",
+        f"  failed   {len(failed)}",
+    ]
+    append_index_details(lines, "Skipped", skipped)
+    append_index_details(lines, "Failed", failed)
+    return "\n".join(lines)
+
+
+def payload_list(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def index_dimensions_text(indexed: list[dict[str, object]]) -> str:
+    dimensions = {item.get("dimensions") for item in indexed if item.get("dimensions") is not None}
+    if len(dimensions) != 1:
+        return ""
+    dimension = dimensions.pop()
+    unit = "dimension" if dimension == 1 else "dimensions"
+    return f" ({dimension} {unit})"
+
+
+def append_index_details(
+    lines: list[str],
+    title: str,
+    items: list[dict[str, object]],
+) -> None:
+    if not items:
+        return
+    lines.extend(("", title))
+    for item in items:
+        video_id = item.get("video_id", "unknown")
+        detail = item.get("detail") or item.get("error") or item.get("status", "")
+        lines.append(f"  {video_id}  {detail}")
 
 
 def health_text(payload: object) -> str:

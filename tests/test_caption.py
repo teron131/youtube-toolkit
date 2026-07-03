@@ -47,6 +47,7 @@ def test_fetch_transcript_returns_stored_transcript_without_client(
     document = fetch_transcript(
         "https://www.youtube.com/watch?v=JpSHyEIZ_bo",
         client=FailingClient(),
+        auto_index=False,
     )
 
     assert document.metadata.video_id == "JpSHyEIZ_bo"
@@ -82,6 +83,7 @@ def test_fetch_transcript_does_not_use_stored_transcript_for_custom_options(
             "https://www.youtube.com/watch?v=JpSHyEIZ_bo",
             options=TranscriptOptions(languages=("zh",)),
             client=FailingClient(),
+            auto_index=False,
         )
 
 
@@ -117,7 +119,11 @@ def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
     monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
     monkeypatch.setattr("youtube_toolkit.audio_transcription.transcribe_audio_details", fake_transcribe_audio_details)
 
-    document = fetch_transcript("JpSHyEIZ_bo", client=FakeClient())
+    document = fetch_transcript(
+        "JpSHyEIZ_bo",
+        client=FakeClient(),
+        auto_index=False,
+    )
 
     assert document.metadata.video_id == "JpSHyEIZ_bo"
     assert document.metadata.title == "No captions"

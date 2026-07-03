@@ -33,7 +33,8 @@ Commands:
 - `channel videos <channel>`: list recent videos from one YouTube channel URL, handle, or channel ID
 - `watchlist add <channel...>`: persist one or more channels for later sync
 - `watchlist remove <channel...>`: stop watching one or more channels without deleting stored catalog data
-- `watchlist sync`: refresh watched channels, record discovered videos, and fetch missing transcripts
+- `watchlist sync`: refresh watched channels, record discovered videos, fetch missing transcripts, and auto-index embeddings when enabled
+- `index [video...]`: embed stored transcript text for semantic search and RAG prep
 - `watchlist schedule install|status|uninstall`: manage the macOS LaunchAgent for scheduled sync
 - `watchlist recent [channel...] --days N`: return objectively recent watched videos from the local DB without mutating storage
 - `blacklist add <channel...>`: exclude one or more channels from future search results
@@ -72,7 +73,7 @@ Storage lives in this checkout's `.cache/youtube.sqlite3` during source-checkout
 
 The schema source of truth is `youtube_toolkit/storage/schema.sql`; DB creation and doctor inspection both read that SQL file.
 
-Model configuration lives in `~/Library/Application Support/youtube-toolkit/config.env`. Use `youtube setup` to write `EMBEDDING_API_KEY`, `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`, `LLM_API_KEY`, `LLM_BASE_URL`, and `LLM_MODEL`; it can optionally verify the config by sending `Hello` to both model APIs. Use `--verify` to force the check or `--no-verify` to skip it. Environment variables with those names override the app-local file for one-off runs.
+Model configuration lives in `~/Library/Application Support/youtube-toolkit/config.env`. Bare `youtube setup` opens an Up/Down selector for embedding, LLM, settings, verification, and save. Flag-based setup writes `EMBEDDING_API_KEY`, `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`, `EMBEDDING_AUTO_INDEX`, `LLM_API_KEY`, `LLM_BASE_URL`, and `LLM_MODEL`; use `--verify` to force a `Hello` check, `--no-verify` to skip it, and `--no-auto-embeddings` to turn off automatic transcript embedding. Environment variables with those names override the app-local file for one-off runs.
 
 YouTube search via `yt-dlp` automatically applies stored blacklist channels and persists returned video metadata for later workflows. Transcript, channel listing, and watchlist commands also persist normalized channel/video rows.
 
