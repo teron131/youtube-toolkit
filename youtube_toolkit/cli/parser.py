@@ -160,27 +160,21 @@ class BlacklistCommandParser:
 class SetupCommandParser:
     @staticmethod
     def add_to(subparsers: argparse._SubParsersAction) -> None:
-        setup_parser = subparsers.add_parser("setup", help="Configure app-local settings")
-        setup_subparsers = setup_parser.add_subparsers(
-            dest="setup_command",
-            required=True,
-            metavar="{models}",
-        )
-        models_parser = setup_subparsers.add_parser("models", help="Configure model API keys, base URLs, and model IDs")
-        models_parser.add_argument("--embedding-api-key")
-        models_parser.add_argument("--embedding-base-url")
-        models_parser.add_argument("--embedding-model")
-        models_parser.add_argument("--embedding-dimensions", type=int)
-        models_parser.add_argument("--llm-api-key")
-        models_parser.add_argument("--llm-base-url")
-        models_parser.add_argument("--llm-model")
-        models_parser.add_argument(
+        setup_parser = subparsers.add_parser("setup", help="Configure model API keys, base URLs, and model IDs")
+        setup_parser.add_argument("--embedding-api-key")
+        setup_parser.add_argument("--embedding-base-url")
+        setup_parser.add_argument("--embedding-model")
+        setup_parser.add_argument("--embedding-dimensions", type=int)
+        setup_parser.add_argument("--llm-api-key")
+        setup_parser.add_argument("--llm-base-url")
+        setup_parser.add_argument("--llm-model")
+        setup_parser.add_argument(
             "--verify",
             action=argparse.BooleanOptionalAction,
             default=None,
             help="Send 'Hello' to the configured model APIs after saving",
         )
-        models_parser.set_defaults(handler=SetupCommands.models)
+        setup_parser.set_defaults(handler=SetupCommands.models)
 
 
 def add_doctor_parser(subparsers: argparse._SubParsersAction) -> None:

@@ -20,6 +20,8 @@ def main(argv: list[str] | None = None) -> int:
         payload = args.handler(args)
         if args.command == "doctor":
             print(render_doctor(payload))
+        elif args.command == "setup":
+            print(render_model_setup(payload))
         else:
             emit_json(payload)
         return 0
@@ -55,6 +57,40 @@ def render_doctor(payload: object) -> str:
             "Models",
             f"  embedding  {model_health_text(embedding, setup_hint='set EMBEDDING_API_KEY')}",
             f"  llm        {model_health_text(llm, setup_hint='set LLM_API_KEY, LLM_BASE_URL, LLM_MODEL')}",
+        ]
+    )
+
+
+def render_model_setup(payload: object) -> str:
+    if not isinstance(payload, dict):
+        return str(payload)
+
+    model_apis = payload.get("model_apis", {})
+    verification = payload.get("verification", {})
+    embedding = model_apis.get("embedding", {}) if isinstance(model_apis, dict) else {}
+    llm = model_apis.get("llm", {}) if isinstance(model_apis, dict) else {}
+    embedding_verification = verification.get("embedding", {}) if isinstance(verification, dict) else {}
+    llm_verification = verification.get("llm", {}) if isinstance(verification, dict) else {}
+    embedding_verification_text = verification_text(
+        embedding_verification,
+        ("Embedding API returned ", "Embedding verification failed: "),
+    )
+    llm_verification_text = verification_text(
+        llm_verification,
+        ("LLM API returned ", "LLM verification failed: "),
+    )
+    return "\n".join(
+        [
+            "Model Setup",
+            f"  config     {payload.get('config', 'unknown')}",
+            "",
+            "Models",
+            f"  embedding  {model_health_text(embedding, setup_hint='set EMBEDDING_API_KEY')}",
+            f"  llm        {model_health_text(llm, setup_hint='set LLM_API_KEY, LLM_BASE_URL, LLM_MODEL')}",
+            "",
+            "Verification",
+            f"  embedding  {embedding_verification_text}",
+            f"  llm        {llm_verification_text}",
         ]
     )
 
@@ -108,6 +144,18 @@ def model_health_text(
         return f"{status}{model_suffix}"
     hint = setup_hint if status == "missing" else str(payload.get("detail", ""))
     return f"{status}{model_suffix} - {hint}" if hint else f"{status}{model_suffix}"
+
+
+def verification_text(payload: object, detail_prefixes: tuple[str, ...]) -> str:
+    if not isinstance(payload, dict):
+        return str(payload)
+    status = str(payload.get("status", "unknown"))
+    detail = str(payload.get("detail", ""))
+    for prefix in detail_prefixes:
+        detail = detail.removeprefix(prefix)
+    if not detail or detail == "Verification skipped":
+        return status
+    return f"{status} - {detail}"
 
 
 def stdout_payload(payload: object, *, key: str | None = None) -> object:

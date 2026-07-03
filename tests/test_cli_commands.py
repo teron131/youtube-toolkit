@@ -148,6 +148,52 @@ def test_main_emits_doctor_as_human_report(
     assert "  llm        missing - set LLM_API_KEY, LLM_BASE_URL, LLM_MODEL" in output
 
 
+def test_main_emits_model_setup_as_human_report(
+    capsys,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    for key in MODEL_CONFIG_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+    assert (
+        main(
+            [
+                "setup",
+                "--embedding-api-key",
+                "embedding-key",
+                "--embedding-base-url",
+                "https://embedding.example/v1/",
+                "--embedding-model",
+                "embedding-model",
+                "--embedding-dimensions",
+                "512",
+                "--llm-api-key",
+                "llm-key",
+                "--llm-base-url",
+                "https://llm.example/v1/",
+                "--llm-model",
+                "summary-model",
+                "--no-verify",
+            ]
+        )
+        == 0
+    )
+
+    config_path = home / "Library" / "Application Support" / "youtube-toolkit" / "config.env"
+    output = capsys.readouterr().out
+    assert "Model Setup" in output
+    assert f"  config     {config_path}" in output
+    assert "  embedding  configured (embedding-model)" in output
+    assert "  llm        configured (summary-model)" in output
+    assert "Verification" in output
+    assert "  embedding  skipped" in output
+    assert "  llm        skipped" in output
+    assert config_path.exists()
+
+
 def test_model_api_health_reports_key_presence(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     for key in MODEL_CONFIG_ENV_KEYS:
@@ -205,7 +251,7 @@ def test_video_and_channel_command_groups_parse_public_actions() -> None:
     transcript_args = build_parser().parse_args(["video", "transcript", "JpSHyEIZ_bo"])
     channel_args = build_parser().parse_args(["channel", "videos", "@OpenAI", "--last", "5"])
     search_args = build_parser().parse_args(["search", "langgraph tutorial"])
-    setup_args = build_parser().parse_args(["setup", "models", "--llm-model", "summary-model", "--verify"])
+    setup_args = build_parser().parse_args(["setup", "--llm-model", "summary-model", "--verify"])
 
     assert metadata_args.video_command == "metadata"
     assert transcript_args.video_command == "transcript"
@@ -213,12 +259,12 @@ def test_video_and_channel_command_groups_parse_public_actions() -> None:
     assert channel_args.channel_ref == "@OpenAI"
     assert channel_args.last == 5
     assert search_args.command == "search"
-    assert setup_args.setup_command == "models"
+    assert setup_args.command == "setup"
     assert setup_args.llm_model == "summary-model"
     assert setup_args.verify is True
 
 
-def test_setup_models_writes_app_local_config(monkeypatch, tmp_path) -> None:
+def test_setup_writes_app_local_config(monkeypatch, tmp_path) -> None:
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
     for key in MODEL_CONFIG_ENV_KEYS:
@@ -227,7 +273,6 @@ def test_setup_models_writes_app_local_config(monkeypatch, tmp_path) -> None:
     args = build_parser().parse_args(
         [
             "setup",
-            "models",
             "--embedding-api-key",
             "embedding-key",
             "--embedding-base-url",
@@ -289,7 +334,7 @@ def test_setup_models_writes_app_local_config(monkeypatch, tmp_path) -> None:
     assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
 
 
-def test_setup_models_can_verify_saved_config(monkeypatch, tmp_path) -> None:
+def test_setup_can_verify_saved_config(monkeypatch, tmp_path) -> None:
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
     for key in MODEL_CONFIG_ENV_KEYS:
@@ -307,7 +352,6 @@ def test_setup_models_can_verify_saved_config(monkeypatch, tmp_path) -> None:
     args = build_parser().parse_args(
         [
             "setup",
-            "models",
             "--embedding-api-key",
             "embedding-key",
             "--embedding-base-url",
