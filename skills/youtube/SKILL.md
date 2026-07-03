@@ -26,7 +26,7 @@ uv run youtube <command>
 Commands:
 
 - `doctor`: print a readable status report with the local `yt-dlp` version, active database path, database schema health, schedule health, and model API config health
-- `setup models`: write app-local model API keys, base URLs, and model IDs
+- `setup`: write app-local model API keys, base URLs, and model IDs, then print a readable setup report
 - `search "<query>"`: query YouTube through `yt-dlp`, then apply local filters and blacklist rules
 - `video transcript <url-or-id>`: fetch and store a normalized transcript, then print JSON
 - `video metadata <url-or-id>`: print full `yt-dlp` metadata JSON
@@ -72,7 +72,7 @@ Storage lives in this checkout's `.cache/youtube.sqlite3` during source-checkout
 
 The schema source of truth is `youtube_toolkit/storage/schema.sql`; DB creation and doctor inspection both read that SQL file.
 
-Model configuration lives in `~/Library/Application Support/youtube-toolkit/config.env`. Use `youtube setup models` to write `EMBEDDING_API_KEY`, `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`, `LLM_API_KEY`, `LLM_BASE_URL`, and `LLM_MODEL`; it can optionally verify the config by sending `Hello` to both model APIs. Use `--verify` to force the check or `--no-verify` to skip it. Environment variables with those names override the app-local file for one-off runs.
+Model configuration lives in `~/Library/Application Support/youtube-toolkit/config.env`. Use `youtube setup` to write `EMBEDDING_API_KEY`, `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`, `LLM_API_KEY`, `LLM_BASE_URL`, and `LLM_MODEL`; it can optionally verify the config by sending `Hello` to both model APIs. Use `--verify` to force the check or `--no-verify` to skip it. Environment variables with those names override the app-local file for one-off runs.
 
 YouTube search via `yt-dlp` automatically applies stored blacklist channels and persists returned video metadata for later workflows. Transcript, channel listing, and watchlist commands also persist normalized channel/video rows.
 

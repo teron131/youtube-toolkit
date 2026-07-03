@@ -26,7 +26,7 @@ The toolkit intentionally ships a small working surface:
 - `youtube watchlist recent --days 3` returns recently uploaded videos from watched channels without mutating storage; pass channels after `recent` to narrow the scope
 - `youtube watchlist schedule install|status|uninstall` manages its macOS LaunchAgent
 - `youtube blacklist add <channel...>` and `youtube blacklist remove <channel...>` manage channels excluded from future search results
-- `youtube setup models` writes app-local model API keys, base URLs, and model IDs
+- `youtube setup` writes app-local model API keys, base URLs, and model IDs, then prints a readable setup report
 - `youtube doctor` prints a readable status report with the `yt-dlp` version, active database path, database schema health, watchlist schedule health, and model API config health
 
 Storage lives in this checkout's `.cache/youtube.sqlite3` during source-checkout usage. Installed CLI usage stores the database at `~/Library/Application Support/youtube-toolkit/youtube.sqlite3`. Set `YOUTUBE_TOOLKIT_STORAGE_HOME` to move it.
@@ -35,7 +35,7 @@ Storage lives in this checkout's `.cache/youtube.sqlite3` during source-checkout
 
 The schema source of truth is `youtube_toolkit/storage/schema.sql`; DB creation and doctor inspection both read that SQL file.
 
-Model configuration lives in `~/Library/Application Support/youtube-toolkit/config.env`. `youtube setup models` writes this app-local file with `0600` permissions, then asks whether to verify the config by sending `Hello` to the embedding and LLM APIs. Use `youtube setup models --verify` to force that check in scripts, or `youtube setup models --no-verify` to skip it. Environment variables override the file for one-off runs:
+Model configuration lives in `~/Library/Application Support/youtube-toolkit/config.env`. `youtube setup` writes this app-local file with `0600` permissions, then asks whether to verify the config by sending `Hello` to the embedding and LLM APIs. Use `youtube setup --verify` to force that check in scripts, or `youtube setup --no-verify` to skip it. Environment variables override the file for one-off runs:
 
 ```env
 EMBEDDING_API_KEY=
@@ -54,7 +54,7 @@ The default watchlist schedule runs every 12 hours, scans uploads from the last 
 ```bash
 uv sync
 uv tool install .
-youtube setup models
+youtube setup
 youtube doctor
 ```
 
@@ -77,7 +77,7 @@ youtube watchlist recent --days 3
 youtube watchlist recent @OpenAI @Anthropic --days 3
 youtube watchlist remove @OpenAI @Anthropic
 youtube blacklist add @SpamChannel UC123
-youtube setup models
+youtube setup
 ```
 
 ## Codex Skill
