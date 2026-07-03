@@ -1,4 +1,5 @@
 from pathlib import Path
+import sqlite3
 
 import pytest
 
@@ -8,6 +9,7 @@ from youtube_toolkit.schemas import ChannelIdentity
 from youtube_toolkit.storage import (
     DATABASE_FILENAME,
     STORAGE_DIRNAME,
+    database_schema_health,
     embed_text_with_gemini,
     get_connection,
     get_stored_video,
@@ -43,6 +45,65 @@ def test_installed_storage_path_is_user_app_state(monkeypatch, tmp_path) -> None
 
 def installed_connection_file(tmp_path: Path) -> Path:
     return tmp_path / "tool" / "site-packages" / "youtube_toolkit" / "storage" / "connection.py"
+
+
+def test_database_schema_health_reports_missing_db(tmp_path) -> None:
+    db_path = tmp_path / "missing.sqlite3"
+
+    assert database_schema_health(db_path) == {
+        "path": str(db_path),
+        "ok": False,
+        "status": "missing",
+        "detail": "Database file is missing",
+        "repair": "Run youtube setup database to create a fresh schema",
+    }
+
+
+def test_database_schema_health_accepts_current_schema(monkeypatch, tmp_path) -> None:
+    storage_home = tmp_path / "state"
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(storage_home))
+
+    with get_connection():
+        pass
+
+    assert database_schema_health(storage_home / "youtube.sqlite3") == {
+        "path": str(storage_home / "youtube.sqlite3"),
+        "ok": True,
+        "status": "ready",
+        "detail": "Schema has expected tables, columns, indexes, and foreign keys",
+    }
+
+
+def test_database_schema_health_warns_on_stale_fake_ids(tmp_path) -> None:
+    db_path = tmp_path / "youtube.sqlite3"
+    with sqlite3.connect(db_path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                youtube_channel_id TEXT UNIQUE
+            );
+            CREATE TABLE videos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                youtube_video_id TEXT UNIQUE,
+                channel_id INTEGER,
+                view_count INTEGER
+            );
+            CREATE TABLE channel_video_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT
+            );
+            """
+        )
+
+    payload = database_schema_health(db_path)
+
+    assert payload["path"] == str(db_path)
+    assert payload["ok"] is False
+    assert payload["status"] == "invalid"
+    assert "unexpected tables: channel_video_entries" in payload["detail"]
+    assert "channels has unexpected columns: id" in payload["detail"]
+    assert "videos has unexpected columns: id, view_count" in payload["detail"]
+    assert payload["repair"] == "Run youtube setup database to archive the current DB and create a fresh schema"
 
 
 def test_upsert_video_converts_title_to_hong_kong_traditional(

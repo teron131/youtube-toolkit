@@ -149,15 +149,26 @@ def test_status_reports_launchctl_state(
     ) -> subprocess.CompletedProcess[str]:
         assert label == "com.example.youtube-watch"
         assert check is False
-        return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        return subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="""
+state = not running
+runs = 2
+last exit code = 0
+run interval = 43200 seconds
+""",
+            stderr="",
+        )
 
     monkeypatch.setattr("youtube_toolkit.watchlist_schedule.print_launch_agent", fake_print_launch_agent)
 
     assert watchlist_schedule_status(label="com.example.youtube-watch") == {
         "label": "com.example.youtube-watch",
         "plist_path": str(plist_path),
-        "installed": True,
-        "loaded": True,
+        "ok": True,
+        "status": "idle",
+        "detail": "LaunchAgent is loaded and idle; runs every 43200 seconds",
     }
 
 

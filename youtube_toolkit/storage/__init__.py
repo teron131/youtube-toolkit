@@ -15,6 +15,7 @@ from .blacklist import (
 from .connection import (
     DATABASE_FILENAME,
     STORAGE_DIRNAME,
+    database_schema_health,
     get_connection,
     resolve_storage_dir,
 )
@@ -41,6 +42,7 @@ __all__ = [
     "EMBEDDING_BASE_URL",
     "STORAGE_DIRNAME",
     "EmbeddingSearchError",
+    "database_schema_health",
     "delete_blacklist_channel",
     "delete_watchlist_channel",
     "embed_text_with_gemini",
