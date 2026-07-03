@@ -26,9 +26,26 @@ The toolkit intentionally ships a small working surface:
 - `youtube watchlist recent --days 3` returns recently uploaded videos from watched channels without mutating storage; pass channels after `recent` to narrow the scope
 - `youtube watchlist schedule install|status|uninstall` manages its macOS LaunchAgent
 - `youtube blacklist add <channel...>` and `youtube blacklist remove <channel...>` manage channels excluded from future search results
-- `youtube doctor` returns JSON with the `yt-dlp` version and active database path
+- `youtube setup models` writes app-local model API keys, base URLs, and model IDs
+- `youtube doctor` prints a readable status report with the `yt-dlp` version, active database path, database schema health, watchlist schedule health, and model API config health
 
 Storage lives in this checkout's `.cache/youtube.sqlite3` during source-checkout usage. Installed CLI usage stores the database at `~/Library/Application Support/youtube-toolkit/youtube.sqlite3`. Set `YOUTUBE_TOOLKIT_STORAGE_HOME` to move it.
+
+`doctor` inspects the database schema without creating, migrating, or repairing the file. If the schema is stale or unexpected, it reports a warning and points to the future `youtube setup database` repair flow.
+
+The schema source of truth is `youtube_toolkit/storage/schema.sql`; DB creation and doctor inspection both read that SQL file.
+
+Model configuration lives in `~/Library/Application Support/youtube-toolkit/config.env`. `youtube setup models` writes this app-local file with `0600` permissions, then asks whether to verify the config by sending `Hello` to the embedding and LLM APIs. Use `youtube setup models --verify` to force that check in scripts, or `youtube setup models --no-verify` to skip it. Environment variables override the file for one-off runs:
+
+```env
+EMBEDDING_API_KEY=
+EMBEDDING_BASE_URL=https://generativelanguage.googleapis.com/v1beta
+EMBEDDING_MODEL=gemini-embedding-2
+EMBEDDING_DIMENSIONS=768
+LLM_API_KEY=
+LLM_BASE_URL=
+LLM_MODEL=
+```
 
 The default watchlist schedule runs every 12 hours, scans uploads from the last 3 days, and does not cap the number of videos fetched per watched channel.
 
@@ -37,6 +54,7 @@ The default watchlist schedule runs every 12 hours, scans uploads from the last 
 ```bash
 uv sync
 uv tool install .
+youtube setup models
 youtube doctor
 ```
 
@@ -59,6 +77,7 @@ youtube watchlist recent --days 3
 youtube watchlist recent @OpenAI @Anthropic --days 3
 youtube watchlist remove @OpenAI @Anthropic
 youtube blacklist add @SpamChannel UC123
+youtube setup models
 ```
 
 ## Codex Skill

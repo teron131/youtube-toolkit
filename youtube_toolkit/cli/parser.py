@@ -13,6 +13,7 @@ from ..watchlist_schedule import (
 from .commands import (
     BlacklistCommands,
     ChannelCommands,
+    SetupCommands,
     VideoCommands,
     WatchlistCommands,
     run_doctor,
@@ -28,6 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
     ChannelCommandParser.add_to(subparsers)
     WatchlistCommandParser.add_to(subparsers)
     BlacklistCommandParser.add_to(subparsers)
+    SetupCommandParser.add_to(subparsers)
     add_doctor_parser(subparsers)
     return parser
 
@@ -153,6 +155,32 @@ class BlacklistCommandParser:
         blacklist_remove_parser = blacklist_subparsers.add_parser("remove", help="Remove one or more channels from the search blacklist")
         add_channel_refs_arg(blacklist_remove_parser)
         blacklist_remove_parser.set_defaults(handler=BlacklistCommands.remove)
+
+
+class SetupCommandParser:
+    @staticmethod
+    def add_to(subparsers: argparse._SubParsersAction) -> None:
+        setup_parser = subparsers.add_parser("setup", help="Configure app-local settings")
+        setup_subparsers = setup_parser.add_subparsers(
+            dest="setup_command",
+            required=True,
+            metavar="{models}",
+        )
+        models_parser = setup_subparsers.add_parser("models", help="Configure model API keys, base URLs, and model IDs")
+        models_parser.add_argument("--embedding-api-key")
+        models_parser.add_argument("--embedding-base-url")
+        models_parser.add_argument("--embedding-model")
+        models_parser.add_argument("--embedding-dimensions", type=int)
+        models_parser.add_argument("--llm-api-key")
+        models_parser.add_argument("--llm-base-url")
+        models_parser.add_argument("--llm-model")
+        models_parser.add_argument(
+            "--verify",
+            action=argparse.BooleanOptionalAction,
+            default=None,
+            help="Send 'Hello' to the configured model APIs after saving",
+        )
+        models_parser.set_defaults(handler=SetupCommands.models)
 
 
 def add_doctor_parser(subparsers: argparse._SubParsersAction) -> None:

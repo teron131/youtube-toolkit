@@ -1,15 +1,32 @@
-"""Shared model API configuration."""
+"""Shared model API configuration from environment and app-local settings."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 import os
 from pathlib import Path
 from urllib.parse import urlparse
 
+APP_STATE_DIRNAME = "youtube-toolkit"
+CONFIG_FILENAME = "config.env"
 EMBEDDING_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 DEFAULT_EMBEDDING_MODEL = "gemini-embedding-2"
 DEFAULT_EMBEDDING_DIMENSIONALITY = 768
+MODEL_CONFIG_KEYS = (
+    "EMBEDDING_API_KEY",
+    "EMBEDDING_BASE_URL",
+    "EMBEDDING_MODEL",
+    "EMBEDDING_DIMENSIONS",
+    "LLM_API_KEY",
+    "LLM_BASE_URL",
+    "LLM_MODEL",
+)
+LLM_REQUIRED_CONFIG = (
+    ("LLM_API_KEY", "API key"),
+    ("LLM_BASE_URL", "base URL"),
+    ("LLM_MODEL", "model"),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,41 +66,86 @@ class EmbeddingConfig(ModelConfig):
 
 def embedding_config_from_env(
     *,
-    model: str = DEFAULT_EMBEDDING_MODEL,
-    api_key_env: str = "GEMINI_API_KEY",
-    base_url: str = EMBEDDING_BASE_URL,
-    output_dimensionality: int = DEFAULT_EMBEDDING_DIMENSIONALITY,
+    model: str | None = None,
+    base_url: str | None = None,
+    output_dimensionality: int | None = None,
 ) -> EmbeddingConfig:
-    api_key = env_value(api_key_env)
-    if api_key is None:
-        raise ValueError(f"Missing API key: set {api_key_env} in env or .env")
+    api_key = required_config_value("EMBEDDING_API_KEY")
     return EmbeddingConfig(
-        model=model,
+        model=model or config_value("EMBEDDING_MODEL") or DEFAULT_EMBEDDING_MODEL,
         api_key=api_key,
-        base_url=base_url,
-        output_dimensionality=output_dimensionality,
+        base_url=base_url or config_value("EMBEDDING_BASE_URL") or EMBEDDING_BASE_URL,
+        output_dimensionality=output_dimensionality or config_int_value("EMBEDDING_DIMENSIONS", DEFAULT_EMBEDDING_DIMENSIONALITY),
     )
 
 
-def env_value(name: str) -> str | None:
+def llm_config_from_env() -> ModelConfig:
+    return ModelConfig(
+        model=required_config_value("LLM_MODEL"),
+        api_key=required_config_value("LLM_API_KEY"),
+        base_url=required_config_value("LLM_BASE_URL"),
+    )
+
+
+def config_value(name: str) -> str | None:
+    if name not in MODEL_CONFIG_KEYS:
+        raise ValueError(f"Unsupported model config key: {name}")
+    return env_or_app_config_value(name)
+
+
+def env_or_app_config_value(name: str) -> str | None:
     value = os.environ.get(name, "").strip()
     if value:
         return value
-
-    repo_root = find_repo_root(Path.cwd()) or find_repo_root(Path(__file__))
-    if repo_root is None:
-        return None
-    return dotenv_values(repo_root / ".env").get(name)
+    return app_config_values().get(name)
 
 
-def find_repo_root(start: Path) -> Path | None:
-    current = start.resolve()
-    if current.is_file():
-        current = current.parent
-    for candidate in (current, *current.parents):
-        if (candidate / "pyproject.toml").exists():
-            return candidate
-    return None
+def required_config_value(name: str) -> str:
+    value = config_value(name)
+    if value is None:
+        raise ValueError(f"Missing model config value: {name}")
+    return value
+
+
+def config_int_value(
+    name: str,
+    default: int,
+) -> int:
+    value = config_value(name)
+    if value is None:
+        return default
+    if not value.isdigit():
+        raise ValueError(f"Model config value must be a positive integer: {name}")
+    return int(value)
+
+
+def app_config_path() -> Path:
+    return Path.home() / "Library" / "Application Support" / APP_STATE_DIRNAME / CONFIG_FILENAME
+
+
+def app_config_values() -> dict[str, str]:
+    return dotenv_values(app_config_path())
+
+
+def write_model_config(updates: Mapping[str, str | int | None]) -> Path:
+    values = app_config_values()
+    for key, raw_value in updates.items():
+        if key not in MODEL_CONFIG_KEYS:
+            raise ValueError(f"Unsupported model config key: {key}")
+        value = str(raw_value).strip() if raw_value is not None else ""
+        if "\n" in value or "\r" in value:
+            raise ValueError(f"Model config value cannot contain newlines: {key}")
+        if value:
+            values[key] = value
+        else:
+            values.pop(key, None)
+
+    file_path = app_config_path()
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    text = "".join(f"{key}={values[key]}\n" for key in MODEL_CONFIG_KEYS if values.get(key))
+    file_path.write_text(text, encoding="utf-8")
+    file_path.chmod(0o600)
+    return file_path
 
 
 def dotenv_values(file_path: Path) -> dict[str, str]:

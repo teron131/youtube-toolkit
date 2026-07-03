@@ -55,8 +55,9 @@ class WatchlistScheduleUninstallResult(TypedDict):
 class WatchlistScheduleStatusResult(TypedDict):
     label: str
     plist_path: str
-    installed: bool
-    loaded: bool
+    ok: bool
+    status: Literal["not_installed", "not_loaded", "running", "idle", "failed"]
+    detail: str
 
 
 class ScheduledSyncResult(TypedDict):
@@ -122,15 +123,58 @@ def watchlist_schedule_status(
     *,
     label: str = DEFAULT_WATCHLIST_SCHEDULE_LABEL,
 ) -> WatchlistScheduleStatusResult:
-    """Return file and launchd load status for the watchlist LaunchAgent."""
+    """Return file and launchd runtime status for the watchlist LaunchAgent."""
     ensure_launchd_supported()
     plist_path = launch_agent_path(label)
+    if not plist_path.exists():
+        return {
+            "label": label,
+            "plist_path": str(plist_path),
+            "ok": False,
+            "status": "not_installed",
+            "detail": "LaunchAgent plist is missing",
+        }
+
     print_result = print_launch_agent(label, check=False)
+    if print_result.returncode != 0:
+        detail = print_result.stderr.strip() or print_result.stdout.strip() or "LaunchAgent is not loaded"
+        return {
+            "label": label,
+            "plist_path": str(plist_path),
+            "ok": False,
+            "status": "not_loaded",
+            "detail": detail,
+        }
+
+    launchd_status = parse_launchctl_print(print_result.stdout)
+    launchd_state = launchd_status.get("launchd_state")
+    last_exit_code = launchd_status.get("last_exit_code")
+    interval_seconds = launchd_status.get("interval_seconds")
+    if launchd_state == "running":
+        return {
+            "label": label,
+            "plist_path": str(plist_path),
+            "ok": True,
+            "status": "running",
+            "detail": "Scheduled sync is running now",
+        }
+    if isinstance(last_exit_code, int) and last_exit_code != 0:
+        return {
+            "label": label,
+            "plist_path": str(plist_path),
+            "ok": False,
+            "status": "failed",
+            "detail": f"Last scheduled sync exited with code {last_exit_code}",
+        }
+    detail = "LaunchAgent is loaded and idle"
+    if isinstance(interval_seconds, int):
+        detail = f"{detail}; runs every {interval_seconds} seconds"
     return {
         "label": label,
         "plist_path": str(plist_path),
-        "installed": plist_path.exists(),
-        "loaded": print_result.returncode == 0,
+        "ok": True,
+        "status": "idle",
+        "detail": detail,
     }
 
 
@@ -260,6 +304,23 @@ def print_launch_agent(
         ["print", f"{launchctl_domain()}/{label}"],
         check=check,
     )
+
+
+def parse_launchctl_print(output: str) -> dict[str, int | str]:
+    status: dict[str, int | str] = {}
+    for line in output.splitlines():
+        key, separator, value = line.strip().partition(" = ")
+        if not separator:
+            continue
+        if key == "state" and "launchd_state" not in status:
+            status["launchd_state"] = value
+        elif key == "last exit code" and value.lstrip("-").isdigit():
+            status["last_exit_code"] = int(value)
+        elif key == "run interval":
+            interval_value = value.removesuffix(" seconds")
+            if interval_value.isdigit():
+                status["interval_seconds"] = int(interval_value)
+    return status
 
 
 def run_launchctl(

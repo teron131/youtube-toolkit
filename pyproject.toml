@@ -1,6 +1,6 @@
 [project]
 name = "youtube-toolkit"
-version = "0.8.2"
+version = "0.9.0"
 description = "Transcript-first YouTube research toolkit for agents and local workflows"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -28,6 +28,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["youtube_toolkit"]
+artifacts = ["youtube_toolkit/storage/schema.sql"]
 
 [tool.ruff]
 line-length = 180

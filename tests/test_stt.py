@@ -22,8 +22,6 @@ def test_xai_stt_response_normalizes_to_plain_contract() -> None:
     assert result == SpeechTranscription(
         text="transcript text",
         language="en",
-        duration_seconds=42.5,
-        word_count=2,
     )
 
 
@@ -42,8 +40,6 @@ def test_elevenlabs_stt_response_normalizes_to_plain_contract() -> None:
     assert result == SpeechTranscription(
         text="transcript text",
         language="en",
-        duration_seconds=1.0,
-        word_count=2,
     )
 
 
@@ -68,7 +64,7 @@ def test_transcribe_audio_returns_plain_provider_text(tmp_path, monkeypatch) -> 
     assert result == "数据库"
 
 
-def test_transcribe_audio_details_preserves_provider_fields(tmp_path, monkeypatch) -> None:
+def test_transcribe_audio_details_returns_plain_contract(tmp_path, monkeypatch) -> None:
     audio_path = tmp_path / "audio.mp3"
     audio_path.write_bytes(b"audio")
 
@@ -92,8 +88,6 @@ def test_transcribe_audio_details_preserves_provider_fields(tmp_path, monkeypatc
     assert transcribe_audio_details(audio_path) == SpeechTranscription(
         text="数据库",
         language="zh",
-        duration_seconds=12.5,
-        word_count=1,
     )
 
 
