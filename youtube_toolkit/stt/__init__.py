@@ -5,7 +5,7 @@ from .common import (
     transcribe_audio,
     transcribe_audio_details,
 )
-from .schemas import SpeechTranscription
+from .transcription import SpeechTranscription
 
 __all__ = [
     "SpeechToTextOptions",
