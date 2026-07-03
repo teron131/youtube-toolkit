@@ -13,11 +13,13 @@ CONFIG_FILENAME = "config.env"
 EMBEDDING_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 DEFAULT_EMBEDDING_MODEL = "gemini-embedding-2"
 DEFAULT_EMBEDDING_DIMENSIONALITY = 768
+DEFAULT_EMBEDDING_AUTO_INDEX = True
 MODEL_CONFIG_KEYS = (
     "EMBEDDING_API_KEY",
     "EMBEDDING_BASE_URL",
     "EMBEDDING_MODEL",
     "EMBEDDING_DIMENSIONS",
+    "EMBEDDING_AUTO_INDEX",
     "LLM_API_KEY",
     "LLM_BASE_URL",
     "LLM_MODEL",
@@ -79,6 +81,10 @@ def embedding_config_from_env(
     )
 
 
+def embedding_auto_index_enabled() -> bool:
+    return config_bool_value("EMBEDDING_AUTO_INDEX", DEFAULT_EMBEDDING_AUTO_INDEX)
+
+
 def llm_config_from_env() -> ModelConfig:
     return ModelConfig(
         model=required_config_value("LLM_MODEL"),
@@ -117,6 +123,21 @@ def config_int_value(
     if not value.isdigit():
         raise ValueError(f"Model config value must be a positive integer: {name}")
     return int(value)
+
+
+def config_bool_value(
+    name: str,
+    default: bool,
+) -> bool:
+    value = config_value(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"Model config value must be a boolean: {name}")
 
 
 def app_config_path() -> Path:

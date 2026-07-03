@@ -66,9 +66,11 @@ def render_model_setup(payload: object) -> str:
         return str(payload)
 
     model_apis = payload.get("model_apis", {})
+    settings = payload.get("settings", {})
     verification = payload.get("verification", {})
     embedding = model_apis.get("embedding", {}) if isinstance(model_apis, dict) else {}
     llm = model_apis.get("llm", {}) if isinstance(model_apis, dict) else {}
+    auto_embeddings = settings.get("auto_embeddings") if isinstance(settings, dict) else None
     embedding_verification = verification.get("embedding", {}) if isinstance(verification, dict) else {}
     llm_verification = verification.get("llm", {}) if isinstance(verification, dict) else {}
     embedding_verification_text = verification_text(
@@ -87,6 +89,9 @@ def render_model_setup(payload: object) -> str:
             "Models",
             f"  embedding  {model_health_text(embedding, setup_hint='set EMBEDDING_API_KEY')}",
             f"  llm        {model_health_text(llm, setup_hint='set LLM_API_KEY, LLM_BASE_URL, LLM_MODEL')}",
+            "",
+            "Settings",
+            f"  auto index {setting_text(auto_embeddings)}",
             "",
             "Verification",
             f"  embedding  {embedding_verification_text}",
@@ -144,6 +149,14 @@ def model_health_text(
         return f"{status}{model_suffix}"
     hint = setup_hint if status == "missing" else str(payload.get("detail", ""))
     return f"{status}{model_suffix} - {hint}" if hint else f"{status}{model_suffix}"
+
+
+def setting_text(value: object) -> str:
+    if value is True:
+        return "on"
+    if value is False:
+        return "off"
+    return "unknown"
 
 
 def verification_text(payload: object, detail_prefixes: tuple[str, ...]) -> str:
