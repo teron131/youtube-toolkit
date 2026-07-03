@@ -116,4 +116,32 @@ def merge_channel_rows(
             ),
         )
 
+    if channel_embedding_source_changed(rows, final_channel_id, final_channel_handle):
+        clear_channel_video_embeddings(connection, final_channel_id)
+
     return final_channel_id
+
+
+def channel_embedding_source_changed(
+    rows: list[turso.Row],
+    final_channel_id: str,
+    final_channel_handle: str | None,
+) -> bool:
+    return any(row["youtube_channel_id"] != final_channel_id for row in rows) or (
+        final_channel_handle is not None and any(row["channel_handle"] != final_channel_handle for row in rows)
+    )
+
+
+def clear_channel_video_embeddings(
+    connection: turso.Connection,
+    youtube_channel_id: str,
+) -> None:
+    connection.execute(
+        """
+        UPDATE videos
+        SET embedding_content_hash = NULL,
+            embedding = NULL
+        WHERE channel_id = ?
+        """,
+        (youtube_channel_id,),
+    )

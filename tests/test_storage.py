@@ -9,6 +9,7 @@ from youtube_toolkit.schemas import ChannelIdentity
 from youtube_toolkit.storage import (
     DATABASE_FILENAME,
     STORAGE_DIRNAME,
+    auto_index_video_embedding,
     database_schema_health,
     embed_text_with_gemini,
     get_connection,
@@ -224,6 +225,129 @@ def test_upsert_video_links_known_channel_from_handle_only_metadata(
     assert payload["channel_handle"] == "@OpenAI"
 
 
+def test_upsert_video_clears_embedding_when_channel_handle_changes(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "Semiconductor cycle",
+                "channel_id": "UC123",
+                "channel_handle": "@OldChannel",
+            },
+            transcript="晶片需求和 GPU 投资回升",
+        )
+        index_video_embedding(connection, "JpSHyEIZ_bo", embed_text=fake_embed)
+
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "channel_id": "UC123",
+                "channel_handle": "@NewChannel",
+            },
+        )
+        row = connection.execute(
+            """
+            SELECT embedding_content_hash, embedding
+            FROM videos
+            WHERE youtube_video_id = ?
+            """,
+            ("JpSHyEIZ_bo",),
+        ).fetchone()
+
+    assert row is not None
+    assert row["embedding_content_hash"] is None
+    assert row["embedding"] is None
+
+
+def test_upsert_video_clears_embedding_when_channel_id_changes(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "Semiconductor cycle",
+                "channel_id": "UC123",
+                "channel_handle": "@OldChannel",
+            },
+            transcript="晶片需求和 GPU 投资回升",
+        )
+        index_video_embedding(connection, "JpSHyEIZ_bo", embed_text=fake_embed)
+
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "channel_id": "UC456",
+                "channel_handle": "@NewChannel",
+            },
+        )
+        row = connection.execute(
+            """
+            SELECT embedding_content_hash, embedding
+            FROM videos
+            WHERE youtube_video_id = ?
+            """,
+            ("JpSHyEIZ_bo",),
+        ).fetchone()
+
+    assert row is not None
+    assert row["embedding_content_hash"] is None
+    assert row["embedding"] is None
+
+
+def test_upsert_video_keeps_embedding_when_upload_date_changes(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "Semiconductor cycle",
+                "upload_date": "20260620",
+            },
+            transcript="晶片需求和 GPU 投资回升",
+        )
+        index_video_embedding(connection, "JpSHyEIZ_bo", embed_text=fake_embed)
+
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "upload_date": "20260621",
+            },
+        )
+
+    with sqlite3.connect(tmp_path / "state" / DATABASE_FILENAME) as connection:
+        row = connection.execute(
+            """
+            SELECT embedding_content_hash, embedding
+            FROM videos
+            WHERE youtube_video_id = ?
+            """,
+            ("JpSHyEIZ_bo",),
+        ).fetchone()
+
+    assert row is not None
+    assert row[0] is not None
+    assert row[1] is not None
+
+
 def test_get_stored_video_returns_one_payload_by_url(
     monkeypatch,
     tmp_path,
@@ -382,6 +506,8 @@ def test_search_stored_videos_semantic_search_uses_saved_embeddings(
             {
                 "id": "JpSHyEIZ_bo",
                 "title": "Semiconductor cycle",
+                "channel_id": "UC123",
+                "channel_handle": "@MarketChannel",
             },
             transcript="晶片需求和 GPU 投资回升",
         )
@@ -393,7 +519,23 @@ def test_search_stored_videos_semantic_search_uses_saved_embeddings(
             },
             transcript="番茄酱和意大利面",
         )
-        embedding_payload = index_video_embedding(connection, "JpSHyEIZ_bo", embed_text=fake_embed)
+        embedded_texts: list[str] = []
+
+        def capture_embed(text: str) -> list[float]:
+            embedded_texts.append(text)
+            return fake_embed(text)
+
+        embedding_payload = index_video_embedding(connection, "JpSHyEIZ_bo", embed_text=capture_embed)
+        assert embedding_payload is not None
+        assert embedding_payload.pop("content_hash")
+        assert embedded_texts == ["Semiconductor cycle\n@MarketChannel\n晶片需求和 GPU 投资回升"]
+        assert embedding_payload == {
+            "video_id": "JpSHyEIZ_bo",
+            "dimensions": 2,
+        }
+        index_video_embedding(connection, "dQw4w9WgXcQ", embed_text=fake_embed)
+
+    with sqlite3.connect(tmp_path / "state" / DATABASE_FILENAME) as connection:
         stored_embedding = connection.execute(
             """
             SELECT embedding_content_hash, typeof(embedding) AS embedding_type
@@ -402,17 +544,12 @@ def test_search_stored_videos_semantic_search_uses_saved_embeddings(
             """,
             ("JpSHyEIZ_bo",),
         ).fetchone()
-        assert embedding_payload is not None
-        assert embedding_payload.pop("content_hash")
-        assert stored_embedding is not None
-        assert stored_embedding["embedding_content_hash"]
-        assert stored_embedding["embedding_type"] == "blob"
-        assert embedding_payload == {
-            "video_id": "JpSHyEIZ_bo",
-            "dimensions": 2,
-        }
-        index_video_embedding(connection, "dQw4w9WgXcQ", embed_text=fake_embed)
 
+    assert stored_embedding is not None
+    assert stored_embedding[0]
+    assert stored_embedding[1] == "blob"
+
+    with get_connection() as connection:
         results = search_stored_videos(
             connection,
             "GPU capex",
@@ -422,6 +559,109 @@ def test_search_stored_videos_semantic_search_uses_saved_embeddings(
 
     assert results[0]["video_id"] == "JpSHyEIZ_bo"
     assert results[0]["semantic_score"] == pytest.approx(1.0)
+
+
+def test_index_video_embedding_persists_after_connection_close(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    storage_home = tmp_path / "state"
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(storage_home))
+
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "Semiconductor cycle",
+            },
+            transcript="晶片需求和 GPU 投资回升",
+        )
+
+    with get_connection() as connection:
+        index_video_embedding(connection, "JpSHyEIZ_bo", embed_text=fake_embed)
+
+    with sqlite3.connect(storage_home / DATABASE_FILENAME) as connection:
+        row = connection.execute(
+            """
+            SELECT
+                embedding_content_hash IS NOT NULL,
+                embedding IS NOT NULL,
+                typeof(embedding),
+                length(embedding)
+            FROM videos
+            WHERE youtube_video_id = ?
+            """,
+            ("JpSHyEIZ_bo",),
+        ).fetchone()
+
+    assert row == (1, 1, "blob", 8)
+
+
+def test_auto_index_video_embedding_respects_config_toggle(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("EMBEDDING_AUTO_INDEX", "false")
+
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "Semiconductor cycle",
+            },
+            transcript="晶片需求和 GPU 投资回升",
+        )
+
+        assert auto_index_video_embedding(connection, "JpSHyEIZ_bo", embed_text=fake_embed) == {
+            "status": "skipped",
+            "video_id": "JpSHyEIZ_bo",
+            "detail": "Auto embedding is disabled",
+        }
+
+
+def test_auto_index_video_embedding_reports_failures(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("EMBEDDING_AUTO_INDEX", "true")
+
+    def fail_embed(_text: str):
+        raise RuntimeError("embedding unavailable")
+
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "Semiconductor cycle",
+            },
+            transcript="晶片需求和 GPU 投资回升",
+        )
+
+        assert auto_index_video_embedding(connection, "JpSHyEIZ_bo", embed_text=fail_embed) == {
+            "status": "failed",
+            "video_id": "JpSHyEIZ_bo",
+            "error": "embedding unavailable",
+        }
+
+
+def test_auto_index_video_embedding_reports_invalid_toggle(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("EMBEDDING_AUTO_INDEX", "maybe")
+
+    with get_connection() as connection:
+        assert auto_index_video_embedding(connection, "JpSHyEIZ_bo", embed_text=fake_embed) == {
+            "status": "failed",
+            "video_id": "JpSHyEIZ_bo",
+            "error": "Model config value must be a boolean: EMBEDDING_AUTO_INDEX",
+        }
 
 
 def test_embed_text_with_gemini_uses_embedding_config(monkeypatch) -> None:
@@ -588,9 +828,12 @@ def test_search_stored_videos_can_sort_by_relevance_score(
             },
             transcript="pasta sauce",
         )
+    with get_connection() as connection:
         index_video_embedding(connection, "JpSHyEIZ_bo", embed_text=fake_embed)
+    with get_connection() as connection:
         index_video_embedding(connection, "dQw4w9WgXcQ", embed_text=fake_embed)
 
+    with get_connection() as connection:
         results = search_stored_videos(
             connection,
             "GPU capex",
@@ -628,9 +871,12 @@ def test_search_stored_videos_keeps_upload_date_sort_with_semantic_expansion(
             },
             transcript="pasta sauce",
         )
+    with get_connection() as connection:
         index_video_embedding(connection, "JpSHyEIZ_bo", embed_text=fake_embed)
+    with get_connection() as connection:
         index_video_embedding(connection, "dQw4w9WgXcQ", embed_text=fake_embed)
 
+    with get_connection() as connection:
         results = search_stored_videos(
             connection,
             "GPU capex",

@@ -10,7 +10,7 @@ from youtube_toolkit import cli
 from youtube_toolkit.cli import commands, main
 from youtube_toolkit.cli.parser import build_parser
 from youtube_toolkit.schemas import ChannelIdentity
-from youtube_toolkit.storage import get_connection, upsert_watchlist_channel
+from youtube_toolkit.storage import get_connection, upsert_video, upsert_watchlist_channel
 
 MODEL_CONFIG_ENV_KEYS = (
     "EMBEDDING_API_KEY",
@@ -294,6 +294,7 @@ def test_video_and_channel_command_groups_parse_public_actions() -> None:
     transcript_args = build_parser().parse_args(["video", "transcript", "JpSHyEIZ_bo"])
     channel_args = build_parser().parse_args(["channel", "videos", "@OpenAI", "--last", "5"])
     search_args = build_parser().parse_args(["search", "langgraph tutorial"])
+    index_args = build_parser().parse_args(["index", "JpSHyEIZ_bo"])
     setup_args = build_parser().parse_args(["setup", "--llm-model", "summary-model", "--no-auto-embeddings", "--verify"])
 
     assert metadata_args.video_command == "metadata"
@@ -302,10 +303,126 @@ def test_video_and_channel_command_groups_parse_public_actions() -> None:
     assert channel_args.channel_ref == "@OpenAI"
     assert channel_args.last == 5
     assert search_args.command == "search"
+    assert index_args.command == "index"
+    assert index_args.video_refs == ["JpSHyEIZ_bo"]
+    assert index_args.include_without_transcript is False
     assert setup_args.command == "setup"
     assert setup_args.llm_model == "summary-model"
     assert setup_args.auto_embeddings is False
     assert setup_args.verify is True
+
+
+def test_index_command_indexes_stored_transcript_videos(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+    indexed_video_ids: list[str] = []
+
+    def fake_index_video_embedding(connection, video_id: str):
+        indexed_video_ids.append(video_id)
+        return {
+            "video_id": video_id,
+            "dimensions": 2,
+            "content_hash": "hash",
+        }
+
+    monkeypatch.setattr(commands, "index_video_embedding", fake_index_video_embedding)
+
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "Semiconductor cycle",
+            },
+            transcript="晶片需求和 GPU 投资回升",
+        )
+        upsert_video(
+            connection,
+            {
+                "id": "dQw4w9WgXcQ",
+                "title": "No transcript",
+            },
+        )
+
+    payload = commands.IndexCommands.videos(
+        argparse.Namespace(
+            video_refs=[],
+            include_without_transcript=False,
+        )
+    )
+
+    assert indexed_video_ids == ["JpSHyEIZ_bo"]
+    assert payload == {
+        "videos": 1,
+        "indexed": [
+            {
+                "status": "indexed",
+                "video_id": "JpSHyEIZ_bo",
+                "dimensions": 2,
+            }
+        ],
+        "skipped": [],
+        "failed": [],
+    }
+
+
+def test_index_command_reports_missing_explicit_video(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    payload = commands.IndexCommands.videos(
+        argparse.Namespace(
+            video_refs=["JpSHyEIZ_bo"],
+            include_without_transcript=False,
+        )
+    )
+
+    assert payload == {
+        "videos": 1,
+        "indexed": [],
+        "skipped": [
+            {
+                "status": "skipped",
+                "video_id": "JpSHyEIZ_bo",
+                "detail": "Video is not stored",
+            }
+        ],
+        "failed": [],
+    }
+
+
+def test_main_emits_index_as_human_report(
+    capsys,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    assert main(["index", "JpSHyEIZ_bo"]) == 0
+
+    output = capsys.readouterr().out
+    assert output == ("Embedding Index\n  videos   1\n  indexed  0\n  skipped  1\n  failed   0\n\nSkipped\n  JpSHyEIZ_bo  Video is not stored\n")
+
+
+def test_render_index_summarizes_successes() -> None:
+    assert cli.render_index(
+        {
+            "videos": 7,
+            "indexed": [
+                {
+                    "status": "indexed",
+                    "video_id": "JpSHyEIZ_bo",
+                    "dimensions": 768,
+                }
+            ],
+            "skipped": [],
+            "failed": [],
+        }
+    ) == ("Embedding Index\n  videos   7\n  indexed  1 (768 dimensions)\n  skipped  0\n  failed   0")
 
 
 def test_setup_writes_app_local_config(monkeypatch, tmp_path) -> None:

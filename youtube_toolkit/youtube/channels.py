@@ -14,17 +14,20 @@ from ..identity import ChannelRef, ChannelRefInput, YouTubeRefs, normalize_chann
 from ..schemas import (
     ChannelIdentity,
     ChannelRemovalResult,
+    EmbeddingIndexResult,
     TranscriptFetchResult,
     WatchlistSyncResult,
     extract_channel_identity,
 )
 from ..storage import (
+    auto_index_video_embedding,
     delete_blacklist_channel,
     delete_watchlist_channel,
     get_connection,
     list_missing_watchlist_video_ids,
     list_recent_watchlist_video_payloads,
     list_watchlist_channel_refs,
+    list_watchlist_video_ids_missing_embeddings,
     store_channel_listing,
     store_watchlist_channel_listing,
     upsert_blacklist_channel,
@@ -195,7 +198,6 @@ def _add_channel_memberships(
         channel_identity = extract_channel_identity(metadata)
         channel = channel_identity.channel_handle or channel_identity.youtube_channel_id or channel_ref
         with get_connection() as connection:
-            store_channel_listing(connection, metadata)
             add_membership(connection, channel_identity)
         channels.append(channel)
     return channels
@@ -275,6 +277,7 @@ def sync_watchlist(
             "channels": [],
             "new_videos": [],
             "transcripts": [],
+            "embeddings": [],
         }
 
     fetched_channels = _map_concurrently(
@@ -295,12 +298,16 @@ def sync_watchlist(
 
     with get_connection() as connection:
         missing_video_ids = list_missing_watchlist_video_ids(connection)
+        missing_embedding_video_ids = list_watchlist_video_ids_missing_embeddings(connection)
 
     transcripts = fetch_watchlist_transcripts(missing_video_ids)
+    embeddings = index_watchlist_embeddings(missing_embedding_video_ids)
+    embeddings.extend(transcript["embedding"] for transcript in transcripts if "embedding" in transcript)
     return {
         "channels": watched_channel_refs,
         "new_videos": new_video_ids,
         "transcripts": transcripts,
+        "embeddings": embeddings,
     }
 
 
@@ -309,10 +316,19 @@ def fetch_watchlist_transcripts(
 ) -> list[TranscriptFetchResult]:
     def fetch(video_id: str) -> TranscriptFetchResult:
         try:
-            document = fetch_transcript(video_id)
+            document = fetch_transcript(
+                video_id,
+                auto_index=False,
+            )
+            with get_connection() as connection:
+                embedding = auto_index_video_embedding(
+                    connection,
+                    document.metadata.video_id,
+                )
             return {
                 "status": "stored",
                 "video_id": document.metadata.video_id,
+                "embedding": embedding,
             }
         except Exception as exc:
             return {
@@ -322,6 +338,14 @@ def fetch_watchlist_transcripts(
             }
 
     return _map_concurrently(video_ids, fetch)
+
+
+def index_watchlist_embeddings(video_ids: list[str]) -> list[EmbeddingIndexResult]:
+    def index(video_id: str) -> EmbeddingIndexResult:
+        with get_connection() as connection:
+            return auto_index_video_embedding(connection, video_id)
+
+    return _map_concurrently(video_ids, index)
 
 
 def list_recent_watchlist_videos(

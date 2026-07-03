@@ -8,6 +8,7 @@ import subprocess
 import sys
 from typing import Any
 from urllib.parse import urlencode
+from uuid import uuid4
 
 from ..identity import ALLOWED_VIDEO_HOSTS, VideoRef, normalize_youtube_url, require_video_id, validate_url
 
@@ -96,9 +97,8 @@ class YtDlpClient:
         video_id = require_video_id(video_ref)
         url = normalize_youtube_url(video_ref)
         validate_url(url, allowed_hosts=ALLOWED_VIDEO_HOSTS)
-        output_stem = DEFAULT_AUDIO_DIR / video_id
+        output_stem = DEFAULT_AUDIO_DIR / f"{video_id}-{uuid4().hex}"
         output_stem.parent.mkdir(parents=True, exist_ok=True)
-        existing_paths = {path.resolve() for path in output_stem.parent.glob(f"{output_stem.name}.*") if path.is_file()}
         command = [
             *self.command_prefix(),
             "--no-playlist",
@@ -120,12 +120,6 @@ class YtDlpClient:
             detail = result.stderr.strip() or "yt-dlp audio download failed"
             raise RuntimeError(detail)
         candidates = [path for path in output_stem.parent.glob(f"{output_stem.name}.*") if path.is_file()]
-        new_candidates = [path for path in candidates if path.resolve() not in existing_paths]
-        if new_candidates:
-            return max(
-                new_candidates,
-                key=lambda path: path.stat().st_mtime,
-            )
         if candidates:
             return max(
                 candidates,

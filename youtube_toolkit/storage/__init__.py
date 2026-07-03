@@ -22,8 +22,10 @@ from .connection import (
 from .search import get_stored_video, search_stored_videos
 from .semantic import (
     EmbeddingSearchError,
+    auto_index_video_embedding,
     embed_text_with_gemini,
     index_video_embedding,
+    list_video_ids_for_embedding_index,
 )
 from .videos import store_channel_listing, upsert_video, upsert_video_summary
 from .watchlist import (
@@ -31,6 +33,7 @@ from .watchlist import (
     list_missing_watchlist_video_ids,
     list_recent_watchlist_video_payloads,
     list_watchlist_channel_refs,
+    list_watchlist_video_ids_missing_embeddings,
     store_watchlist_channel_listing,
     upsert_watchlist_channel,
 )
@@ -42,6 +45,7 @@ __all__ = [
     "EMBEDDING_BASE_URL",
     "STORAGE_DIRNAME",
     "EmbeddingSearchError",
+    "auto_index_video_embedding",
     "database_schema_health",
     "delete_blacklist_channel",
     "delete_watchlist_channel",
@@ -52,7 +56,9 @@ __all__ = [
     "list_blacklist_channel_identities",
     "list_missing_watchlist_video_ids",
     "list_recent_watchlist_video_payloads",
+    "list_video_ids_for_embedding_index",
     "list_watchlist_channel_refs",
+    "list_watchlist_video_ids_missing_embeddings",
     "resolve_storage_dir",
     "search_stored_videos",
     "store_channel_listing",

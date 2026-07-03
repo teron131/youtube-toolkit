@@ -9,6 +9,7 @@ import getpass
 import sys
 from typing import Any, Literal, NotRequired, TypedDict
 
+from ..identity import require_video_id
 from ..model_config import (
     DEFAULT_EMBEDDING_DIMENSIONALITY,
     DEFAULT_EMBEDDING_MODEL,
@@ -22,8 +23,16 @@ from ..model_config import (
     llm_config_from_env,
     write_model_config,
 )
-from ..schemas import ChannelRemovalResult, WatchlistSyncResult
-from ..storage import DATABASE_FILENAME, database_schema_health, embed_text_with_gemini, resolve_storage_dir
+from ..schemas import ChannelRemovalResult, EmbeddingIndexResult, WatchlistSyncResult
+from ..storage import (
+    DATABASE_FILENAME,
+    database_schema_health,
+    embed_text_with_gemini,
+    get_connection,
+    index_video_embedding,
+    list_video_ids_for_embedding_index,
+    resolve_storage_dir,
+)
 from ..storage.connection import DatabaseSchemaHealthResult
 from ..watchlist_schedule import (
     DEFAULT_WATCHLIST_SCHEDULE_LABEL,
@@ -103,6 +112,13 @@ class WatchlistScheduleHealthResult(TypedDict):
     plist_path: NotRequired[str]
 
 
+class IndexCommandResult(TypedDict):
+    videos: int
+    indexed: list[EmbeddingIndexResult]
+    skipped: list[EmbeddingIndexResult]
+    failed: list[EmbeddingIndexResult]
+
+
 class VideoCommands:
     @staticmethod
     def transcript(args: argparse.Namespace) -> dict[str, Any]:
@@ -179,6 +195,39 @@ class BlacklistCommands:
         return remove_blacklist_channels(args.channel_refs)
 
 
+class IndexCommands:
+    @staticmethod
+    def videos(args: argparse.Namespace) -> IndexCommandResult:
+        video_ids = [require_video_id(video_ref) for video_ref in args.video_refs]
+        indexed: list[EmbeddingIndexResult] = []
+        skipped: list[EmbeddingIndexResult] = []
+        failed: list[EmbeddingIndexResult] = []
+
+        if not video_ids:
+            with get_connection() as connection:
+                video_ids = list_video_ids_for_embedding_index(
+                    connection,
+                    require_transcript=not args.include_without_transcript,
+                )
+
+        for video_id in video_ids:
+            with get_connection() as connection:
+                result = index_one_video(connection, video_id)
+            if result["status"] == "indexed":
+                indexed.append(result)
+            elif result["status"] == "skipped":
+                skipped.append(result)
+            else:
+                failed.append(result)
+
+        return {
+            "videos": len(video_ids),
+            "indexed": indexed,
+            "skipped": skipped,
+            "failed": failed,
+        }
+
+
 class SetupCommands:
     @staticmethod
     def models(args: argparse.Namespace) -> ModelSetupResult:
@@ -190,6 +239,31 @@ class SetupCommands:
             draft,
             verify=args.verify if args.verify is not None else False,
         )
+
+
+def index_one_video(
+    connection: Any,
+    video_id: str,
+) -> EmbeddingIndexResult:
+    try:
+        payload = index_video_embedding(connection, video_id)
+    except Exception as error:
+        return {
+            "status": "failed",
+            "video_id": video_id,
+            "error": str(error),
+        }
+    if payload is None:
+        return {
+            "status": "skipped",
+            "video_id": video_id,
+            "detail": "Video is not stored",
+        }
+    return {
+        "status": "indexed",
+        "video_id": payload["video_id"],
+        "dimensions": payload["dimensions"],
+    }
 
 
 @dataclass(slots=True)

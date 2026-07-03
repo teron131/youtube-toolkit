@@ -128,6 +128,7 @@ def test_add_watchlist_channels_accepts_single_and_list_channel_refs(
 
     with get_connection() as connection:
         assert list_watchlist_channel_refs(connection) == ["@Anthropic", "@OpenAI"]
+        assert connection.execute("SELECT COUNT(*) AS count FROM videos").fetchone()["count"] == 0
 
     assert list_watchlist_channels() == ["@Anthropic", "@OpenAI"]
 
@@ -641,6 +642,7 @@ def test_sync_watchlist_marks_new_videos_and_hydrates_missing(
                 "video_id": "video-openai",
             }
         ],
+        "embeddings": [],
     }
 
 
@@ -712,6 +714,7 @@ def test_sync_watchlist_fetches_channels_concurrently(
 
     assert result["channels"] == ["@Anthropic", "@OpenAI"]
     assert result["new_videos"] == ["video-anthropic", "video-openai"]
+    assert result["embeddings"] == []
     assert stored_refs == ["@Anthropic", "@OpenAI"]
 
 
@@ -719,7 +722,12 @@ def test_fetch_watchlist_transcripts_fetches_videos_concurrently(monkeypatch) ->
     """Fan out transcript acquisition for missing watchlist videos."""
     both_videos_started = threading.Barrier(2)
 
-    def fake_fetch_transcript(video_id: str) -> TranscriptDocument:
+    def fake_fetch_transcript(
+        video_id: str,
+        *,
+        auto_index: bool,
+    ) -> TranscriptDocument:
+        assert auto_index is False
         both_videos_started.wait(timeout=1)
         if video_id == "video-failed":
             raise RuntimeError("caption missing")
@@ -734,9 +742,20 @@ def test_fetch_watchlist_transcripts_fetches_videos_concurrently(monkeypatch) ->
             sections=[],
         )
 
+    def fake_auto_index_video_embedding(connection, video_id: str):
+        return {
+            "status": "indexed",
+            "video_id": video_id,
+            "dimensions": 768,
+        }
+
     monkeypatch.setattr(
         "youtube_toolkit.youtube.channels.fetch_transcript",
         fake_fetch_transcript,
+    )
+    monkeypatch.setattr(
+        "youtube_toolkit.youtube.channels.auto_index_video_embedding",
+        fake_auto_index_video_embedding,
     )
 
     transcripts = fetch_watchlist_transcripts(
@@ -750,6 +769,11 @@ def test_fetch_watchlist_transcripts_fetches_videos_concurrently(monkeypatch) ->
         {
             "status": "stored",
             "video_id": "video-openai",
+            "embedding": {
+                "status": "indexed",
+                "video_id": "video-openai",
+                "dimensions": 768,
+            },
         },
         {
             "status": "failed",

@@ -9,13 +9,13 @@ def test_stt_audio_format_prefers_xai_and_elevenlabs_compatible_containers() -> 
     assert STT_AUDIO_FORMAT_SELECTOR == "bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio[ext=aac]"
 
 
-def test_download_transcription_audio_uses_default_cache_stem(
+def test_download_transcription_audio_uses_unique_cache_stem(
     monkeypatch,
     tmp_path,
 ) -> None:
-    """Audio download paths use the video ID and let yt-dlp choose the extension."""
+    """Audio download paths include the video ID without sharing a mutable output file."""
     monkeypatch.chdir(tmp_path)
-    calls = {}
+    commands = []
 
     def fake_run(
         command,
@@ -24,19 +24,25 @@ def test_download_transcription_audio_uses_default_cache_stem(
         check,
     ):
         """Capture yt-dlp args and create the expected output file."""
-        calls["command"] = command
-        audio_path = Path(".cache/audio/JpSHyEIZ_bo.m4a")
+        commands.append(command)
+        output_pattern = Path(command[command.index("--output") + 1])
+        audio_path = output_pattern.with_name(output_pattern.name.replace("%(ext)s", "m4a"))
         audio_path.parent.mkdir(parents=True, exist_ok=True)
         audio_path.write_bytes(b"audio")
         return SimpleNamespace(returncode=0, stderr="")
 
     monkeypatch.setattr("youtube_toolkit.youtube.client.subprocess.run", fake_run)
 
-    assert YtDlpClient().download_transcription_audio("JpSHyEIZ_bo") == Path(
-        ".cache/audio/JpSHyEIZ_bo.m4a",
-    )
-    assert calls["command"][calls["command"].index("--format") + 1] == STT_AUDIO_FORMAT_SELECTOR
-    assert calls["command"][calls["command"].index("--output") + 1] == (".cache/audio/JpSHyEIZ_bo.%(ext)s")
+    first_path = YtDlpClient().download_transcription_audio("JpSHyEIZ_bo")
+    second_path = YtDlpClient().download_transcription_audio("JpSHyEIZ_bo")
+
+    assert first_path != second_path
+    assert first_path.parent == Path(".cache/audio")
+    assert first_path.name.startswith("JpSHyEIZ_bo-")
+    assert first_path.suffix == ".m4a"
+    assert commands[0][commands[0].index("--format") + 1] == STT_AUDIO_FORMAT_SELECTOR
+    assert commands[0][commands[0].index("--output") + 1].startswith(".cache/audio/JpSHyEIZ_bo-")
+    assert commands[0][commands[0].index("--output") + 1].endswith(".%(ext)s")
 
 
 def test_channel_videos_omits_playlist_end_when_unlimited(monkeypatch) -> None:

@@ -22,8 +22,9 @@ The toolkit intentionally ships a small working surface:
 - `youtube video transcript <url-or-id>` fetches and stores a transcript, then prints JSON
 - `youtube video metadata <url-or-id>` prints metadata JSON
 - `youtube channel videos <channel>` lists recent videos for one channel
-- `youtube watchlist add <channel...>`, `youtube watchlist list`, `youtube watchlist remove <channel...>`, and `youtube watchlist sync` persist channel workflows
+- `youtube watchlist add <channel...>`, `youtube watchlist list`, `youtube watchlist remove <channel...>`, and `youtube watchlist sync` persist channel workflows; sync also auto-indexes transcript embeddings when enabled
 - `youtube watchlist recent --days 3` returns recently uploaded videos from watched channels without mutating storage; pass channels after `recent` to narrow the scope
+- `youtube index [video...]` embeds stored transcript text for semantic search and RAG prep
 - `youtube watchlist schedule install|status|uninstall` manages its macOS LaunchAgent
 - `youtube blacklist add <channel...>` and `youtube blacklist remove <channel...>` manage channels excluded from future search results
 - `youtube setup` writes app-local model API keys, base URLs, and model IDs, then prints a readable setup report
@@ -35,13 +36,14 @@ Storage lives in this checkout's `.cache/youtube.sqlite3` during source-checkout
 
 The schema source of truth is `youtube_toolkit/storage/schema.sql`; DB creation and doctor inspection both read that SQL file.
 
-Model configuration lives in `~/Library/Application Support/youtube-toolkit/config.env`. `youtube setup` writes this app-local file with `0600` permissions, then asks whether to verify the config by sending `Hello` to the embedding and LLM APIs. Use `youtube setup --verify` to force that check in scripts, or `youtube setup --no-verify` to skip it. Environment variables override the file for one-off runs:
+Model configuration lives in `~/Library/Application Support/youtube-toolkit/config.env`. Bare `youtube setup` opens an Up/Down selector for embedding, LLM, settings, verification, and save. Flag-based usage stays scriptable: use `youtube setup --verify` to force a `Hello` check, `youtube setup --no-verify` to skip it, and `youtube setup --no-auto-embeddings` to keep transcript sync from indexing embeddings automatically. Environment variables override the file for one-off runs:
 
 ```env
 EMBEDDING_API_KEY=
 EMBEDDING_BASE_URL=https://generativelanguage.googleapis.com/v1beta
 EMBEDDING_MODEL=gemini-embedding-2
 EMBEDDING_DIMENSIONS=768
+EMBEDDING_AUTO_INDEX=true
 LLM_API_KEY=
 LLM_BASE_URL=
 LLM_MODEL=

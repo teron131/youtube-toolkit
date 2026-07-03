@@ -98,9 +98,18 @@ class ChannelRemovalResult(TypedDict):
     removed: bool
 
 
+class EmbeddingIndexResult(TypedDict):
+    status: Literal["indexed", "skipped", "failed"]
+    video_id: str
+    dimensions: NotRequired[int]
+    detail: NotRequired[str]
+    error: NotRequired[str]
+
+
 class TranscriptFetchResult(TypedDict):
     status: Literal["stored", "failed"]
     video_id: str
+    embedding: NotRequired[EmbeddingIndexResult]
     error: NotRequired[str]
 
 
@@ -108,6 +117,7 @@ class WatchlistSyncResult(TypedDict):
     channels: list[str]
     new_videos: list[str]
     transcripts: list[TranscriptFetchResult]
+    embeddings: list[EmbeddingIndexResult]
 
 
 def extract_channel_identity(

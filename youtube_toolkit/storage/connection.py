@@ -1,4 +1,4 @@
-"""SQLite connection and storage-path setup for YouTube toolkit state."""
+"""Turso runtime connection, storage-path setup, and schema inspection."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ class DatabaseSchemaHealthResult(TypedDict):
 
 
 def get_connection() -> turso.Connection:
-    """Open the toolkit SQLite database and ensure the schema exists."""
+    """Open the toolkit Turso database and ensure the schema exists."""
     storage_dir = resolve_storage_dir()
     storage_dir.mkdir(parents=True, exist_ok=True)
     connection = turso.connect(str(storage_dir / DATABASE_FILENAME))
