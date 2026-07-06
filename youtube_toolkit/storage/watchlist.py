@@ -2,35 +2,33 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
-
-import turso
 
 from ..schemas import ChannelIdentity, extract_channel_identity, extract_video_record
 from .channels import find_matching_channel_rows, upsert_channel
+from .connection import LanceConnection, filter_in_values
 from .payloads import stored_video_payload
-from .videos import upsert_video
+from .videos import upsert_video, video_payload_row
 
 
 def upsert_watchlist_channel(
-    connection: turso.Connection,
+    connection: LanceConnection,
     channel_identity: ChannelIdentity,
 ) -> str | None:
     youtube_channel_id = upsert_channel(connection, channel_identity)
     if youtube_channel_id is None:
         return None
-    connection.execute(
-        """
-        INSERT OR IGNORE INTO channels_watchlist (channel_id)
-        VALUES (?)
-        """,
-        (youtube_channel_id,),
+    connection.upsert_rows(
+        "channels_watchlist",
+        "channel_id",
+        [{"channel_id": youtube_channel_id}],
     )
     return youtube_channel_id
 
 
 def delete_watchlist_channel(
-    connection: turso.Connection,
+    connection: LanceConnection,
     channel_identity: ChannelIdentity,
 ) -> bool:
     """Remove a known channel from the watchlist membership table."""
@@ -38,53 +36,36 @@ def delete_watchlist_channel(
         return False
 
     matching_rows = find_matching_channel_rows(connection, channel_identity)
-    if not matching_rows:
-        return False
-
     channel_ids = [row["youtube_channel_id"] for row in matching_rows if row["youtube_channel_id"] is not None]
     if not channel_ids:
         return False
-    placeholders = ", ".join("?" for _ in channel_ids)
-    membership_rows = connection.execute(
-        f"""
-        SELECT channel_id
-        FROM channels_watchlist
-        WHERE channel_id IN ({placeholders})
-        """,
-        channel_ids,
-    ).fetchall()
-    if not membership_rows:
+    existing_ids = {row["channel_id"] for row in connection.rows("channels_watchlist") if row["channel_id"] in set(channel_ids)}
+    if not existing_ids:
         return False
 
-    connection.execute(
-        f"""
-        DELETE FROM channels_watchlist
-        WHERE channel_id IN ({placeholders})
-        """,
-        channel_ids,
+    connection.delete_where(
+        "channels_watchlist",
+        f"channel_id IN ({filter_in_values(channel_ids)})",
     )
-    connection.execute(
-        f"""
-        DELETE FROM watchlist_videos
-        WHERE video_id IN (
-            SELECT youtube_video_id
-            FROM videos
-            WHERE channel_id IN ({placeholders})
+    removed_video_ids = [row["youtube_video_id"] for row in connection.rows("videos") if row["channel_id"] in set(channel_ids)]
+    if removed_video_ids:
+        connection.delete_where(
+            "watchlist_videos",
+            f"video_id IN ({filter_in_values(removed_video_ids)})",
         )
-        """,
-        channel_ids,
-    )
     return True
 
 
 def store_watchlist_channel_listing(
-    connection: turso.Connection,
+    connection: LanceConnection,
     metadata: dict[str, Any],
 ) -> list[str]:
     """Store a watched channel listing and return newly discovered video IDs."""
     channel_identity = extract_channel_identity(metadata)
     youtube_channel_id = upsert_channel(connection, channel_identity)
-    if youtube_channel_id is None or not is_watchlist_channel(connection, youtube_channel_id):
+    if youtube_channel_id is None:
+        return []
+    if not any(row["channel_id"] == youtube_channel_id for row in connection.rows("channels_watchlist")):
         return []
 
     new_video_ids: list[str] = []
@@ -102,150 +83,112 @@ def store_watchlist_channel_listing(
     return new_video_ids
 
 
-def is_watchlist_channel(
-    connection: turso.Connection,
-    youtube_channel_id: str,
-) -> bool:
-    return (
-        connection.execute(
-            """
-            SELECT 1
-            FROM channels_watchlist
-            WHERE channel_id = ?
-            """,
-            (youtube_channel_id,),
-        ).fetchone()
-        is not None
-    )
-
-
 def record_watchlist_video(
-    connection: turso.Connection,
+    connection: LanceConnection,
     youtube_video_id: str,
 ) -> bool:
-    existing_row = connection.execute(
-        """
-        SELECT 1
-        FROM watchlist_videos
-        WHERE video_id = ?
-        """,
-        (youtube_video_id,),
-    ).fetchone()
-    if existing_row is not None:
+    if any(row["video_id"] == youtube_video_id for row in connection.rows("watchlist_videos")):
         return False
-    connection.execute(
-        """
-        INSERT OR IGNORE INTO watchlist_videos (video_id)
-        VALUES (?)
-        """,
-        (youtube_video_id,),
+    connection.upsert_rows(
+        "watchlist_videos",
+        "video_id",
+        [
+            {
+                "video_id": youtube_video_id,
+                "discovered_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
+            }
+        ],
     )
     return True
 
 
-def list_watchlist_channel_refs(connection: turso.Connection) -> list[str]:
-    rows = connection.execute(
-        """
-        SELECT channels.youtube_channel_id, channels.channel_handle
-        FROM channels_watchlist
-        JOIN channels ON channels.youtube_channel_id = channels_watchlist.channel_id
-        ORDER BY COALESCE(channels.channel_handle, channels.youtube_channel_id)
-        """
-    ).fetchall()
+def list_watchlist_channel_refs(connection: LanceConnection) -> list[str]:
+    watched_ids = {row["channel_id"] for row in connection.rows("channels_watchlist")}
+    rows = sorted(
+        [row for row in connection.rows("channels") if row["youtube_channel_id"] in watched_ids],
+        key=lambda row: row["channel_handle"] or row["youtube_channel_id"] or "",
+    )
     return [row["channel_handle"] or row["youtube_channel_id"] for row in rows if row["channel_handle"] or row["youtube_channel_id"]]
 
 
-def list_missing_watchlist_video_ids(connection: turso.Connection) -> list[str]:
-    rows = connection.execute(
-        """
-        SELECT videos.youtube_video_id
-        FROM videos
-        JOIN watchlist_videos ON watchlist_videos.video_id = videos.youtube_video_id
-        WHERE videos.transcript IS NULL OR videos.transcript = ''
-        ORDER BY videos.upload_date DESC, videos.youtube_video_id DESC
-        """
-    ).fetchall()
-    return [row["youtube_video_id"] for row in rows]
+def list_missing_watchlist_video_ids(connection: LanceConnection) -> list[str]:
+    watchlist_video_ids = {row["video_id"] for row in connection.rows("watchlist_videos")}
+    videos = [row for row in connection.rows("videos") if row["youtube_video_id"] in watchlist_video_ids and not row["transcript"]]
+    return [
+        row["youtube_video_id"]
+        for row in sorted(
+            videos,
+            key=lambda row: (
+                row["upload_date"] or "",
+                row["youtube_video_id"],
+            ),
+            reverse=True,
+        )
+    ]
 
 
-def list_watchlist_video_ids_missing_embeddings(connection: turso.Connection) -> list[str]:
-    rows = connection.execute(
-        """
-        SELECT videos.youtube_video_id
-        FROM videos
-        JOIN watchlist_videos ON watchlist_videos.video_id = videos.youtube_video_id
-        WHERE videos.transcript IS NOT NULL
-            AND videos.transcript != ''
-            AND videos.embedding IS NULL
-        ORDER BY videos.upload_date DESC, videos.youtube_video_id DESC
-        """
-    ).fetchall()
-    return [row["youtube_video_id"] for row in rows]
+def list_watchlist_video_ids_missing_embeddings(connection: LanceConnection) -> list[str]:
+    watchlist_video_ids = {row["video_id"] for row in connection.rows("watchlist_videos")}
+    indexed_video_ids = {row["video_id"] for row in connection.rows("video_embeddings")}
+    videos = [row for row in connection.rows("videos") if row["youtube_video_id"] in watchlist_video_ids and row["transcript"] and row["youtube_video_id"] not in indexed_video_ids]
+    return [
+        row["youtube_video_id"]
+        for row in sorted(
+            videos,
+            key=lambda row: (
+                row["upload_date"] or "",
+                row["youtube_video_id"],
+            ),
+            reverse=True,
+        )
+    ]
 
 
 def list_recent_watchlist_video_payloads(
-    connection: turso.Connection,
+    connection: LanceConnection,
     *,
     cutoff_upload_date: str,
     channel_identities: list[ChannelIdentity] | None = None,
 ) -> list[dict[str, Any]]:
     """Return objectively recent videos from watched channels without mutating storage."""
-    channel_filter_sql = ""
-    parameters: list[Any] = [cutoff_upload_date]
-    if channel_identities:
-        channel_filter_sql, channel_filter_parameters = build_channel_identity_filter(channel_identities)
-        parameters.extend(channel_filter_parameters)
-
-    rows = connection.execute(
-        f"""
-        SELECT
-            videos.youtube_video_id,
-            videos.channel_id,
-            channels.channel_handle,
-            videos.title,
-            videos.upload_date,
-            videos.duration,
-            videos.view_count,
-            videos.like_count,
-            videos.transcript,
-            videos.metadata_fetched_at,
-            videos.transcript_fetched_at
-        FROM channels_watchlist
-        JOIN channels ON channels.youtube_channel_id = channels_watchlist.channel_id
-        JOIN videos ON videos.channel_id = channels.youtube_channel_id
-        WHERE videos.upload_date IS NOT NULL
-            AND videos.upload_date >= ?
-            {channel_filter_sql}
-        ORDER BY videos.upload_date DESC, videos.youtube_video_id DESC
-        """,
-        parameters,
-    ).fetchall()
-    return [watchlist_video_payload(row) for row in rows]
+    watched_ids = {row["channel_id"] for row in connection.rows("channels_watchlist")}
+    allowed_channel_ids = filter_channel_ids(connection, channel_identities)
+    rows = [
+        row
+        for row in connection.rows("videos")
+        if row["channel_id"] in watched_ids
+        and row["upload_date"] is not None
+        and row["upload_date"] >= cutoff_upload_date
+        and (allowed_channel_ids is None or row["channel_id"] in allowed_channel_ids)
+    ]
+    rows = sorted(
+        rows,
+        key=lambda row: (
+            row["upload_date"] or "",
+            row["youtube_video_id"],
+        ),
+        reverse=True,
+    )
+    return [watchlist_video_payload(video_payload_row(connection, row)) for row in rows]
 
 
-def build_channel_identity_filter(
-    channel_identities: list[ChannelIdentity],
-) -> tuple[str, list[Any]]:
+def filter_channel_ids(
+    connection: LanceConnection,
+    channel_identities: list[ChannelIdentity] | None,
+) -> set[str] | None:
     if not channel_identities:
-        raise ValueError("Channel filters must include at least one channel")
-
-    clauses: list[str] = []
-    parameters: list[Any] = []
+        return None
+    allowed_ids: set[str] = set()
     for identity in channel_identities:
         if not identity.has_identity():
             raise ValueError("Channel filters must include a handle or channel ID")
-        identity_clauses: list[str] = []
-        if identity.youtube_channel_id is not None:
-            identity_clauses.append("channels.youtube_channel_id = ?")
-            parameters.append(identity.youtube_channel_id)
-        if identity.channel_handle is not None:
-            identity_clauses.append("channels.channel_handle = ?")
-            parameters.append(identity.channel_handle)
-        clauses.append(f"({' OR '.join(identity_clauses)})")
-    return f"AND ({' OR '.join(clauses)})", parameters
+        for row in find_matching_channel_rows(connection, identity):
+            if row["youtube_channel_id"] is not None:
+                allowed_ids.add(row["youtube_channel_id"])
+    return allowed_ids
 
 
-def watchlist_video_payload(row: turso.Row) -> dict[str, Any]:
+def watchlist_video_payload(row: dict[str, Any]) -> dict[str, Any]:
     payload = stored_video_payload(row)
     transcript = payload["transcript"]
     metadata_payload = {key: value for key, value in payload.items() if key != "transcript"}

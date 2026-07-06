@@ -5,21 +5,20 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, Literal
 
-import turso
-
 from ..identity import VideoRef, extract_video_id
 from ..model_config import EmbeddingConfig
+from .connection import MAX_TABLE_SCAN_ROWS, LanceConnection
 from .payloads import stored_video_payload
-from .semantic import embed_text_with_gemini, encode_vector
+from .semantic import embed_text_with_gemini
+from .videos import video_payload_row
 
 EmbedText = Callable[[str], list[float]]
 SearchSort = Literal["upload_date", "relevance"]
 SEARCH_SORTS = {"upload_date", "relevance"}
-STORED_VIDEO_RESULT_COLUMNS = "videos.*, channels.channel_handle"
 
 
 def search_stored_videos(
-    connection: turso.Connection,
+    connection: LanceConnection,
     query: str,
     *,
     limit: int = 10,
@@ -41,24 +40,14 @@ def search_stored_videos(
         raise ValueError("relevance sort requires semantic=True")
 
     video_id = extract_video_id(normalized_query)
+    rows = stored_video_rows(connection)
     if video_id is not None:
-        rows = search_video_rows_by_id(
-            connection,
-            video_id,
-            limit=limit,
-            require_transcript=require_transcript,
-        )
-        return [stored_video_payload(row) for row in rows]
+        matching_rows = [row for row in rows if row["youtube_video_id"] == video_id and has_required_transcript(row, require_transcript)]
+        return [stored_video_payload(row) for row in sort_video_rows_by_upload_date(matching_rows)[:limit]]
 
-    keyword_payloads = [
-        stored_video_payload(row)
-        for row in search_video_rows_by_keyword(
-            connection,
-            normalized_query,
-            limit=limit,
-            require_transcript=require_transcript,
-        )
-    ]
+    normalized_keyword = normalized_query.casefold()
+    matching_rows = [row for row in rows if has_required_transcript(row, require_transcript) and video_row_matches_keyword(row, normalized_keyword)]
+    keyword_payloads = [stored_video_payload(row) for row in sort_video_rows_by_upload_date(matching_rows)[:limit]]
     if not semantic:
         return keyword_payloads
 
@@ -77,7 +66,7 @@ def search_stored_videos(
 
 
 def get_stored_video(
-    connection: turso.Connection,
+    connection: LanceConnection,
     video_ref: VideoRef,
     *,
     require_transcript: bool = False,
@@ -86,170 +75,66 @@ def get_stored_video(
     video_id = extract_video_id(video_ref)
     if video_id is None:
         return None
-    row = connection.execute(
-        f"""
-        SELECT {STORED_VIDEO_RESULT_COLUMNS}
-        FROM videos AS videos
-        LEFT JOIN channels AS channels ON channels.youtube_channel_id = videos.channel_id
-        WHERE videos.youtube_video_id = ?
-            AND (
-                ? = 0
-                OR (videos.transcript IS NOT NULL AND videos.transcript != '')
-            )
-        LIMIT 1
-        """,
-        (video_id, int(require_transcript)),
-    ).fetchone()
+    row = next(
+        (row for row in stored_video_rows(connection) if row["youtube_video_id"] == video_id and has_required_transcript(row, require_transcript)),
+        None,
+    )
     if row is None:
         return None
     return stored_video_payload(row)
 
 
-def search_video_rows_by_id(
-    connection: turso.Connection,
-    youtube_video_id: str,
-    *,
-    limit: int,
-    require_transcript: bool,
-) -> list[turso.Row]:
-    return connection.execute(
-        f"""
-        SELECT {STORED_VIDEO_RESULT_COLUMNS}
-        FROM videos AS videos
-        LEFT JOIN channels AS channels ON channels.youtube_channel_id = videos.channel_id
-        WHERE videos.youtube_video_id = ?
-            AND (
-                ? = 0
-                OR (videos.transcript IS NOT NULL AND videos.transcript != '')
-            )
-        ORDER BY
-            videos.upload_date DESC,
-            videos.youtube_video_id DESC
-        LIMIT ?
-        """,
-        (youtube_video_id, int(require_transcript), limit),
-    ).fetchall()
+def stored_video_rows(connection: LanceConnection) -> list[dict[str, Any]]:
+    return [video_payload_row(connection, row) for row in connection.rows("videos")]
 
 
-def search_video_rows_by_keyword(
-    connection: turso.Connection,
-    keyword: str,
-    *,
-    limit: int,
+def has_required_transcript(
+    row: dict[str, Any],
     require_transcript: bool,
-) -> list[turso.Row]:
-    like_pattern = f"%{escape_like(keyword)}%"
-    return connection.execute(
-        f"""
-        SELECT {STORED_VIDEO_RESULT_COLUMNS}
-        FROM videos AS videos
-        LEFT JOIN channels AS channels ON channels.youtube_channel_id = videos.channel_id
-        WHERE (
-            videos.youtube_video_id LIKE ? ESCAPE '\\'
-            OR COALESCE(videos.title, '') LIKE ? ESCAPE '\\'
-            OR COALESCE(videos.upload_date, '') LIKE ? ESCAPE '\\'
-            OR COALESCE(videos.transcript, '') LIKE ? ESCAPE '\\'
-            OR COALESCE(videos.channel_id, '') LIKE ? ESCAPE '\\'
-            OR COALESCE(channels.channel_handle, '') LIKE ? ESCAPE '\\'
+) -> bool:
+    return not require_transcript or bool(row["transcript"])
+
+
+def video_row_matches_keyword(
+    row: dict[str, Any],
+    normalized_keyword: str,
+) -> bool:
+    return any(
+        normalized_keyword in str(value).casefold()
+        for value in (
+            row["youtube_video_id"],
+            row["title"],
+            row["upload_date"],
+            row["transcript"],
+            row["channel_id"],
+            row["channel_handle"],
         )
-            AND (
-                ? = 0
-                OR (videos.transcript IS NOT NULL AND videos.transcript != '')
-            )
-        ORDER BY
-            videos.upload_date DESC,
-            videos.youtube_video_id DESC
-        LIMIT ?
-        """,
-        (
-            like_pattern,
-            like_pattern,
-            like_pattern,
-            like_pattern,
-            like_pattern,
-            like_pattern,
-            int(require_transcript),
-            limit,
-        ),
-    ).fetchall()
+        if value not in (None, "")
+    )
 
 
 def search_video_payloads_by_semantic(
-    connection: turso.Connection,
+    connection: LanceConnection,
     query: str,
     *,
     require_transcript: bool,
     embed_text: EmbedText | None,
     embedding_config: EmbeddingConfig | None,
 ) -> list[dict[str, Any]]:
-    if not has_semantic_video_rows(
-        connection,
-        require_transcript=require_transcript,
-    ):
+    if connection.optional_table("video_embeddings") is None:
         return []
     query_embedding = embed_text(query) if embed_text is not None else embed_text_with_gemini(query, config=embedding_config)
-    indexed_rows = list_semantic_video_rows(
-        connection,
-        query_embedding=query_embedding,
-        require_transcript=require_transcript,
-    )
-    if not indexed_rows:
-        return []
-
+    rows = connection.table("video_embeddings").search(query_embedding, vector_column_name="embedding").metric("cosine").limit(MAX_TABLE_SCAN_ROWS).to_list()
+    videos_by_id = {row["youtube_video_id"]: row for row in stored_video_rows(connection)}
     semantic_payloads: list[dict[str, Any]] = []
-    for row in indexed_rows:
-        payload = stored_video_payload(row)
-        payload["semantic_score"] = row["semantic_score"]
+    for row in rows:
+        video = videos_by_id.get(row["video_id"])
+        if video is None or (require_transcript and not video["transcript"]):
+            continue
+        payload = stored_video_payload(video)
+        payload["semantic_score"] = 1.0 - float(row["_distance"])
         semantic_payloads.append(payload)
     return semantic_payloads
-
-
-def has_semantic_video_rows(
-    connection: turso.Connection,
-    *,
-    require_transcript: bool,
-) -> bool:
-    row = connection.execute(
-        """
-        SELECT 1
-        FROM videos
-        WHERE embedding IS NOT NULL
-            AND (
-                ? = 0
-                OR (transcript IS NOT NULL AND transcript != '')
-            )
-        LIMIT 1
-        """,
-        (int(require_transcript),),
-    ).fetchone()
-    return row is not None
-
-
-def list_semantic_video_rows(
-    connection: turso.Connection,
-    *,
-    query_embedding: list[float],
-    require_transcript: bool,
-) -> list[turso.Row]:
-    return connection.execute(
-        f"""
-        SELECT
-            {STORED_VIDEO_RESULT_COLUMNS},
-            1.0 - vector_distance_cos(videos.embedding, vector32(?)) AS semantic_score
-        FROM videos AS videos
-        LEFT JOIN channels AS channels ON channels.youtube_channel_id = videos.channel_id
-        WHERE videos.embedding IS NOT NULL
-            AND (
-                ? = 0
-                OR (videos.transcript IS NOT NULL AND videos.transcript != '')
-            )
-        ORDER BY semantic_score DESC
-        """,
-        (
-            encode_vector(query_embedding),
-            int(require_transcript),
-        ),
-    ).fetchall()
 
 
 def merge_search_payloads(
@@ -301,5 +186,12 @@ def rank_search_payloads(
     return sorted_payloads[:limit]
 
 
-def escape_like(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+def sort_video_rows_by_upload_date(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        rows,
+        key=lambda row: (
+            row["upload_date"] or "",
+            row["youtube_video_id"],
+        ),
+        reverse=True,
+    )
