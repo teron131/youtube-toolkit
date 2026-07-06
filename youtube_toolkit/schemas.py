@@ -90,6 +90,9 @@ class VideoRecord:
     youtube_video_id: str
     title: str | None
     upload_date: str | None
+    duration: float | None
+    view_count: int | None
+    like_count: int | None
     transcript: str | None
 
 
@@ -157,6 +160,9 @@ def extract_video_record(
         youtube_video_id=youtube_video_id,
         title=normalize_title(metadata.get("title")),
         upload_date=normalize_upload_date(metadata.get("upload_date")),
+        duration=normalize_number(metadata.get("duration")),
+        view_count=normalize_view_count(metadata.get("view_count")),
+        like_count=normalize_view_count(metadata.get("like_count")),
         transcript=transcript,
     )
 

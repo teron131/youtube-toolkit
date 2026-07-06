@@ -552,9 +552,13 @@ def test_list_recent_watchlist_videos_rejects_non_positive_days(
         list_recent_watchlist_videos(days=0)
 
 
-def test_unlimited_days_window_uses_bounded_first_fetch() -> None:
+def test_unlimited_days_window_uses_bounded_first_fetch(monkeypatch) -> None:
     """A None last window has no fixed cap but still fetches bounded date windows."""
     calls = []
+    monkeypatch.setattr(
+        "youtube_toolkit.youtube.channels.cutoff_date_for_days",
+        lambda days: date(2026, 6, 29),
+    )
 
     class FakeClient:
         def channel_videos(

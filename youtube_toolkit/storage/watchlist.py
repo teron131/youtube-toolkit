@@ -201,10 +201,15 @@ def list_recent_watchlist_video_payloads(
         SELECT
             videos.youtube_video_id,
             videos.channel_id,
+            channels.channel_handle,
             videos.title,
             videos.upload_date,
+            videos.duration,
+            videos.view_count,
+            videos.like_count,
             videos.transcript,
-            channels.channel_handle
+            videos.metadata_fetched_at,
+            videos.transcript_fetched_at
         FROM channels_watchlist
         JOIN channels ON channels.youtube_channel_id = channels_watchlist.channel_id
         JOIN videos ON videos.channel_id = channels.youtube_channel_id

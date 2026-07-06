@@ -24,15 +24,34 @@ def test_store_audio_transcript_stores_transcript_and_returns_json_payload(
 
     payload = store_audio_transcript(audio_path)
 
-    assert payload == {
+    assert {
+        key: payload[key]
+        for key in (
+            "video_id",
+            "title",
+            "upload_date",
+            "duration",
+            "view_count",
+            "like_count",
+            "channel_id",
+            "channel_handle",
+            "transcript",
+            "language",
+        )
+    } == {
         "video_id": "JpSHyEIZ_bo",
         "title": None,
         "upload_date": None,
+        "duration": None,
+        "view_count": None,
+        "like_count": None,
         "channel_id": None,
         "channel_handle": None,
         "transcript": "數據庫",
         "language": "zh",
     }
+    assert payload["metadata_fetched_at"] is None
+    assert payload["transcript_fetched_at"] is not None
     with get_connection() as connection:
         stored_video = get_stored_video(connection, "JpSHyEIZ_bo")
     assert stored_video is not None
