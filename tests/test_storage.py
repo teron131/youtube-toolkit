@@ -1,6 +1,6 @@
 from pathlib import Path
-import sqlite3
 
+import lancedb
 import pytest
 
 import youtube_toolkit.storage.connection as storage_connection
@@ -9,14 +9,18 @@ from youtube_toolkit.schemas import ChannelIdentity
 from youtube_toolkit.storage import (
     DATABASE_FILENAME,
     STORAGE_DIRNAME,
+    auto_index_transcript_chunks,
     auto_index_video_embedding,
     database_schema_health,
     embed_text_with_gemini,
     get_connection,
     get_stored_video,
+    index_transcript_chunks,
     index_video_embedding,
     resolve_storage_dir,
     search_stored_videos,
+    search_transcript_chunk_scores,
+    split_transcript_chunks,
     upsert_watchlist_channel,
     upsert_video,
     upsert_video_summary,
@@ -32,7 +36,7 @@ def test_default_storage_path_is_repo_cache(monkeypatch, tmp_path) -> None:
     monkeypatch.delenv("YOUTUBE_TOOLKIT_STORAGE_HOME", raising=False)
 
     assert STORAGE_DIRNAME == ".cache"
-    assert DATABASE_FILENAME == "youtube.sqlite3"
+    assert DATABASE_FILENAME == "youtube.lancedb"
     assert resolve_storage_dir() == toolkit_root / ".cache"
 
 
@@ -49,14 +53,14 @@ def installed_connection_file(tmp_path: Path) -> Path:
 
 
 def test_database_schema_health_reports_missing_db(tmp_path) -> None:
-    db_path = tmp_path / "missing.sqlite3"
+    db_path = tmp_path / "missing.lancedb"
 
     assert database_schema_health(db_path) == {
         "path": str(db_path),
         "ok": False,
         "status": "missing",
-        "detail": "Database file is missing",
-        "repair": "Run youtube setup database to create a fresh schema",
+        "detail": "LanceDB store is missing",
+        "repair": "Run youtube setup database to create a fresh LanceDB store",
     }
 
 
@@ -67,44 +71,26 @@ def test_database_schema_health_accepts_current_schema(monkeypatch, tmp_path) ->
     with get_connection():
         pass
 
-    assert database_schema_health(storage_home / "youtube.sqlite3") == {
-        "path": str(storage_home / "youtube.sqlite3"),
+    assert database_schema_health(storage_home / DATABASE_FILENAME) == {
+        "path": str(storage_home / DATABASE_FILENAME),
         "ok": True,
         "status": "ready",
-        "detail": "Schema has expected tables, columns, indexes, and foreign keys",
+        "detail": "LanceDB store has expected base tables",
     }
 
 
-def test_database_schema_health_warns_on_stale_fake_ids(tmp_path) -> None:
-    db_path = tmp_path / "youtube.sqlite3"
-    with sqlite3.connect(db_path) as connection:
-        connection.executescript(
-            """
-            CREATE TABLE channels (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                youtube_channel_id TEXT UNIQUE
-            );
-            CREATE TABLE videos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                youtube_video_id TEXT UNIQUE,
-                channel_id INTEGER,
-                view_count INTEGER
-            );
-            CREATE TABLE channel_video_entries (
-                id INTEGER PRIMARY KEY AUTOINCREMENT
-            );
-            """
-        )
+def test_database_schema_health_warns_on_missing_lance_tables(tmp_path) -> None:
+    db_path = tmp_path / DATABASE_FILENAME
+    database = lancedb.connect(db_path)
+    database.create_table("legacy_videos", data=[{"id": "legacy"}])
 
     payload = database_schema_health(db_path)
 
     assert payload["path"] == str(db_path)
     assert payload["ok"] is False
     assert payload["status"] == "invalid"
-    assert "unexpected tables: channel_video_entries" in payload["detail"]
-    assert "channels has unexpected columns: id" in payload["detail"]
-    assert "videos has unexpected columns: id" in payload["detail"]
-    assert payload["repair"] == "Run youtube setup database to archive the current DB and create a fresh schema"
+    assert "missing tables:" in payload["detail"]
+    assert payload["repair"] == "Run youtube setup database to create a fresh LanceDB store"
 
 
 def test_upsert_video_converts_title_to_hong_kong_traditional(
@@ -121,14 +107,7 @@ def test_upsert_video_converts_title_to_hong_kong_traditional(
                 "title": "AI商业发展暗藏机会",
             },
         )
-        row = connection.execute(
-            """
-            SELECT title
-            FROM videos
-            WHERE youtube_video_id = ?
-            """,
-            ("JpSHyEIZ_bo",),
-        ).fetchone()
+        row = connection.find_row("videos", "youtube_video_id", "JpSHyEIZ_bo")
 
     assert row is not None
     assert row["title"] == "AI商業發展暗藏機會"
@@ -239,14 +218,7 @@ def test_upsert_video_stores_youtube_channel_id(
                 "channel_handle": "@OpenAI",
             },
         )
-        row = connection.execute(
-            """
-            SELECT channel_id
-            FROM videos
-            WHERE youtube_video_id = ?
-            """,
-            ("JpSHyEIZ_bo",),
-        ).fetchone()
+        row = connection.find_row("videos", "youtube_video_id", "JpSHyEIZ_bo")
 
     assert row is not None
     assert row["channel_id"] == "UC123"
@@ -309,18 +281,9 @@ def test_upsert_video_clears_embedding_when_channel_handle_changes(
                 "channel_handle": "@NewChannel",
             },
         )
-        row = connection.execute(
-            """
-            SELECT embedding_content_hash, embedding
-            FROM videos
-            WHERE youtube_video_id = ?
-            """,
-            ("JpSHyEIZ_bo",),
-        ).fetchone()
+        row = connection.find_row("video_embeddings", "video_id", "JpSHyEIZ_bo")
 
-    assert row is not None
-    assert row["embedding_content_hash"] is None
-    assert row["embedding"] is None
+    assert row is None
 
 
 def test_upsert_video_clears_embedding_when_channel_id_changes(
@@ -350,18 +313,9 @@ def test_upsert_video_clears_embedding_when_channel_id_changes(
                 "channel_handle": "@NewChannel",
             },
         )
-        row = connection.execute(
-            """
-            SELECT embedding_content_hash, embedding
-            FROM videos
-            WHERE youtube_video_id = ?
-            """,
-            ("JpSHyEIZ_bo",),
-        ).fetchone()
+        row = connection.find_row("video_embeddings", "video_id", "JpSHyEIZ_bo")
 
-    assert row is not None
-    assert row["embedding_content_hash"] is None
-    assert row["embedding"] is None
+    assert row is None
 
 
 def test_upsert_video_keeps_embedding_when_upload_date_changes(
@@ -390,19 +344,12 @@ def test_upsert_video_keeps_embedding_when_upload_date_changes(
             },
         )
 
-    with sqlite3.connect(tmp_path / "state" / DATABASE_FILENAME) as connection:
-        row = connection.execute(
-            """
-            SELECT embedding_content_hash, embedding
-            FROM videos
-            WHERE youtube_video_id = ?
-            """,
-            ("JpSHyEIZ_bo",),
-        ).fetchone()
+    with get_connection() as connection:
+        row = connection.find_row("video_embeddings", "video_id", "JpSHyEIZ_bo")
 
     assert row is not None
-    assert row[0] is not None
-    assert row[1] is not None
+    assert row["embedding_content_hash"] is not None
+    assert row["embedding"] is not None
 
 
 def test_get_stored_video_returns_one_payload_by_url(
@@ -599,19 +546,12 @@ def test_search_stored_videos_semantic_search_uses_saved_embeddings(
         }
         index_video_embedding(connection, "dQw4w9WgXcQ", embed_text=fake_embed)
 
-    with sqlite3.connect(tmp_path / "state" / DATABASE_FILENAME) as connection:
-        stored_embedding = connection.execute(
-            """
-            SELECT embedding_content_hash, typeof(embedding) AS embedding_type
-            FROM videos
-            WHERE youtube_video_id = ?
-            """,
-            ("JpSHyEIZ_bo",),
-        ).fetchone()
+    with get_connection() as connection:
+        stored_embedding = connection.find_row("video_embeddings", "video_id", "JpSHyEIZ_bo")
 
     assert stored_embedding is not None
-    assert stored_embedding[0]
-    assert stored_embedding[1] == "blob"
+    assert stored_embedding["embedding_content_hash"]
+    assert stored_embedding["embedding"] == pytest.approx(fake_embed("GPU capex"))
 
     with get_connection() as connection:
         results = search_stored_videos(
@@ -623,6 +563,60 @@ def test_search_stored_videos_semantic_search_uses_saved_embeddings(
 
     assert results[0]["video_id"] == "JpSHyEIZ_bo"
     assert results[0]["semantic_score"] == pytest.approx(1.0)
+
+
+def test_split_transcript_chunks_uses_overlap() -> None:
+    chunks = split_transcript_chunks(
+        "abcdefghijklmnopqrstuvwxyz",
+        chunk_chars=10,
+        overlap_chars=3,
+    )
+
+    assert chunks == [
+        "abcdefghij",
+        "hijklmnopq",
+        "opqrstuvwx",
+        "vwxyz",
+    ]
+
+
+def test_transcript_chunk_index_scores_best_matching_chunk(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "GPU topic",
+            },
+            transcript="first chunk about pasta " * 80 + "second chunk about GPU capex " * 80,
+        )
+        upsert_video(
+            connection,
+            {
+                "id": "dQw4w9WgXcQ",
+                "title": "Kitchen topic",
+            },
+            transcript="only pasta sauce " * 80,
+        )
+        index_transcript_chunks(connection, "JpSHyEIZ_bo", embed_text=fake_embed)
+        index_transcript_chunks(connection, "dQw4w9WgXcQ", embed_text=fake_embed)
+        scores = search_transcript_chunk_scores(
+            connection,
+            "GPU capex",
+            [
+                "JpSHyEIZ_bo",
+                "dQw4w9WgXcQ",
+            ],
+            embed_text=fake_embed,
+        )
+
+    assert scores["JpSHyEIZ_bo"] == pytest.approx(1.0)
+    assert scores["dQw4w9WgXcQ"] < scores["JpSHyEIZ_bo"]
 
 
 def test_index_video_embedding_persists_after_connection_close(
@@ -645,21 +639,12 @@ def test_index_video_embedding_persists_after_connection_close(
     with get_connection() as connection:
         index_video_embedding(connection, "JpSHyEIZ_bo", embed_text=fake_embed)
 
-    with sqlite3.connect(storage_home / DATABASE_FILENAME) as connection:
-        row = connection.execute(
-            """
-            SELECT
-                embedding_content_hash IS NOT NULL,
-                embedding IS NOT NULL,
-                typeof(embedding),
-                length(embedding)
-            FROM videos
-            WHERE youtube_video_id = ?
-            """,
-            ("JpSHyEIZ_bo",),
-        ).fetchone()
+    with get_connection() as connection:
+        row = connection.find_row("video_embeddings", "video_id", "JpSHyEIZ_bo")
 
-    assert row == (1, 1, "blob", 8)
+    assert row is not None
+    assert row["embedding_content_hash"] is not None
+    assert row["embedding"] == pytest.approx(fake_embed("GPU capex"))
 
 
 def test_auto_index_video_embedding_respects_config_toggle(
@@ -680,6 +665,29 @@ def test_auto_index_video_embedding_respects_config_toggle(
         )
 
         assert auto_index_video_embedding(connection, "JpSHyEIZ_bo", embed_text=fake_embed) == {
+            "status": "skipped",
+            "video_id": "JpSHyEIZ_bo",
+            "detail": "Auto embedding is disabled",
+        }
+
+
+def test_auto_index_transcript_chunks_respects_config_toggle(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("EMBEDDING_AUTO_INDEX", "false")
+
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "GPU topic",
+            },
+            transcript="GPU earnings",
+        )
+        assert auto_index_transcript_chunks(connection, "JpSHyEIZ_bo", embed_text=fake_embed) == {
             "status": "skipped",
             "video_id": "JpSHyEIZ_bo",
             "detail": "Auto embedding is disabled",
@@ -777,14 +785,7 @@ def test_upsert_video_summary_stores_summary(
             "JpSHyEIZ_bo",
             "GPU earnings improved.",
         )
-        row = connection.execute(
-            """
-            SELECT summary
-            FROM videos
-            WHERE youtube_video_id = ?
-            """,
-            ("JpSHyEIZ_bo",),
-        ).fetchone()
+        row = connection.find_row("videos", "youtube_video_id", "JpSHyEIZ_bo")
 
     assert summary_video_id == "JpSHyEIZ_bo"
     assert row is not None
@@ -816,14 +817,7 @@ def test_upsert_video_summary_updates_summary(
             "JpSHyEIZ_bo",
             "New summary.",
         )
-        row = connection.execute(
-            """
-            SELECT summary
-            FROM videos
-            WHERE youtube_video_id = ?
-            """,
-            ("JpSHyEIZ_bo",),
-        ).fetchone()
+        row = connection.find_row("videos", "youtube_video_id", "JpSHyEIZ_bo")
 
     assert summary_video_id == "JpSHyEIZ_bo"
     assert row is not None
@@ -856,14 +850,7 @@ def test_video_summary_is_removed_when_transcript_changes(
             metadata,
             transcript="New transcript",
         )
-        summary_row = connection.execute(
-            """
-            SELECT summary
-            FROM videos
-            WHERE youtube_video_id = ?
-            """,
-            ("JpSHyEIZ_bo",),
-        ).fetchone()
+        summary_row = connection.find_row("videos", "youtube_video_id", "JpSHyEIZ_bo")
 
     assert summary_row is not None
     assert summary_row["summary"] is None

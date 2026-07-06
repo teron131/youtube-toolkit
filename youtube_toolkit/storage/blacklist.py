@@ -2,31 +2,28 @@
 
 from __future__ import annotations
 
-import turso
-
 from ..schemas import ChannelIdentity
 from .channels import find_matching_channel_rows, upsert_channel
+from .connection import LanceConnection, filter_in_values
 
 
 def upsert_blacklist_channel(
-    connection: turso.Connection,
+    connection: LanceConnection,
     channel_identity: ChannelIdentity,
 ) -> str | None:
     youtube_channel_id = upsert_channel(connection, channel_identity)
     if youtube_channel_id is None:
         return None
-    connection.execute(
-        """
-        INSERT OR IGNORE INTO channels_blacklist (channel_id)
-        VALUES (?)
-        """,
-        (youtube_channel_id,),
+    connection.upsert_rows(
+        "channels_blacklist",
+        "channel_id",
+        [{"channel_id": youtube_channel_id}],
     )
     return youtube_channel_id
 
 
 def delete_blacklist_channel(
-    connection: turso.Connection,
+    connection: LanceConnection,
     channel_identity: ChannelIdentity,
 ) -> bool:
     """Remove a known channel from the blacklist membership table."""
@@ -34,43 +31,27 @@ def delete_blacklist_channel(
         return False
 
     matching_rows = find_matching_channel_rows(connection, channel_identity)
-    if not matching_rows:
-        return False
-
     channel_ids = [row["youtube_channel_id"] for row in matching_rows if row["youtube_channel_id"] is not None]
     if not channel_ids:
         return False
-    placeholders = ", ".join("?" for _ in channel_ids)
-    membership_rows = connection.execute(
-        f"""
-        SELECT channel_id
-        FROM channels_blacklist
-        WHERE channel_id IN ({placeholders})
-        """,
-        channel_ids,
-    ).fetchall()
-    if not membership_rows:
+
+    existing_ids = {row["channel_id"] for row in connection.rows("channels_blacklist") if row["channel_id"] in set(channel_ids)}
+    if not existing_ids:
         return False
 
-    connection.execute(
-        f"""
-        DELETE FROM channels_blacklist
-        WHERE channel_id IN ({placeholders})
-        """,
-        channel_ids,
+    connection.delete_where(
+        "channels_blacklist",
+        f"channel_id IN ({filter_in_values(channel_ids)})",
     )
     return True
 
 
-def list_blacklist_channel_identities(connection: turso.Connection) -> list[ChannelIdentity]:
-    rows = connection.execute(
-        """
-        SELECT channels.youtube_channel_id, channels.channel_handle
-        FROM channels_blacklist
-        JOIN channels ON channels.youtube_channel_id = channels_blacklist.channel_id
-        ORDER BY COALESCE(channels.channel_handle, channels.youtube_channel_id)
-        """
-    ).fetchall()
+def list_blacklist_channel_identities(connection: LanceConnection) -> list[ChannelIdentity]:
+    blacklisted_ids = {row["channel_id"] for row in connection.rows("channels_blacklist")}
+    rows = sorted(
+        [row for row in connection.rows("channels") if row["youtube_channel_id"] in blacklisted_ids],
+        key=lambda row: row["channel_handle"] or row["youtube_channel_id"] or "",
+    )
     return [
         ChannelIdentity(
             youtube_channel_id=row["youtube_channel_id"],

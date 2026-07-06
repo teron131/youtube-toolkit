@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
-import turso
 
-
-def stored_video_payload(row: turso.Row) -> dict[str, Any]:
+def stored_video_payload(row: Mapping[str, Any]) -> dict[str, Any]:
     """Project a stored video row into the public payload shape."""
     return {
         "video_id": row["youtube_video_id"],

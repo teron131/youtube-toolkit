@@ -128,7 +128,7 @@ def test_add_watchlist_channels_accepts_single_and_list_channel_refs(
 
     with get_connection() as connection:
         assert list_watchlist_channel_refs(connection) == ["@Anthropic", "@OpenAI"]
-        assert connection.execute("SELECT COUNT(*) AS count FROM videos").fetchone()["count"] == 0
+        assert connection.rows("videos") == []
 
     assert list_watchlist_channels() == ["@Anthropic", "@OpenAI"]
 
@@ -148,13 +148,8 @@ def test_watchlist_membership_stores_youtube_channel_id(
                 channel_handle="@OpenAI",
             ),
         )
-        membership_row = connection.execute(
-            """
-            SELECT channel_id
-            FROM channels_watchlist
-            """
-        ).fetchone()
-        columns = [row["name"] for row in connection.execute("PRAGMA table_info(channels_watchlist)")]
+        membership_row = connection.find_row("channels_watchlist", "channel_id", "UC123")
+        columns = connection.table("channels_watchlist").schema.names
 
     assert channel_id == "UC123"
     assert membership_row is not None
@@ -199,23 +194,11 @@ def test_channel_merge_keeps_one_real_watchlist_channel_id(
 
         store_channel_listing(connection, openai_listing())
 
-        channel_ids = [
-            row["channel_id"]
-            for row in connection.execute(
-                """
-                SELECT channel_id
-                FROM channels_watchlist
-                ORDER BY channel_id
-                """
-            ).fetchall()
-        ]
-        video_rows = connection.execute(
-            """
-            SELECT youtube_video_id, channel_id
-            FROM videos
-            ORDER BY youtube_video_id
-            """
-        ).fetchall()
+        channel_ids = sorted(row["channel_id"] for row in connection.rows("channels_watchlist"))
+        video_rows = sorted(
+            connection.rows("videos"),
+            key=lambda row: row["youtube_video_id"],
+        )
 
     assert channel_ids == ["UC123"]
     assert list_watchlist_channels() == ["@OpenAI"]
@@ -281,14 +264,7 @@ def test_remove_watchlist_channel_deletes_membership_only(
     ]
 
     with get_connection() as connection:
-        channel_row = connection.execute(
-            """
-            SELECT youtube_channel_id
-            FROM channels
-            WHERE youtube_channel_id = ?
-            """,
-            (channel_id,),
-        ).fetchone()
+        channel_row = connection.find_row("channels", "youtube_channel_id", channel_id)
         watched_channels = list_watchlist_channel_refs(connection)
 
     assert channel_row is not None
@@ -320,15 +296,8 @@ def test_remove_watchlist_channel_deletes_watchlist_video_rows_only(
     ]
 
     with get_connection() as connection:
-        video_row = connection.execute(
-            """
-            SELECT youtube_video_id
-            FROM videos
-            WHERE youtube_video_id = ?
-            """,
-            ("video-openai",),
-        ).fetchone()
-        watchlist_video_rows = connection.execute("SELECT * FROM watchlist_videos").fetchall()
+        video_row = connection.find_row("videos", "youtube_video_id", "video-openai")
+        watchlist_video_rows = connection.rows("watchlist_videos")
 
     assert video_row is not None
     assert watchlist_video_rows == []
@@ -399,14 +368,7 @@ def test_remove_blacklist_channel_deletes_membership_only(
     ]
 
     with get_connection() as connection:
-        channel_row = connection.execute(
-            """
-            SELECT youtube_channel_id
-            FROM channels
-            WHERE youtube_channel_id = ?
-            """,
-            (channel_id,),
-        ).fetchone()
+        channel_row = connection.find_row("channels", "youtube_channel_id", channel_id)
         blacklisted_channels = list_blacklist_channel_identities(connection)
 
     assert channel_row is not None
@@ -428,13 +390,8 @@ def test_blacklist_membership_stores_youtube_channel_id(
                 channel_handle="@OpenAI",
             ),
         )
-        membership_row = connection.execute(
-            """
-            SELECT channel_id
-            FROM channels_blacklist
-            """
-        ).fetchone()
-        columns = [row["name"] for row in connection.execute("PRAGMA table_info(channels_blacklist)")]
+        membership_row = connection.find_row("channels_blacklist", "channel_id", "UC123")
+        columns = connection.table("channels_blacklist").schema.names
 
     assert channel_id == "UC123"
     assert membership_row is not None
@@ -475,7 +432,7 @@ def test_store_watchlist_channel_listing_records_only_new_video_ids(
         assert store_watchlist_channel_listing(connection, openai_listing()) == ["video-openai"]
         assert store_watchlist_channel_listing(connection, openai_listing()) == []
 
-        rows = connection.execute("SELECT video_id FROM watchlist_videos").fetchall()
+        rows = connection.rows("watchlist_videos")
 
     assert len(rows) == 1
     assert rows[0]["video_id"] == "video-openai"

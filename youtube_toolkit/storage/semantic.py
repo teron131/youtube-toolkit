@@ -2,20 +2,21 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 import hashlib
 import json
-import struct
 from typing import Any
 import urllib.error
 import urllib.request
 
-import turso
-
 from ..model_config import EmbeddingConfig, embedding_auto_index_enabled, embedding_config_from_env
 from ..schemas import EmbeddingIndexResult
+from .connection import MAX_TABLE_SCAN_ROWS, LanceConnection, filter_in_values, filter_literal
+from .videos import find_video_row, video_payload_row
 
 EmbedText = Callable[[str], list[float]]
+TRANSCRIPT_CHUNK_CHARS = 1200
+TRANSCRIPT_CHUNK_OVERLAP_CHARS = 200
 
 
 class EmbeddingSearchError(RuntimeError):
@@ -23,7 +24,7 @@ class EmbeddingSearchError(RuntimeError):
 
 
 def auto_index_video_embedding(
-    connection: turso.Connection,
+    connection: LanceConnection,
     youtube_video_id: str,
     *,
     embed_text: EmbedText | None = None,
@@ -59,87 +60,220 @@ def auto_index_video_embedding(
     }
 
 
-def list_video_ids_for_embedding_index(
-    connection: turso.Connection,
+def auto_index_transcript_chunks(
+    connection: LanceConnection,
+    youtube_video_id: str,
     *,
-    require_transcript: bool = True,
-) -> list[str]:
-    rows = connection.execute(
-        """
-        SELECT youtube_video_id
-        FROM videos
-        WHERE (
-            ? = 0
-            OR (transcript IS NOT NULL AND transcript != '')
+    embed_text: EmbedText | None = None,
+) -> EmbeddingIndexResult:
+    try:
+        if not embedding_auto_index_enabled():
+            return {
+                "status": "skipped",
+                "video_id": youtube_video_id,
+                "detail": "Auto embedding is disabled",
+            }
+        payload = index_transcript_chunks(
+            connection,
+            youtube_video_id,
+            embed_text=embed_text,
         )
-        ORDER BY upload_date DESC, youtube_video_id DESC
-        """,
-        (int(require_transcript),),
-    ).fetchall()
-    return [row["youtube_video_id"] for row in rows]
+    except Exception as error:
+        return {
+            "status": "failed",
+            "video_id": youtube_video_id,
+            "error": str(error),
+        }
+    if payload is None:
+        return {
+            "status": "skipped",
+            "video_id": youtube_video_id,
+            "detail": "Video has no stored transcript",
+        }
+    return {
+        "status": "indexed",
+        "video_id": payload["video_id"],
+        "dimensions": payload["dimensions"],
+    }
 
 
-def index_video_embedding(
-    connection: turso.Connection,
+def index_transcript_chunks(
+    connection: LanceConnection,
     youtube_video_id: str,
     *,
     embed_text: EmbedText | None = None,
     embedding_config: EmbeddingConfig | None = None,
 ) -> dict[str, Any] | None:
-    connection.commit()
-    row = connection.execute(
-        """
-        SELECT
-            videos.youtube_video_id,
-            videos.title,
-            channels.channel_handle,
-            videos.transcript,
-            videos.embedding_content_hash,
-            videos.embedding
-        FROM videos AS videos
-        LEFT JOIN channels AS channels ON channels.youtube_channel_id = videos.channel_id
-        WHERE videos.youtube_video_id = ?
-        LIMIT 1
-        """,
-        (youtube_video_id,),
-    ).fetchone()
-    if row is None:
+    row = find_video_row(connection, youtube_video_id)
+    if row is None or not row["transcript"]:
         return None
 
+    chunks = split_transcript_chunks(row["transcript"])
+    if not chunks:
+        return None
+
+    existing_rows = {row["chunk_index"]: row for row in connection.rows("video_transcript_chunks") if row["video_id"] == youtube_video_id}
+    indexed_rows: list[dict[str, Any]] = []
+    dimensions: int | None = None
+    for chunk_index, chunk_text in enumerate(chunks):
+        content_hash = hashlib.sha256(chunk_text.encode("utf-8")).hexdigest()
+        existing_row = existing_rows.get(chunk_index)
+        if existing_row is not None and existing_row["embedding_content_hash"] == content_hash and existing_row["embedding"] is not None:
+            dimensions = len(existing_row["embedding"])
+            continue
+
+        embedding = embed_text(chunk_text) if embed_text is not None else embed_text_with_gemini(chunk_text, config=embedding_config)
+        if not embedding:
+            raise EmbeddingSearchError("Embedding request returned an empty vector")
+        dimensions = len(embedding)
+        connection.ensure_transcript_chunk_table(dimensions)
+        indexed_rows.append(
+            {
+                "video_id": youtube_video_id,
+                "chunk_index": chunk_index,
+                "text": chunk_text,
+                "embedding_content_hash": content_hash,
+                "embedding": [float(value) for value in embedding],
+            }
+        )
+
+    connection.upsert_rows(
+        "video_transcript_chunks",
+        ["video_id", "chunk_index"],
+        indexed_rows,
+    )
+    connection.delete_where(
+        "video_transcript_chunks",
+        f"video_id = {filter_literal(youtube_video_id)} AND chunk_index >= {len(chunks)}",
+    )
+    return {
+        "video_id": youtube_video_id,
+        "dimensions": dimensions or 0,
+    }
+
+
+def split_transcript_chunks(
+    transcript: str,
+    *,
+    chunk_chars: int = TRANSCRIPT_CHUNK_CHARS,
+    overlap_chars: int = TRANSCRIPT_CHUNK_OVERLAP_CHARS,
+) -> list[str]:
+    clean_transcript = " ".join(transcript.split())
+    if not clean_transcript:
+        return []
+    if chunk_chars <= 0:
+        raise ValueError("transcript chunk size must be greater than 0")
+    if overlap_chars < 0 or overlap_chars >= chunk_chars:
+        raise ValueError("transcript chunk overlap must be non-negative and smaller than chunk size")
+
+    chunks: list[str] = []
+    start = 0
+    while start < len(clean_transcript):
+        end = min(len(clean_transcript), start + chunk_chars)
+        chunk = clean_transcript[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        if end == len(clean_transcript):
+            break
+        start = end - overlap_chars
+    return chunks
+
+
+def search_transcript_chunk_scores(
+    connection: LanceConnection,
+    query: str,
+    video_ids: list[str],
+    *,
+    embed_text: EmbedText | None = None,
+    embedding_config: EmbeddingConfig | None = None,
+) -> dict[str, float]:
+    if not video_ids or connection.optional_table("video_transcript_chunks") is None:
+        return {}
+
+    query_embedding = embed_text(query) if embed_text is not None else embed_text_with_gemini(query, config=embedding_config)
+    rows = (
+        connection.table("video_transcript_chunks")
+        .search(query_embedding, vector_column_name="embedding")
+        .metric("cosine")
+        .where(f"video_id IN ({filter_in_values(video_ids)})")
+        .limit(MAX_TABLE_SCAN_ROWS)
+        .to_list()
+    )
+    scores: dict[str, float] = {}
+    for row in rows:
+        score = 1.0 - float(row["_distance"])
+        video_id = row["video_id"]
+        scores[video_id] = max(score, scores.get(video_id, float("-inf")))
+    return scores
+
+
+def list_video_ids_for_embedding_index(
+    connection: LanceConnection,
+    *,
+    require_transcript: bool = True,
+) -> list[str]:
+    rows = [row for row in connection.rows("videos") if not require_transcript or row["transcript"]]
+    return [
+        row["youtube_video_id"]
+        for row in sorted(
+            rows,
+            key=lambda row: (
+                row["upload_date"] or "",
+                row["youtube_video_id"],
+            ),
+            reverse=True,
+        )
+    ]
+
+
+def index_video_embedding(
+    connection: LanceConnection,
+    youtube_video_id: str,
+    *,
+    embed_text: EmbedText | None = None,
+    embedding_config: EmbeddingConfig | None = None,
+) -> dict[str, Any] | None:
+    video = find_video_row(connection, youtube_video_id)
+    if video is None:
+        return None
+
+    row = video_payload_row(connection, video)
     source_text = embedding_source_text(row)
     content_hash = hashlib.sha256(source_text.encode("utf-8")).hexdigest()
-    if row["embedding_content_hash"] == content_hash and row["embedding"] is not None:
+    existing_row = next(
+        (row for row in connection.rows("video_embeddings") if row["video_id"] == youtube_video_id),
+        None,
+    )
+    if existing_row is not None and existing_row["embedding_content_hash"] == content_hash and existing_row["embedding"] is not None:
         return {
-            "video_id": row["youtube_video_id"],
+            "video_id": youtube_video_id,
             "content_hash": content_hash,
-            "dimensions": len(row["embedding"]) // 4,
+            "dimensions": len(existing_row["embedding"]),
         }
 
     embedding = embed_text(source_text) if embed_text is not None else embed_text_with_gemini(source_text, config=embedding_config)
     if not embedding:
         raise EmbeddingSearchError("Embedding request returned an empty vector")
-    connection.execute(
-        """
-        UPDATE videos
-        SET embedding_content_hash = ?,
-            embedding = ?
-        WHERE youtube_video_id = ?
-        """,
-        (
-            content_hash,
-            struct.pack(f"<{len(embedding)}f", *embedding),
-            row["youtube_video_id"],
-        ),
+    connection.ensure_video_embedding_table(len(embedding))
+    connection.upsert_rows(
+        "video_embeddings",
+        "video_id",
+        [
+            {
+                "video_id": youtube_video_id,
+                "embedding_content_hash": content_hash,
+                "embedding": [float(value) for value in embedding],
+            }
+        ],
     )
-    connection.commit()
     return {
-        "video_id": row["youtube_video_id"],
+        "video_id": youtube_video_id,
         "content_hash": content_hash,
         "dimensions": len(embedding),
     }
 
 
-def embedding_source_text(row: turso.Row) -> str:
+def embedding_source_text(row: Mapping[str, Any]) -> str:
     return "\n".join(
         str(part)
         for part in (
@@ -201,11 +335,6 @@ def post_embedding_json(
         raise EmbeddingSearchError(message or f"Embedding request HTTP {error.code}") from error
     except (OSError, json.JSONDecodeError) as error:
         raise EmbeddingSearchError(str(error)) from error
-
-
-def encode_vector(embedding: list[float]) -> str:
-    """Encode an embedding vector for libSQL vector conversion."""
-    return json.dumps(embedding, separators=(",", ":"))
 
 
 def compact_embedding_error(text: str) -> str:

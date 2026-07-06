@@ -5,15 +5,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-import turso
-
 from ..schemas import ChannelIdentity, VideoRecord, extract_channel_identity, extract_video_record
 from .channels import upsert_channel
+from .connection import LanceConnection, filter_literal
 from .payloads import stored_video_payload
 
 
 def upsert_video(
-    connection: turso.Connection,
+    connection: LanceConnection,
     metadata: dict[str, Any],
     *,
     transcript: str | None = None,
@@ -31,12 +30,24 @@ def upsert_video(
     youtube_channel_id = upsert_channel(connection, resolved_channel)
     existing_row = find_video_row(connection, video_record.youtube_video_id)
     if existing_row is None:
-        insert_video(
-            connection,
-            video_record,
-            youtube_channel_id,
-            metadata_fetched_at=metadata_fetched_at,
-            transcript_fetched_at=transcript_fetched_at,
+        connection.upsert_rows(
+            "videos",
+            "youtube_video_id",
+            [
+                {
+                    "youtube_video_id": video_record.youtube_video_id,
+                    "channel_id": youtube_channel_id,
+                    "title": video_record.title,
+                    "upload_date": video_record.upload_date,
+                    "duration": video_record.duration,
+                    "view_count": video_record.view_count,
+                    "like_count": video_record.like_count,
+                    "transcript": video_record.transcript,
+                    "summary": None,
+                    "metadata_fetched_at": metadata_fetched_at,
+                    "transcript_fetched_at": transcript_fetched_at,
+                }
+            ],
         )
         return find_video_payload(connection, video_record.youtube_video_id)
 
@@ -52,7 +63,7 @@ def upsert_video(
 
 
 def upsert_video_summary(
-    connection: turso.Connection,
+    connection: LanceConnection,
     youtube_video_id: str,
     summary: str,
 ) -> str | None:
@@ -64,117 +75,39 @@ def upsert_video_summary(
     if not clean_summary:
         raise ValueError("Video summary cannot be empty")
 
-    connection.execute(
-        """
-        UPDATE videos
-        SET summary = ?
-        WHERE youtube_video_id = ?
-        """,
-        (
-            clean_summary,
-            youtube_video_id,
-        ),
+    connection.upsert_rows(
+        "videos",
+        "youtube_video_id",
+        [{**row, "summary": clean_summary}],
     )
     return youtube_video_id
 
 
 def find_video_row(
-    connection: turso.Connection,
+    connection: LanceConnection,
     youtube_video_id: str,
-) -> turso.Row | None:
-    return connection.execute(
-        """
-        SELECT
-            youtube_video_id,
-            channel_id,
-            title,
-            upload_date,
-            duration,
-            view_count,
-            like_count,
-            transcript,
-            summary,
-            metadata_fetched_at,
-            transcript_fetched_at
-        FROM videos
-        WHERE youtube_video_id = ?
-        """,
-        (youtube_video_id,),
-    ).fetchone()
-
-
-def insert_video(
-    connection: turso.Connection,
-    video_record: VideoRecord,
-    youtube_channel_id: str | None,
-    *,
-    metadata_fetched_at: str | None,
-    transcript_fetched_at: str | None,
-) -> None:
-    connection.execute(
-        """
-        INSERT INTO videos (
-            youtube_video_id,
-            channel_id,
-            title,
-            upload_date,
-            duration,
-            view_count,
-            like_count,
-            transcript,
-            metadata_fetched_at,
-            transcript_fetched_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            video_record.youtube_video_id,
-            youtube_channel_id,
-            video_record.title,
-            video_record.upload_date,
-            video_record.duration,
-            video_record.view_count,
-            video_record.like_count,
-            video_record.transcript,
-            metadata_fetched_at,
-            transcript_fetched_at,
-        ),
+) -> dict[str, Any] | None:
+    return connection.find_row(
+        "videos",
+        "youtube_video_id",
+        youtube_video_id,
     )
 
 
 def find_video_payload(
-    connection: turso.Connection,
+    connection: LanceConnection,
     youtube_video_id: str,
 ) -> dict[str, Any] | None:
     """Return the caller-facing stored values for a video row."""
-    row = connection.execute(
-        """
-        SELECT
-            videos.youtube_video_id,
-            videos.channel_id,
-            channels.channel_handle,
-            videos.title,
-            videos.upload_date,
-            videos.duration,
-            videos.view_count,
-            videos.like_count,
-            videos.transcript,
-            videos.metadata_fetched_at,
-            videos.transcript_fetched_at
-        FROM videos AS videos
-        LEFT JOIN channels AS channels ON channels.youtube_channel_id = videos.channel_id
-        WHERE videos.youtube_video_id = ?
-        """,
-        (youtube_video_id,),
-    ).fetchone()
+    row = find_video_row(connection, youtube_video_id)
     if row is None:
         return None
-    return stored_video_payload(row)
+    return stored_video_payload(video_payload_row(connection, row))
 
 
 def update_video(
-    connection: turso.Connection,
-    existing_row: turso.Row,
+    connection: LanceConnection,
+    existing_row: dict[str, Any],
     video_record: VideoRecord,
     youtube_channel_id: str | None,
     *,
@@ -190,32 +123,23 @@ def update_video(
     next_transcript = keep_existing_if_missing(video_record.transcript, existing_row["transcript"])
     next_metadata_fetched_at = keep_existing_if_missing(metadata_fetched_at, existing_row["metadata_fetched_at"])
     next_transcript_fetched_at = keep_existing_if_missing(transcript_fetched_at, existing_row["transcript_fetched_at"])
-    connection.execute(
-        """
-        UPDATE videos
-        SET channel_id = ?,
-            title = ?,
-            upload_date = ?,
-            duration = ?,
-            view_count = ?,
-            like_count = ?,
-            transcript = ?,
-            metadata_fetched_at = ?,
-            transcript_fetched_at = ?
-        WHERE youtube_video_id = ?
-        """,
-        (
-            next_channel_id,
-            next_title,
-            next_upload_date,
-            next_duration,
-            next_view_count,
-            next_like_count,
-            next_transcript,
-            next_metadata_fetched_at,
-            next_transcript_fetched_at,
-            existing_row["youtube_video_id"],
-        ),
+    connection.upsert_rows(
+        "videos",
+        "youtube_video_id",
+        [
+            {
+                **existing_row,
+                "channel_id": next_channel_id,
+                "title": next_title,
+                "upload_date": next_upload_date,
+                "duration": next_duration,
+                "view_count": next_view_count,
+                "like_count": next_like_count,
+                "transcript": next_transcript,
+                "metadata_fetched_at": next_metadata_fetched_at,
+                "transcript_fetched_at": next_transcript_fetched_at,
+            }
+        ],
     )
     if video_embedding_source_changed(
         existing_row,
@@ -226,6 +150,18 @@ def update_video(
         clear_video_embedding(connection, existing_row["youtube_video_id"])
     if next_transcript != existing_row["transcript"]:
         clear_video_summary(connection, existing_row["youtube_video_id"])
+        clear_video_transcript_chunks(connection, existing_row["youtube_video_id"])
+
+
+def video_payload_row(
+    connection: LanceConnection,
+    video: dict[str, Any],
+) -> dict[str, Any]:
+    channel = connection.find_row("channels", "youtube_channel_id", video["channel_id"])
+    return {
+        **video,
+        "channel_handle": channel["channel_handle"] if channel is not None else None,
+    }
 
 
 def has_metadata_fields(metadata: dict[str, Any]) -> bool:
@@ -247,7 +183,7 @@ def keep_existing_if_missing[StoredValue](
 
 
 def video_embedding_source_changed(
-    existing_row: turso.Row,
+    existing_row: dict[str, Any],
     *,
     channel_id: str | None,
     title: str | None,
@@ -266,38 +202,44 @@ def video_embedding_source_changed(
 
 
 def clear_video_embedding(
-    connection: turso.Connection,
+    connection: LanceConnection,
     youtube_video_id: str,
 ) -> None:
     """Clear cached embedding data for a stored video."""
-    connection.execute(
-        """
-        UPDATE videos
-        SET embedding_content_hash = NULL,
-            embedding = NULL
-        WHERE youtube_video_id = ?
-        """,
-        (youtube_video_id,),
+    connection.delete_where(
+        "video_embeddings",
+        f"video_id = {filter_literal(youtube_video_id)}",
+    )
+
+
+def clear_video_transcript_chunks(
+    connection: LanceConnection,
+    youtube_video_id: str,
+) -> None:
+    """Clear transcript chunk embeddings for a stored video."""
+    connection.delete_where(
+        "video_transcript_chunks",
+        f"video_id = {filter_literal(youtube_video_id)}",
     )
 
 
 def clear_video_summary(
-    connection: turso.Connection,
+    connection: LanceConnection,
     youtube_video_id: str,
 ) -> None:
     """Clear cached summary data for a stored video."""
-    connection.execute(
-        """
-        UPDATE videos
-        SET summary = NULL
-        WHERE youtube_video_id = ?
-        """,
-        (youtube_video_id,),
+    row = find_video_row(connection, youtube_video_id)
+    if row is None:
+        return
+    connection.upsert_rows(
+        "videos",
+        "youtube_video_id",
+        [{**row, "summary": None}],
     )
 
 
 def store_channel_listing(
-    connection: turso.Connection,
+    connection: LanceConnection,
     metadata: dict[str, Any],
 ) -> None:
     channel_identity = extract_channel_identity(metadata)

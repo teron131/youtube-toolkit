@@ -1,15 +1,15 @@
 [project]
 name = "youtube-toolkit"
-version = "0.11.1"
+version = "0.12.0"
 description = "Transcript-first YouTube research toolkit for agents and local workflows"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "lancedb>=0.25.3",
     "langchain-core>=1.2.12",
     "langchain-openai>=1.1.9",
     "opencc>=1.3.1",
     "pydantic>=2.12.5",
-    "pyturso>=0.6.1",
     "yt-dlp>=2026.2.4",
 ]
 
@@ -28,7 +28,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["youtube_toolkit"]
-artifacts = ["youtube_toolkit/storage/schema.sql"]
 
 [tool.ruff]
 line-length = 180

@@ -8,8 +8,6 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-import turso
-
 from ..identity import ChannelRef, ChannelRefInput, YouTubeRefs, normalize_channel_url, parse_channel_ref
 from ..schemas import (
     ChannelIdentity,
@@ -33,6 +31,7 @@ from ..storage import (
     upsert_blacklist_channel,
     upsert_watchlist_channel,
 )
+from ..storage.connection import LanceConnection
 from .caption import fetch_transcript
 from .client import YtDlpClient
 
@@ -180,7 +179,7 @@ def list_watchlist_channels() -> list[str]:
 def _add_channel_memberships(
     channel_refs: ChannelRefInput,
     *,
-    add_membership: Callable[[turso.Connection, ChannelIdentity], str | None],
+    add_membership: Callable[[LanceConnection, ChannelIdentity], str | None],
 ) -> list[str]:
     fetched_channels = _map_concurrently(
         list(YouTubeRefs.parse(channel_refs)),
@@ -222,7 +221,7 @@ def remove_blacklist_channels(channel_refs: ChannelRefInput) -> list[ChannelRemo
 def _remove_channel_memberships(
     channel_refs: ChannelRefInput,
     *,
-    remove_membership: Callable[[turso.Connection, ChannelIdentity], bool],
+    remove_membership: Callable[[LanceConnection, ChannelIdentity], bool],
 ) -> list[ChannelRemovalResult]:
     resolved_channels = _map_concurrently(
         list(YouTubeRefs.parse(channel_refs)),
