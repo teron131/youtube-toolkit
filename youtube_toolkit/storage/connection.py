@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Literal, NotRequired, TypedDict
 
 import lancedb
+from lancedb.index import BTree, FTS
 from lancedb.table import LanceTable
 import pyarrow as pa
 
@@ -15,6 +16,28 @@ APP_STATE_DIRNAME = "youtube-toolkit"
 DATABASE_FILENAME = "youtube.lancedb"
 DATABASE_SCHEMA_REPAIR = "Run youtube setup database to create a fresh LanceDB store"
 MAX_TABLE_SCAN_ROWS = 100_000
+TRANSCRIPT_CHUNK_TEXT_INDEX = "transcript_chunk_text_idx"
+SCALAR_INDEX_COLUMNS = {
+    "channels": (
+        "youtube_channel_id",
+        "channel_handle",
+    ),
+    "videos": (
+        "youtube_video_id",
+        "channel_id",
+        "upload_date",
+        "view_count",
+        "like_count",
+    ),
+    "channels_watchlist": ("channel_id",),
+    "watchlist_videos": ("video_id",),
+    "channels_blacklist": ("channel_id",),
+    "video_embeddings": ("video_id",),
+    "video_transcript_chunks": (
+        "video_id",
+        "chunk_index",
+    ),
+}
 
 
 class DatabaseSchemaHealthResult(TypedDict):
@@ -84,6 +107,8 @@ class LanceConnection:
         self.path = path
         self.database = lancedb.connect(path)
         self.ensure_base_tables()
+        self.ensure_base_scalar_indexes()
+        self.ensure_optional_table_indexes()
 
     def __enter__(self) -> LanceConnection:
         return self
@@ -94,6 +119,15 @@ class LanceConnection:
     def ensure_base_tables(self) -> None:
         for table_name, schema in BASE_TABLE_SCHEMAS.items():
             self.ensure_table(table_name, schema)
+
+    def ensure_base_scalar_indexes(self) -> None:
+        for table_name in BASE_TABLE_SCHEMAS:
+            self.ensure_scalar_indexes(table_name)
+
+    def ensure_optional_table_indexes(self) -> None:
+        self.ensure_scalar_indexes("video_embeddings")
+        self.ensure_scalar_indexes("video_transcript_chunks")
+        self.ensure_transcript_chunk_text_index()
 
     def ensure_table(
         self,
@@ -108,19 +142,21 @@ class LanceConnection:
         self,
         vector_dimensions: int,
     ) -> LanceTable:
-        return self.ensure_table(
+        table = self.ensure_table(
             "video_embeddings",
             vector_schema(
                 id_field="video_id",
                 vector_dimensions=vector_dimensions,
             ),
         )
+        self.ensure_scalar_indexes("video_embeddings")
+        return table
 
     def ensure_transcript_chunk_table(
         self,
         vector_dimensions: int,
     ) -> LanceTable:
-        return self.ensure_table(
+        table = self.ensure_table(
             "video_transcript_chunks",
             vector_schema(
                 id_field="video_id",
@@ -130,6 +166,41 @@ class LanceConnection:
                     pa.field("text", pa.string()),
                 ],
             ),
+        )
+        self.ensure_scalar_indexes("video_transcript_chunks")
+        return table
+
+    def ensure_scalar_indexes(
+        self,
+        table_name: str,
+        *,
+        refresh: bool = False,
+    ) -> None:
+        table = self.optional_table(table_name)
+        if table is None:
+            return
+        index_names = {index.name for index in table.list_indices()}
+        for column_name in SCALAR_INDEX_COLUMNS.get(table_name, ()):
+            index_name = f"{table_name}_{column_name}_idx"
+            if not refresh and index_name in index_names:
+                continue
+            table.create_index(
+                column_name,
+                config=BTree(),
+                name=index_name,
+                replace=True,
+            )
+
+    def ensure_transcript_chunk_text_index(self) -> None:
+        table = self.optional_table("video_transcript_chunks")
+        if table is None:
+            return
+        if any(index.name == TRANSCRIPT_CHUNK_TEXT_INDEX for index in table.list_indices()):
+            return
+        table.create_index(
+            "text",
+            config=FTS(base_tokenizer="icu"),
+            name=TRANSCRIPT_CHUNK_TEXT_INDEX,
         )
 
     def table_names(self) -> set[str]:
@@ -152,11 +223,17 @@ class LanceConnection:
     def rows(
         self,
         table_name: str,
+        *,
+        where_sql: str | None = None,
+        limit: int = MAX_TABLE_SCAN_ROWS,
     ) -> list[dict[str, Any]]:
         table = self.optional_table(table_name)
         if table is None:
             return []
-        return table.search().limit(MAX_TABLE_SCAN_ROWS).to_list()
+        query = table.search()
+        if where_sql is not None:
+            query = query.where(where_sql)
+        return query.limit(limit).to_list()
 
     def find_row(
         self,
@@ -164,7 +241,12 @@ class LanceConnection:
         key: str,
         value: Any,
     ) -> dict[str, Any] | None:
-        return next((row for row in self.rows(table_name) if row[key] == value), None)
+        rows = self.rows(
+            table_name,
+            where_sql=filter_equal(key, value),
+            limit=1,
+        )
+        return rows[0] if rows else None
 
     def upsert_rows(
         self,
@@ -175,6 +257,7 @@ class LanceConnection:
         if not rows:
             return
         self.table(table_name).merge_insert(key).when_matched_update_all().when_not_matched_insert_all().execute(rows)
+        self.ensure_scalar_indexes(table_name, refresh=True)
 
     def delete_where(
         self,
@@ -257,6 +340,21 @@ def inspect_database_schema(database_path: Path) -> DatabaseSchemaHealthResult:
 
 def filter_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
+
+
+def filter_equal(
+    column_name: str,
+    value: Any,
+) -> str:
+    if value is None:
+        return f"{column_name} IS NULL"
+    if isinstance(value, bool):
+        literal = "TRUE" if value else "FALSE"
+    elif isinstance(value, int | float):
+        literal = str(value)
+    else:
+        literal = filter_literal(str(value))
+    return f"{column_name} = {literal}"
 
 
 def filter_in_values(values: list[str]) -> str:
