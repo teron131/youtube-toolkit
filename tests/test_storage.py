@@ -103,7 +103,7 @@ def test_database_schema_health_warns_on_stale_fake_ids(tmp_path) -> None:
     assert payload["status"] == "invalid"
     assert "unexpected tables: channel_video_entries" in payload["detail"]
     assert "channels has unexpected columns: id" in payload["detail"]
-    assert "videos has unexpected columns: id, view_count" in payload["detail"]
+    assert "videos has unexpected columns: id" in payload["detail"]
     assert payload["repair"] == "Run youtube setup database to archive the current DB and create a fresh schema"
 
 
@@ -157,14 +157,71 @@ def test_upsert_video_returns_existing_values_for_sparse_update(
             transcript="既有逐字稿",
         )
 
-    assert payload == {
+    assert payload is not None
+    assert {
+        key: payload[key]
+        for key in (
+            "video_id",
+            "title",
+            "upload_date",
+            "duration",
+            "view_count",
+            "like_count",
+            "channel_id",
+            "channel_handle",
+            "transcript",
+        )
+    } == {
         "video_id": "JpSHyEIZ_bo",
         "title": "AI market notes",
         "upload_date": "2026-06-21",
+        "duration": None,
+        "view_count": None,
+        "like_count": None,
         "channel_id": None,
         "channel_handle": None,
         "transcript": "既有逐字稿",
     }
+    assert payload["metadata_fetched_at"] is not None
+    assert payload["transcript_fetched_at"] is not None
+
+
+def test_upsert_video_stores_metadata_refresh_fields(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        payload = upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "AI market notes",
+                "duration": 123,
+                "view_count": 1000,
+                "like_count": 50,
+            },
+        )
+        updated_payload = upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "AI market notes refreshed",
+            },
+        )
+
+    assert payload is not None
+    assert payload["duration"] == 123.0
+    assert payload["view_count"] == 1000
+    assert payload["like_count"] == 50
+    assert payload["metadata_fetched_at"] is not None
+    assert payload["transcript_fetched_at"] is None
+    assert updated_payload is not None
+    assert updated_payload["title"] == "AI market notes refreshed"
+    assert updated_payload["duration"] == 123.0
+    assert updated_payload["view_count"] == 1000
+    assert updated_payload["like_count"] == 50
 
 
 def test_upsert_video_stores_youtube_channel_id(
@@ -395,12 +452,19 @@ def test_search_stored_videos_finds_by_id_and_url(
             "video_id": "JpSHyEIZ_bo",
             "title": "AI market notes",
             "upload_date": "2026-06-21",
+            "duration": None,
+            "view_count": None,
+            "like_count": None,
             "channel_id": None,
             "channel_handle": None,
             "transcript": "既有逐字稿",
         }
-        assert search_stored_videos(connection, "JpSHyEIZ_bo") == [expected]
-        assert search_stored_videos(connection, "https://www.youtube.com/watch?v=JpSHyEIZ_bo") == [expected]
+        id_results = search_stored_videos(connection, "JpSHyEIZ_bo")
+        url_results = search_stored_videos(connection, "https://www.youtube.com/watch?v=JpSHyEIZ_bo")
+        assert [{key: result[key] for key in expected} for result in id_results] == [expected]
+        assert [{key: result[key] for key in expected} for result in url_results] == [expected]
+        assert id_results[0]["metadata_fetched_at"] is not None
+        assert id_results[0]["transcript_fetched_at"] is not None
 
 
 def test_search_stored_videos_finds_keyword_across_row(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 import turso
@@ -22,16 +23,31 @@ def upsert_video(
     if video_record is None:
         return None
 
+    metadata_fetched_at = current_utc_isoformat() if has_metadata_fields(metadata) else None
+    transcript_fetched_at = current_utc_isoformat() if transcript is not None else None
     resolved_channel = channel_identity
     if resolved_channel is None or not resolved_channel.has_identity():
         resolved_channel = extract_channel_identity(metadata)
     youtube_channel_id = upsert_channel(connection, resolved_channel)
     existing_row = find_video_row(connection, video_record.youtube_video_id)
     if existing_row is None:
-        insert_video(connection, video_record, youtube_channel_id)
+        insert_video(
+            connection,
+            video_record,
+            youtube_channel_id,
+            metadata_fetched_at=metadata_fetched_at,
+            transcript_fetched_at=transcript_fetched_at,
+        )
         return find_video_payload(connection, video_record.youtube_video_id)
 
-    update_video(connection, existing_row, video_record, youtube_channel_id)
+    update_video(
+        connection,
+        existing_row,
+        video_record,
+        youtube_channel_id,
+        metadata_fetched_at=metadata_fetched_at,
+        transcript_fetched_at=transcript_fetched_at,
+    )
     return find_video_payload(connection, video_record.youtube_video_id)
 
 
@@ -68,7 +84,18 @@ def find_video_row(
 ) -> turso.Row | None:
     return connection.execute(
         """
-        SELECT youtube_video_id, channel_id, title, upload_date, transcript, summary
+        SELECT
+            youtube_video_id,
+            channel_id,
+            title,
+            upload_date,
+            duration,
+            view_count,
+            like_count,
+            transcript,
+            summary,
+            metadata_fetched_at,
+            transcript_fetched_at
         FROM videos
         WHERE youtube_video_id = ?
         """,
@@ -80,6 +107,9 @@ def insert_video(
     connection: turso.Connection,
     video_record: VideoRecord,
     youtube_channel_id: str | None,
+    *,
+    metadata_fetched_at: str | None,
+    transcript_fetched_at: str | None,
 ) -> None:
     connection.execute(
         """
@@ -88,16 +118,26 @@ def insert_video(
             channel_id,
             title,
             upload_date,
-            transcript
+            duration,
+            view_count,
+            like_count,
+            transcript,
+            metadata_fetched_at,
+            transcript_fetched_at
         )
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             video_record.youtube_video_id,
             youtube_channel_id,
             video_record.title,
             video_record.upload_date,
+            video_record.duration,
+            video_record.view_count,
+            video_record.like_count,
             video_record.transcript,
+            metadata_fetched_at,
+            transcript_fetched_at,
         ),
     )
 
@@ -112,10 +152,15 @@ def find_video_payload(
         SELECT
             videos.youtube_video_id,
             videos.channel_id,
+            channels.channel_handle,
             videos.title,
             videos.upload_date,
+            videos.duration,
+            videos.view_count,
+            videos.like_count,
             videos.transcript,
-            channels.channel_handle
+            videos.metadata_fetched_at,
+            videos.transcript_fetched_at
         FROM videos AS videos
         LEFT JOIN channels AS channels ON channels.youtube_channel_id = videos.channel_id
         WHERE videos.youtube_video_id = ?
@@ -132,25 +177,43 @@ def update_video(
     existing_row: turso.Row,
     video_record: VideoRecord,
     youtube_channel_id: str | None,
+    *,
+    metadata_fetched_at: str | None,
+    transcript_fetched_at: str | None,
 ) -> None:
     next_channel_id = keep_existing_if_missing(youtube_channel_id, existing_row["channel_id"])
     next_title = keep_existing_if_missing(video_record.title, existing_row["title"])
     next_upload_date = keep_existing_if_missing(video_record.upload_date, existing_row["upload_date"])
+    next_duration = keep_existing_if_missing(video_record.duration, existing_row["duration"])
+    next_view_count = keep_existing_if_missing(video_record.view_count, existing_row["view_count"])
+    next_like_count = keep_existing_if_missing(video_record.like_count, existing_row["like_count"])
     next_transcript = keep_existing_if_missing(video_record.transcript, existing_row["transcript"])
+    next_metadata_fetched_at = keep_existing_if_missing(metadata_fetched_at, existing_row["metadata_fetched_at"])
+    next_transcript_fetched_at = keep_existing_if_missing(transcript_fetched_at, existing_row["transcript_fetched_at"])
     connection.execute(
         """
         UPDATE videos
         SET channel_id = ?,
             title = ?,
             upload_date = ?,
-            transcript = ?
+            duration = ?,
+            view_count = ?,
+            like_count = ?,
+            transcript = ?,
+            metadata_fetched_at = ?,
+            transcript_fetched_at = ?
         WHERE youtube_video_id = ?
         """,
         (
             next_channel_id,
             next_title,
             next_upload_date,
+            next_duration,
+            next_view_count,
+            next_like_count,
             next_transcript,
+            next_metadata_fetched_at,
+            next_transcript_fetched_at,
             existing_row["youtube_video_id"],
         ),
     )
@@ -163,6 +226,16 @@ def update_video(
         clear_video_embedding(connection, existing_row["youtube_video_id"])
     if next_transcript != existing_row["transcript"]:
         clear_video_summary(connection, existing_row["youtube_video_id"])
+
+
+def has_metadata_fields(metadata: dict[str, Any]) -> bool:
+    """Return whether incoming data represents a metadata fetch, not just an ID shell."""
+    return any(key != "id" and metadata.get(key) is not None for key in metadata)
+
+
+def current_utc_isoformat() -> str:
+    """Return the storage timestamp format for video fetch boundaries."""
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
 def keep_existing_if_missing[StoredValue](

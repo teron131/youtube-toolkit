@@ -12,10 +12,15 @@ CREATE TABLE IF NOT EXISTS videos (
     channel_id TEXT,
     title TEXT,
     upload_date TEXT,
+    duration REAL,
+    view_count INTEGER,
+    like_count INTEGER,
     transcript TEXT,
     summary TEXT,
     embedding_content_hash TEXT,
     embedding F32_BLOB,
+    metadata_fetched_at TEXT,
+    transcript_fetched_at TEXT,
     FOREIGN KEY (channel_id) REFERENCES channels (youtube_channel_id)
 );
 
