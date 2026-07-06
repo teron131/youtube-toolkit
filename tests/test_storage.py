@@ -9,10 +9,12 @@ from youtube_toolkit.schemas import ChannelIdentity
 from youtube_toolkit.storage import (
     DATABASE_FILENAME,
     STORAGE_DIRNAME,
+    analyze_transcript_chunk_search,
     auto_index_transcript_chunks,
     auto_index_video_embedding,
     database_schema_health,
     embed_text_with_gemini,
+    explain_transcript_chunk_search,
     get_connection,
     get_stored_video,
     index_transcript_chunks,
@@ -25,6 +27,7 @@ from youtube_toolkit.storage import (
     upsert_video,
     upsert_video_summary,
 )
+from youtube_toolkit.storage.connection import SCALAR_INDEX_COLUMNS, TRANSCRIPT_CHUNK_TEXT_INDEX
 
 
 def test_default_storage_path_is_repo_cache(monkeypatch, tmp_path) -> None:
@@ -77,6 +80,17 @@ def test_database_schema_health_accepts_current_schema(monkeypatch, tmp_path) ->
         "status": "ready",
         "detail": "LanceDB store has expected base tables",
     }
+
+
+def test_connection_creates_base_scalar_indexes(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        for table_name, column_names in SCALAR_INDEX_COLUMNS.items():
+            if table_name not in connection.table_names():
+                continue
+            index_names = {index.name for index in connection.table(table_name).list_indices()}
+            assert {f"{table_name}_{column_name}_idx" for column_name in column_names}.issubset(index_names)
 
 
 def test_database_schema_health_warns_on_missing_lance_tables(tmp_path) -> None:
@@ -614,9 +628,31 @@ def test_transcript_chunk_index_scores_best_matching_chunk(
             ],
             embed_text=fake_embed,
         )
+        explain_plan = explain_transcript_chunk_search(
+            connection,
+            "GPU capex",
+            [
+                "JpSHyEIZ_bo",
+                "dQw4w9WgXcQ",
+            ],
+            embed_text=fake_embed,
+        )
+        analyze_plan = analyze_transcript_chunk_search(
+            connection,
+            "GPU capex",
+            [
+                "JpSHyEIZ_bo",
+                "dQw4w9WgXcQ",
+            ],
+            embed_text=fake_embed,
+        )
+        transcript_chunk_indices = connection.table("video_transcript_chunks").list_indices()
 
-    assert scores["JpSHyEIZ_bo"] == pytest.approx(1.0)
+    assert any(index.name == TRANSCRIPT_CHUNK_TEXT_INDEX for index in transcript_chunk_indices)
+    assert scores["JpSHyEIZ_bo"] > 0
     assert scores["dQw4w9WgXcQ"] < scores["JpSHyEIZ_bo"]
+    assert "LanceRead" in explain_plan
+    assert "AnalyzeExec" in analyze_plan
 
 
 def test_index_video_embedding_persists_after_connection_close(

@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from ..identity import VideoRef, extract_video_id
 from ..model_config import EmbeddingConfig
-from .connection import MAX_TABLE_SCAN_ROWS, LanceConnection
+from .connection import MAX_TABLE_SCAN_ROWS, LanceConnection, filter_equal, filter_in_values
 from .payloads import stored_video_payload
 from .semantic import embed_text_with_gemini
 from .videos import video_payload_row
@@ -15,6 +15,7 @@ from .videos import video_payload_row
 EmbedText = Callable[[str], list[float]]
 SearchSort = Literal["upload_date", "relevance"]
 SEARCH_SORTS = {"upload_date", "relevance"}
+TRANSCRIPT_PRESENT_SQL = "transcript IS NOT NULL AND transcript != ''"
 
 
 def search_stored_videos(
@@ -40,13 +41,20 @@ def search_stored_videos(
         raise ValueError("relevance sort requires semantic=True")
 
     video_id = extract_video_id(normalized_query)
-    rows = stored_video_rows(connection)
     if video_id is not None:
-        matching_rows = [row for row in rows if row["youtube_video_id"] == video_id and has_required_transcript(row, require_transcript)]
-        return [stored_video_payload(row) for row in sort_video_rows_by_upload_date(matching_rows)[:limit]]
+        rows = stored_video_rows(
+            connection,
+            where_sql=video_lookup_filter(video_id, require_transcript=require_transcript),
+            limit=limit,
+        )
+        return [stored_video_payload(row) for row in sort_video_rows_by_upload_date(rows)]
 
     normalized_keyword = normalized_query.casefold()
-    matching_rows = [row for row in rows if has_required_transcript(row, require_transcript) and video_row_matches_keyword(row, normalized_keyword)]
+    rows = stored_video_rows(
+        connection,
+        where_sql=TRANSCRIPT_PRESENT_SQL if require_transcript else None,
+    )
+    matching_rows = [row for row in rows if video_row_matches_keyword(row, normalized_keyword)]
     keyword_payloads = [stored_video_payload(row) for row in sort_video_rows_by_upload_date(matching_rows)[:limit]]
     if not semantic:
         return keyword_payloads
@@ -75,24 +83,41 @@ def get_stored_video(
     video_id = extract_video_id(video_ref)
     if video_id is None:
         return None
-    row = next(
-        (row for row in stored_video_rows(connection) if row["youtube_video_id"] == video_id and has_required_transcript(row, require_transcript)),
-        None,
+    rows = stored_video_rows(
+        connection,
+        where_sql=video_lookup_filter(video_id, require_transcript=require_transcript),
+        limit=1,
     )
-    if row is None:
+    if not rows:
         return None
-    return stored_video_payload(row)
+    return stored_video_payload(rows[0])
 
 
-def stored_video_rows(connection: LanceConnection) -> list[dict[str, Any]]:
-    return [video_payload_row(connection, row) for row in connection.rows("videos")]
+def stored_video_rows(
+    connection: LanceConnection,
+    *,
+    where_sql: str | None = None,
+    limit: int = MAX_TABLE_SCAN_ROWS,
+) -> list[dict[str, Any]]:
+    return [
+        video_payload_row(connection, row)
+        for row in connection.rows(
+            "videos",
+            where_sql=where_sql,
+            limit=limit,
+        )
+    ]
 
 
-def has_required_transcript(
-    row: dict[str, Any],
+def video_lookup_filter(
+    video_id: str,
+    *,
     require_transcript: bool,
-) -> bool:
-    return not require_transcript or bool(row["transcript"])
+) -> str:
+    clauses = [filter_equal("youtube_video_id", video_id)]
+    if require_transcript:
+        clauses.append(TRANSCRIPT_PRESENT_SQL)
+    return " AND ".join(clauses)
 
 
 def video_row_matches_keyword(
@@ -125,11 +150,23 @@ def search_video_payloads_by_semantic(
         return []
     query_embedding = embed_text(query) if embed_text is not None else embed_text_with_gemini(query, config=embedding_config)
     rows = connection.table("video_embeddings").search(query_embedding, vector_column_name="embedding").metric("cosine").limit(MAX_TABLE_SCAN_ROWS).to_list()
-    videos_by_id = {row["youtube_video_id"]: row for row in stored_video_rows(connection)}
+    video_ids = [row["video_id"] for row in rows]
+    if not video_ids:
+        return []
+    clauses = [f"youtube_video_id IN ({filter_in_values(video_ids)})"]
+    if require_transcript:
+        clauses.append(TRANSCRIPT_PRESENT_SQL)
+    videos_by_id = {
+        row["youtube_video_id"]: row
+        for row in stored_video_rows(
+            connection,
+            where_sql=" AND ".join(clauses),
+        )
+    }
     semantic_payloads: list[dict[str, Any]] = []
     for row in rows:
         video = videos_by_id.get(row["video_id"])
-        if video is None or (require_transcript and not video["transcript"]):
+        if video is None:
             continue
         payload = stored_video_payload(video)
         payload["semantic_score"] = 1.0 - float(row["_distance"])
