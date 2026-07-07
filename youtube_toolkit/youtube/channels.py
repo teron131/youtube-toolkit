@@ -1,4 +1,4 @@
-"""Recent YouTube channel listing workflows."""
+"""Channel workflows own YouTube listing fetches, membership changes, watchlist sync, and transcript hydration."""
 
 from __future__ import annotations
 
@@ -42,6 +42,8 @@ MAX_CONCURRENT_LIST_WORKERS = 5
 
 @dataclass(frozen=True, slots=True)
 class ChannelOptions:
+    """Caller policy for how much of a channel listing to inspect."""
+
     last: int | None = DEFAULT_LAST_VIDEOS
     days: int | None = None
 
@@ -64,6 +66,7 @@ def fetch_channel_videos(
     options: ChannelOptions | None = None,
     client: ChannelVideosClient | None = None,
 ) -> dict[str, Any]:
+    """Persist catalog metadata for one channel listing after the fetch policy is resolved."""
     metadata = fetch_channel_metadata(
         channel_ref,
         options=options,
@@ -80,6 +83,7 @@ def fetch_channel_metadata(
     options: ChannelOptions | None = None,
     client: ChannelVideosClient | None = None,
 ) -> dict[str, Any]:
+    """Fetch recent channel metadata from YouTube without directly mutating storage."""
     options = options or ChannelOptions()
     client = client or YtDlpClient()
     validate_channel_options(options)
@@ -92,6 +96,7 @@ def fetch_channel_metadata(
 
 
 def validate_channel_options(options: ChannelOptions) -> None:
+    """Validate channel listing limits before any YouTube request is made."""
     if options.last is not None and options.last <= 0:
         raise ValueError("--last must be greater than 0")
     if options.days is not None and options.days <= 0:
@@ -104,6 +109,7 @@ def get_recent_channel_entries(
     *,
     options: ChannelOptions,
 ) -> dict[str, Any]:
+    """Expand days-based channel fetches until the listing can prove it crossed the cutoff."""
     if options.days is None:
         return client.channel_videos(
             channel_url,
@@ -146,6 +152,7 @@ def parse_upload_date(upload_date: str | None) -> date | None:
 
 
 def collect_dated_entries(entries: list[dict[str, Any]]) -> list[tuple[dict[str, Any], date]]:
+    """Keep listing entries that have parseable upload dates for window expansion."""
     dated_entries: list[tuple[dict[str, Any], date]] = []
     for entry in entries:
         upload_date = parse_upload_date(entry.get("upload_date"))
@@ -161,6 +168,7 @@ def should_expand_window(
     days: int,
     window_size: int,
 ) -> bool:
+    """Keep expanding only when the current full page is still newer than the requested window."""
     if len(entries) < window_size:
         return False
     if not dated_entries:
@@ -170,6 +178,7 @@ def should_expand_window(
 
 
 def add_watchlist_channels(channel_refs: ChannelRefInput) -> list[str]:
+    """Resolve and add channels to the local watchlist membership."""
     return _add_channel_memberships(
         channel_refs,
         add_membership=upsert_watchlist_channel,
@@ -177,6 +186,7 @@ def add_watchlist_channels(channel_refs: ChannelRefInput) -> list[str]:
 
 
 def add_blacklist_channels(channel_refs: ChannelRefInput) -> list[str]:
+    """Resolve and add channels to the local search blacklist membership."""
     return _add_channel_memberships(
         channel_refs,
         add_membership=upsert_blacklist_channel,
@@ -184,6 +194,7 @@ def add_blacklist_channels(channel_refs: ChannelRefInput) -> list[str]:
 
 
 def list_watchlist_channels() -> list[str]:
+    """Return watched channels using the storage-owned display reference policy."""
     with get_connection() as connection:
         return list_watchlist_channel_refs(connection)
 
@@ -280,6 +291,7 @@ def sync_watchlist(
     *,
     options: ChannelOptions,
 ) -> WatchlistSyncResult:
+    """Refresh watched channel listings, persist new videos, fetch transcripts, and maintain embeddings."""
     with get_connection() as connection:
         watched_channel_refs = list_watchlist_channel_refs(connection)
 
@@ -325,6 +337,8 @@ def sync_watchlist(
 def fetch_watchlist_transcripts(
     video_ids: list[str],
 ) -> list[TranscriptFetchResult]:
+    """Fetch and store missing watchlist transcripts with per-video failure reporting."""
+
     def fetch(video_id: str) -> TranscriptFetchResult:
         try:
             document = fetch_transcript(
@@ -352,6 +366,8 @@ def fetch_watchlist_transcripts(
 
 
 def index_watchlist_embeddings(video_ids: list[str]) -> list[EmbeddingIndexResult]:
+    """Index missing watchlist video embeddings with per-video status reporting."""
+
     def index(video_id: str) -> EmbeddingIndexResult:
         with get_connection() as connection:
             return auto_index_video_embedding(connection, video_id)
@@ -364,6 +380,7 @@ def list_recent_watchlist_videos(
     channel_refs: ChannelRefInput | None = None,
     days: int,
 ) -> list[dict[str, Any]]:
+    """Return recent stored watchlist videos, optionally narrowed to selected channels."""
     if days <= 0:
         raise ValueError("--days must be greater than 0")
     channel_identities = YouTubeRefs.parse(channel_refs).channel_identities()

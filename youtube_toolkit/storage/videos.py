@@ -18,6 +18,7 @@ def upsert_video(
     transcript: str | None = None,
     channel_identity: ChannelIdentity | None = None,
 ) -> dict[str, Any] | None:
+    """Upsert sparse video metadata while preserving omitted stored values and invalidating derived caches."""
     video_record = extract_video_record(metadata, transcript=transcript)
     if video_record is None:
         return None
@@ -67,6 +68,7 @@ def upsert_video_summary(
     youtube_video_id: str,
     summary: str,
 ) -> str | None:
+    """Store a non-empty summary only for videos already present in the catalog."""
     row = find_video_row(connection, youtube_video_id)
     if row is None:
         return None
@@ -87,6 +89,7 @@ def find_video_row(
     connection: LanceConnection,
     youtube_video_id: str,
 ) -> dict[str, Any] | None:
+    """Return the raw stored video row keyed by YouTube video ID."""
     return connection.find_row(
         "videos",
         "youtube_video_id",
@@ -114,6 +117,7 @@ def update_video(
     metadata_fetched_at: str | None,
     transcript_fetched_at: str | None,
 ) -> None:
+    """Apply sparse video updates and clear caches whose source fields changed."""
     next_channel_id = keep_existing_if_missing(youtube_channel_id, existing_row["channel_id"])
     next_title = keep_existing_if_missing(video_record.title, existing_row["title"])
     next_upload_date = keep_existing_if_missing(video_record.upload_date, existing_row["upload_date"])
@@ -168,6 +172,7 @@ def video_payload_row(
     connection: LanceConnection,
     video: dict[str, Any],
 ) -> dict[str, Any]:
+    """Join channel handle data onto a stored video row for payload projection."""
     channel = connection.find_row("channels", "youtube_channel_id", video["channel_id"])
     return {
         **video,
@@ -281,6 +286,7 @@ def store_channel_listing(
     connection: LanceConnection,
     metadata: dict[str, Any],
 ) -> None:
+    """Persist channel listing metadata without marking videos as watchlist discoveries."""
     channel_identity = extract_channel_identity(metadata)
     upsert_channel(connection, channel_identity)
     for entry in metadata.get("entries") or []:

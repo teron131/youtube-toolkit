@@ -1,4 +1,4 @@
-"""YouTube caption extraction and formatting-ready transcript construction."""
+"""DB-first transcript retrieval falls back from YouTube captions to stored STT-backed transcript documents."""
 
 from __future__ import annotations
 
@@ -22,6 +22,8 @@ DEFAULT_TRANSCRIPT_LANGUAGES = ("en-orig", "en", "zh-Hant", "zh-HK", "yue-HK", "
 
 @dataclass(frozen=True, slots=True)
 class TranscriptOptions:
+    """Caller policy for caption language preference and manual-vs-auto caption source."""
+
     languages: tuple[str, ...] = DEFAULT_TRANSCRIPT_LANGUAGES
     source: str = "any"
 
@@ -33,13 +35,17 @@ class CaptionTranscriptUnavailable(RuntimeError):
 class CaptionMetadataClient(Protocol):
     """Minimal yt-dlp surface needed before a transcript source is selected."""
 
-    def metadata(self, video_ref: VideoRef) -> dict[str, Any]: ...
+    def metadata(self, video_ref: VideoRef) -> dict[str, Any]:
+        """Fetch raw video metadata containing caption URLs and fallback STT identity."""
+        ...
 
 
 class SttAudioClient(CaptionMetadataClient, Protocol):
     """yt-dlp surface needed when caption lookup falls back to speech-to-text."""
 
-    def download_transcription_audio(self, video_id: str) -> Path: ...
+    def download_transcription_audio(self, video_id: str) -> Path:
+        """Download one temporary audio file for the transcript STT fallback."""
+        ...
 
 
 def fetch_transcript(
@@ -49,6 +55,7 @@ def fetch_transcript(
     client: CaptionMetadataClient | None = None,
     auto_index: bool = True,
 ) -> TranscriptDocument:
+    """Return the transcript document from storage first, then captions, then STT while preserving DB state."""
     options = options or TranscriptOptions()
     if options == TranscriptOptions():
         stored_document = fetch_stored_transcript(video_ref)
@@ -85,6 +92,7 @@ def fetch_transcript(
 
 
 def index_stored_transcript(youtube_video_id: str) -> None:
+    """Maintain the video-level embedding for a stored transcript."""
     with get_connection() as connection:
         auto_index_video_embedding(connection, youtube_video_id)
 
@@ -94,6 +102,7 @@ def fetch_caption_transcript(
     *,
     options: TranscriptOptions,
 ) -> TranscriptDocument:
+    """Build a transcript document from yt-dlp caption metadata under the requested caption policy."""
     metadata = VideoMetadata.from_yt_dlp(metadata_payload)
     caption_url, language, caption_source = select_caption_track(
         metadata_payload,
@@ -123,6 +132,7 @@ def fetch_stt_transcript(
     *,
     client: SttAudioClient,
 ) -> TranscriptDocument:
+    """Download audio, run STT, persist the transcript, and return the stored document shape."""
     metadata = VideoMetadata.from_yt_dlp(metadata_payload)
     audio_path = client.download_transcription_audio(metadata.video_id)
     stored_video = store_audio_transcript(
@@ -137,7 +147,7 @@ def fetch_stt_transcript(
 
 
 def fetch_stored_transcript(video_ref: VideoRef) -> TranscriptDocument | None:
-    """Return a stored transcript document when the DB already has one."""
+    """Use the direct stored-video lookup path for transcript cache hits."""
     with get_connection() as connection:
         stored_video = get_stored_video(
             connection,
@@ -155,7 +165,7 @@ def stored_transcript_document(
     language: str = "stored",
     source: str = "database",
 ) -> TranscriptDocument:
-    """Build a transcript document from stored flat transcript text."""
+    """Stored transcript text is rewrapped in the same document contract as live caption and STT fetches."""
     transcript = stored_video["transcript"]
     metadata = VideoMetadata(
         video_id=stored_video["video_id"],
@@ -209,6 +219,7 @@ def select_caption_track(
     languages: list[str],
     source: str,
 ) -> tuple[str, str, str]:
+    """Select the first usable caption URL matching requested language and source precedence."""
     automatic = metadata.get("automatic_captions") or {}
     manual = metadata.get("subtitles") or {}
     if source == "auto":
@@ -237,6 +248,7 @@ def select_caption_track(
 
 
 def fetch_caption_payload(url: str) -> dict:
+    """Caption URLs are host-validated before the remote JSON payload is fetched."""
     validate_url(url, allowed_hosts=ALLOWED_CAPTION_HOST_SUFFIXES)
     request = urllib.request.Request(  # noqa: S310 - caption URLs are scheme/host validated above.
         url,
@@ -258,6 +270,7 @@ def fetch_caption_payload(url: str) -> dict:
 
 
 def extract_timed_chunks(caption_payload: dict) -> list[TranscriptChunk]:
+    """Convert YouTube JSON3 caption events into deduped timed transcript chunks."""
     last_chunk = ""
     chunks: list[TranscriptChunk] = []
     for event in caption_payload.get("events", []):
@@ -281,11 +294,13 @@ def extract_timed_chunks(caption_payload: dict) -> list[TranscriptChunk]:
 
 
 def normalize_caption_chunk(raw_text: str) -> str:
+    """Normalize caption event text by unescaping HTML and collapsing whitespace."""
     text = html.unescape(raw_text.replace("\n", " "))
     return " ".join(text.split())
 
 
 def extract_sponsorblock_intervals(metadata: dict) -> list[tuple[float, float]]:
+    """Read SponsorBlock chapter intervals from yt-dlp metadata for transcript filtering."""
     intervals: list[tuple[float, float]] = []
     for chapter in metadata.get("sponsorblock_chapters") or []:
         try:
@@ -302,6 +317,7 @@ def remove_sponsorblock_chunks(
     chunks: list[TranscriptChunk],
     intervals: list[tuple[float, float]],
 ) -> list[TranscriptChunk]:
+    """Drop caption chunks whose time span overlaps SponsorBlock intervals."""
     if not intervals:
         return chunks
 
@@ -318,6 +334,7 @@ def build_sections(
     metadata: dict,
     chunks: list[TranscriptChunk],
 ) -> list[TranscriptSection]:
+    """Caption chapters become sections, with a flat transcript section as the no-chapter policy."""
     chapters = metadata.get("chapters") or []
     if not chapters:
         return [

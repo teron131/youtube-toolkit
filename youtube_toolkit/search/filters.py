@@ -1,4 +1,4 @@
-"""Candidate filtering, identity, ranking, and result policy for search."""
+"""Search candidate policy owns dedupe, local filters, ranking values, and public result projection."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from .request import (
 
 
 def interlace_relevance(candidate_lists: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Merge multiple relevance-ranked lists fairly while deduping by video ID."""
     merged: list[dict[str, Any]] = []
     seen_video_ids: set[str] = set()
     longest_list = max((len(candidates) for candidates in candidate_lists), default=0)
@@ -37,6 +38,7 @@ def interlace_relevance(candidate_lists: list[list[dict[str, Any]]]) -> list[dic
 
 
 def dedupe_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep the first occurrence of each resolvable video candidate and normalize its ID field."""
     merged: list[dict[str, Any]] = []
     seen_video_ids: set[str] = set()
     for candidate in candidates:
@@ -49,6 +51,7 @@ def dedupe_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def stored_candidate(video: dict[str, Any]) -> dict[str, Any]:
+    """Translate stored-video payloads into the candidate shape consumed by search ranking."""
     video_id = video["youtube_video_id"] if "youtube_video_id" in video else video["video_id"]
     return {
         "id": video_id,
@@ -76,6 +79,7 @@ def candidate_ids(candidates: list[dict[str, Any]]) -> list[str]:
 
 
 def candidate_id(candidate: dict[str, Any]) -> str | None:
+    """Resolve a candidate's video ID from the known yt-dlp, stored, and URL fields."""
     for key in ("id", "video_id", "url", "webpage_url"):
         value = candidate.get(key)
         if isinstance(value, str):
@@ -91,6 +95,7 @@ def chunk_result(
     *,
     warnings: list[str] | None,
 ) -> dict[str, Any]:
+    """Semantic chunk results keep video metadata optional because chunk indexing can outlive video projection."""
     result = {
         "type": "chunk",
         "video_id": row["video_id"],
@@ -109,6 +114,7 @@ def video_result(
     *,
     warnings_by_video_id: dict[str, list[str]],
 ) -> dict[str, Any]:
+    """Video results expose the stable public key set plus preparation warnings when transcript work degraded."""
     result = {
         "type": "video",
         "video_id": candidate_id(candidate),
@@ -128,6 +134,7 @@ def rank_by_value(
     *,
     value: Callable[[dict[str, Any]], Any],
 ) -> list[dict[str, Any]]:
+    """Sort candidates by a derived value while preserving unsortable candidates at the end."""
     present: list[tuple[SortableValue, dict[str, Any]]] = []
     missing: list[dict[str, Any]] = []
     for candidate in candidates:
@@ -145,6 +152,7 @@ def rank_by_value(
 
 
 def sortable(value: Any) -> SortableValue | None:
+    """Normalize supported ranking values and reject booleans or unorderable payloads."""
     if isinstance(value, bool):
         return None
     if isinstance(value, int | float):
@@ -160,6 +168,7 @@ def sortable(value: Any) -> SortableValue | None:
 
 
 def popularity(candidate: dict[str, Any]) -> tuple[int | float, int | float] | None:
+    """Popularity sorts by views first and likes second while treating absent counters as zero."""
     view_count = candidate.get("view_count")
     like_count = candidate.get("like_count")
     if isinstance(view_count, bool) or not isinstance(view_count, int | float):
@@ -180,6 +189,7 @@ def filter_candidates(
     *,
     include_upload_date: bool = True,
 ) -> list[dict[str, Any]]:
+    """Apply local search filters with the current blacklist loaded from storage."""
     if not candidates:
         return []
     with get_connection() as connection:
@@ -203,6 +213,7 @@ def passes_filters(
     *,
     include_upload_date: bool = True,
 ) -> bool:
+    """Evaluate all local metadata and blacklist filters for a single candidate."""
     if candidate_id(candidate) is None:
         return False
     if is_blacklisted_channel(candidate, blacklisted_channels):
@@ -240,6 +251,7 @@ def passes_filters(
 
 
 def channel_text(candidate: dict[str, Any]) -> str:
+    """Channel filters match both handle and bare-handle aliases so callers can omit the at-sign."""
     values: list[str] = []
     for value in (
         candidate.get("channel"),
@@ -262,6 +274,7 @@ def db_chunk_filter(
     request: SearchRequest,
     blacklisted_channels: tuple[ChannelIdentity, ...],
 ) -> str | None:
+    """Translate DB-applicable search filters into a SQL fragment for chunk search."""
     clauses: list[str] = []
     if request.min_views is not None:
         clauses.append(f"view_count >= {request.min_views}")
@@ -291,6 +304,7 @@ def db_chunk_filter(
 
 
 def upload_cutoff(request: SearchRequest) -> str | None:
+    """Resolve the strictest upload-date cutoff from absolute and relative filters."""
     cutoffs: list[str] = []
     if request.uploaded_after is not None:
         cutoffs.append(normalize_filter_date(request.uploaded_after))
@@ -300,6 +314,7 @@ def upload_cutoff(request: SearchRequest) -> str | None:
 
 
 def normalized_upload_date(value: Any) -> str | None:
+    """Normalize candidate upload dates from yt-dlp or stored ISO text for comparisons."""
     if not isinstance(value, str):
         return None
     stripped_value = value.strip()

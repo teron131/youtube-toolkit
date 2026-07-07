@@ -1,4 +1,4 @@
-"""Local audio transcription workflows that persist YouTube transcript state."""
+"""Local audio transcription persists DB-backed YouTube transcript state for caption fallbacks and agent calls."""
 
 from __future__ import annotations
 
@@ -40,6 +40,7 @@ def resolve_audio_video_id(
     audio_path: Path,
     metadata: dict[str, Any],
 ) -> str:
+    """Resolve the storage video ID from trusted metadata first, then from the downloaded audio filename."""
     metadata_video_id = metadata.get("id")
     if isinstance(metadata_video_id, str) and metadata_video_id.strip():
         return metadata_video_id.strip()

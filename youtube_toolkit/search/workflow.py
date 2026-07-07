@@ -56,6 +56,7 @@ from .semantic import (
 
 
 def search(request: SearchRequest) -> list[dict[str, Any]]:
+    """Run the public search workflow across configured sources, filters, persistence, and result shapes."""
     validate_request(request)
     limit = request.limit
     return_type = resolve_return_type(request)
@@ -152,6 +153,7 @@ def collect_sources(
     request: SearchRequest,
     limit: int,
 ) -> list[dict[str, Any]]:
+    """Collect raw candidates from each requested source with oversampling needed by later filters."""
     candidates: list[dict[str, Any]] = []
     source_fetch_limit = limit * SOURCE_OVERSAMPLE_FACTOR
     date_fetch_limit = limit * DATE_FILTER_SOURCE_OVERSAMPLE_FACTOR
@@ -192,6 +194,7 @@ def fetch_metadata_for_date_filters(
     candidates: list[dict[str, Any]],
     request: SearchRequest,
 ) -> list[dict[str, Any]]:
+    """Hydrate YouTube candidates that need upload dates before upload-date filtering can run."""
     if upload_cutoff(request) is None:
         return candidates
     client = YtDlpClient()
@@ -227,6 +230,7 @@ def youtube_candidates(
     fetch_limit: int,
     sort: SearchSort,
 ) -> list[dict[str, Any]]:
+    """Fetch and normalize YouTube search candidates for the requested ranking policy."""
     options = YouTubeSearchOptions(
         limit=fetch_limit,
         sort="popularity" if sort == "popularity" else "relevance",
@@ -264,6 +268,7 @@ def youtube_search(
     *,
     options: YouTubeSearchOptions,
 ) -> list[dict[str, Any]]:
+    """Call the yt-dlp search adapter and keep only object entries."""
     client = YtDlpClient()
     payload = client.search(
         query,
@@ -278,6 +283,7 @@ def channel_candidates(
     *,
     limit: int,
 ) -> list[dict[str, Any]]:
+    """Fetch candidate videos from explicitly selected channel listings."""
     if not request.channels:
         raise ValueError("channel source requires at least one --channels value")
     candidates: list[dict[str, Any]] = []
@@ -303,6 +309,7 @@ def channel_candidates(
 
 
 def resolve_channel_listing(selection: ChannelTarget) -> tuple[str, ChannelIdentity]:
+    """Resolve a channel target to a concrete channel ref plus identity for listing fetches."""
     if selection.channel_name is None:
         channel_ref = selection.channel_ref()
         return (
@@ -332,6 +339,7 @@ def resolve_channel_listing(selection: ChannelTarget) -> tuple[str, ChannelIdent
 
 
 def normalized_channel_name(value: str) -> str:
+    """Normalize channel names for fuzzy YouTube-search confirmation."""
     return " ".join(value.casefold().split())
 
 
@@ -341,6 +349,7 @@ def db_candidates(
     limit: int,
     sort: SearchSort,
 ) -> list[dict[str, Any]]:
+    """Load stored-video candidates using the DB lookup path and search ranking policy."""
     with get_connection() as connection:
         if sort == "popularity":
             normalized_query = request.query.strip().casefold()
@@ -372,6 +381,7 @@ def channel_entries(
     *,
     known_channel: ChannelIdentity,
 ) -> list[dict[str, Any]]:
+    """Attach known channel identity fields to listing entries before candidate filtering."""
     channel_identity = extract_channel_identity(
         metadata,
         fallback_channel_id=known_channel.youtube_channel_id,
@@ -389,6 +399,7 @@ def channel_entries(
 
 
 def persist_metadata(candidates: list[dict[str, Any]]) -> None:
+    """Persist candidate metadata so future transcript, summary, and DB searches share one catalog."""
     if not candidates:
         return
     with get_connection() as connection:
@@ -401,6 +412,7 @@ def stage_search_candidates(
     session_id: str,
     candidates: list[dict[str, Any]],
 ) -> None:
+    """Persist non-DB search candidates for title-embedding prefiltering within this search session."""
     if not any(candidate.get("source") != "db" for candidate in candidates):
         return
     with get_connection() as connection:

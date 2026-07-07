@@ -1,4 +1,4 @@
-"""Dataclass schemas and metadata normalization helpers."""
+"""External YouTube payloads are normalized here before storage, search, or transcript workflows depend on them."""
 
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ from .convert_zh import convert_zh
 
 @dataclass(frozen=True, slots=True)
 class VideoMetadata:
+    """Normalized metadata shape for a YouTube video before it enters storage or transcript documents."""
+
     video_id: str
     url: str
     title: str | None = None
@@ -26,6 +28,7 @@ class VideoMetadata:
 
     @classmethod
     def from_yt_dlp(cls, metadata: dict[str, Any]) -> VideoMetadata:
+        """Translate yt-dlp video metadata into the toolkit's normalized video metadata contract."""
         video_id = str(metadata.get("id") or "").strip()
         if not video_id:
             raise ValueError("yt-dlp metadata did not include a video id")
@@ -49,6 +52,8 @@ class VideoMetadata:
 
 @dataclass(frozen=True, slots=True)
 class TranscriptChunk:
+    """Timed transcript text span used for document rendering and semantic chunking."""
+
     start_seconds: float
     end_seconds: float
     text: str
@@ -56,6 +61,8 @@ class TranscriptChunk:
 
 @dataclass(frozen=True, slots=True)
 class TranscriptSection:
+    """Chapter-oriented transcript section derived from caption chapters or flat transcript text."""
+
     title: str
     start_seconds: float | None
     end_seconds: float | None
@@ -64,6 +71,8 @@ class TranscriptSection:
 
 @dataclass(frozen=True, slots=True)
 class TranscriptDocument:
+    """Transcript document boundary returned by caption and STT workflows."""
+
     metadata: VideoMetadata
     language: str
     source: str
@@ -77,16 +86,19 @@ class TranscriptDocument:
 
 @dataclass(frozen=True, slots=True)
 class ChannelIdentity:
+    """Storage-facing channel identity that may carry a durable ID, a handle, or both."""
+
     youtube_channel_id: str | None
     channel_handle: str | None
 
     def has_identity(self) -> bool:
-        """Return whether at least one durable channel identifier is present."""
         return self.youtube_channel_id is not None or self.channel_handle is not None
 
 
 @dataclass(frozen=True, slots=True)
 class VideoRecord:
+    """Sparse storage update shape extracted from external video metadata."""
+
     youtube_video_id: str
     title: str | None
     upload_date: str | None
@@ -97,11 +109,15 @@ class VideoRecord:
 
 
 class ChannelRemovalResult(TypedDict):
+    """Public result shape for channel membership removal commands."""
+
     channel: str
     removed: bool
 
 
 class EmbeddingIndexResult(TypedDict):
+    """Public per-video result shape for embedding indexing attempts."""
+
     status: Literal["indexed", "skipped", "failed"]
     video_id: str
     dimensions: NotRequired[int]
@@ -110,6 +126,8 @@ class EmbeddingIndexResult(TypedDict):
 
 
 class TranscriptFetchResult(TypedDict):
+    """Public per-video result shape for watchlist transcript fetch attempts."""
+
     status: Literal["stored", "failed"]
     video_id: str
     embedding: NotRequired[EmbeddingIndexResult]
@@ -117,6 +135,8 @@ class TranscriptFetchResult(TypedDict):
 
 
 class WatchlistSyncResult(TypedDict):
+    """Public result shape for one watchlist sync run."""
+
     channels: list[str]
     new_videos: list[str]
     transcripts: list[TranscriptFetchResult]
@@ -129,6 +149,7 @@ def extract_channel_identity(
     fallback_channel_id: str | None = None,
     fallback_channel_handle: str | None = None,
 ) -> ChannelIdentity:
+    """Extract the best durable channel identity from metadata with explicit fallback ownership."""
     youtube_channel_id = normalize_channel_id(metadata.get("channel_id")) or fallback_channel_id
     handle_candidates = (
         metadata.get("channel_handle"),
@@ -153,6 +174,7 @@ def extract_video_record(
     *,
     transcript: str | None = None,
 ) -> VideoRecord | None:
+    """Extract a sparse video record suitable for upsert, returning None when no video ID exists."""
     youtube_video_id = normalize_text(metadata.get("id"))
     if youtube_video_id is None:
         return None
@@ -168,6 +190,7 @@ def extract_video_record(
 
 
 def normalize_upload_date(upload_date: Any) -> str | None:
+    """Normalize yt-dlp YYYYMMDD dates to ISO dates while preserving already textual dates."""
     if not isinstance(upload_date, str):
         return None
     stripped_upload_date = upload_date.strip()
@@ -177,6 +200,7 @@ def normalize_upload_date(upload_date: Any) -> str | None:
 
 
 def normalize_handle(handle: Any) -> str | None:
+    """Normalize channel handles from handles, usernames, or channel URLs while rejecting IDs."""
     if not isinstance(handle, str):
         return None
     stripped_handle = handle.strip()
@@ -192,6 +216,7 @@ def normalize_handle(handle: Any) -> str | None:
 
 
 def normalize_channel_id(channel_id: Any) -> str | None:
+    """Store channel IDs as caller-provided text after stripping empty external values."""
     if not isinstance(channel_id, str):
         return None
     stripped_channel_id = channel_id.strip()
@@ -206,6 +231,7 @@ def normalize_text(value: Any) -> str | None:
 
 
 def normalize_title(value: Any) -> str | None:
+    """Normalize title text and convert Chinese script to the toolkit's Hong Kong Traditional policy."""
     normalized_text = normalize_text(value)
     if normalized_text is None:
         return None
@@ -213,6 +239,7 @@ def normalize_title(value: Any) -> str | None:
 
 
 def normalize_view_count(view_count: Any) -> int | None:
+    """Accept integer counters from external metadata while rejecting booleans."""
     if isinstance(view_count, bool):
         return None
     if isinstance(view_count, int):
@@ -221,6 +248,7 @@ def normalize_view_count(view_count: Any) -> int | None:
 
 
 def normalize_number(value: Any) -> float | None:
+    """Accept numeric metadata values as floats while rejecting booleans."""
     if isinstance(value, bool):
         return None
     if isinstance(value, int | float):

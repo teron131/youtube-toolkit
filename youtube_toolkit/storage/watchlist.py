@@ -1,4 +1,4 @@
-"""Watchlist channel membership and discovered-video tracking."""
+"""Watchlist storage owns channel membership, discovered-video timestamps, and recent-video projections."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ def upsert_watchlist_channel(
     connection: LanceConnection,
     channel_identity: ChannelIdentity,
 ) -> str | None:
+    """Ensure a channel exists and mark it as a watched channel."""
     youtube_channel_id = upsert_channel(connection, channel_identity)
     if youtube_channel_id is None:
         return None
@@ -87,6 +88,7 @@ def record_watchlist_video(
     connection: LanceConnection,
     youtube_video_id: str,
 ) -> bool:
+    """Record the first watchlist discovery timestamp for a video."""
     if any(row["video_id"] == youtube_video_id for row in connection.rows("watchlist_videos")):
         return False
     connection.upsert_rows(
@@ -103,6 +105,7 @@ def record_watchlist_video(
 
 
 def list_watchlist_channel_refs(connection: LanceConnection) -> list[str]:
+    """Display watched channels by handle when available, otherwise by durable channel ID."""
     watched_ids = {row["channel_id"] for row in connection.rows("channels_watchlist")}
     rows = sorted(
         [row for row in connection.rows("channels") if row["youtube_channel_id"] in watched_ids],
@@ -112,6 +115,7 @@ def list_watchlist_channel_refs(connection: LanceConnection) -> list[str]:
 
 
 def list_missing_watchlist_video_ids(connection: LanceConnection) -> list[str]:
+    """Transcript hydration jobs consume watched videos that have not yet persisted transcript text."""
     watchlist_video_ids = {row["video_id"] for row in connection.rows("watchlist_videos")}
     videos = [row for row in connection.rows("videos") if row["youtube_video_id"] in watchlist_video_ids and not row["transcript"]]
     return [
@@ -128,6 +132,7 @@ def list_missing_watchlist_video_ids(connection: LanceConnection) -> list[str]:
 
 
 def list_watchlist_video_ids_missing_embeddings(connection: LanceConnection) -> list[str]:
+    """Embedding jobs consume watched videos only after transcript text is already stored."""
     watchlist_video_ids = {row["video_id"] for row in connection.rows("watchlist_videos")}
     indexed_video_ids = {row["video_id"] for row in connection.rows("video_embeddings")}
     videos = [row for row in connection.rows("videos") if row["youtube_video_id"] in watchlist_video_ids and row["transcript"] and row["youtube_video_id"] not in indexed_video_ids]
@@ -150,7 +155,7 @@ def list_recent_watchlist_video_payloads(
     cutoff_upload_date: str,
     channel_identities: list[ChannelIdentity] | None = None,
 ) -> list[dict[str, Any]]:
-    """Return objectively recent videos from watched channels without mutating storage."""
+    """Recent watchlist reads are projections only; sync and transcript hydration own mutations."""
     watched_ids = {row["channel_id"] for row in connection.rows("channels_watchlist")}
     allowed_channel_ids = filter_channel_ids(connection, channel_identities)
     rows = [
@@ -176,6 +181,7 @@ def filter_channel_ids(
     connection: LanceConnection,
     channel_identities: list[ChannelIdentity] | None,
 ) -> set[str] | None:
+    """Resolve optional channel filters into stored channel IDs for watchlist listing queries."""
     if not channel_identities:
         return None
     allowed_ids: set[str] = set()
@@ -189,6 +195,7 @@ def filter_channel_ids(
 
 
 def watchlist_video_payload(row: dict[str, Any]) -> dict[str, Any]:
+    """Project a stored video into the public recent-watchlist payload without transcript text."""
     payload = stored_video_payload(row)
     transcript = payload["transcript"]
     metadata_payload = {key: value for key, value in payload.items() if key != "transcript"}

@@ -40,6 +40,7 @@ class TranscriptSummary(BaseModel):
     )
 
     def to_text(self) -> str:
+        """Render the structured summary into the Markdown shape used by CLI output."""
         lines = ["# Summary", "", self.overview, "", "# Chapters"]
         for chapter in self.chapters:
             heading = chapter.title
@@ -56,6 +57,7 @@ def summarize_transcript(
     title: str | None = None,
     description: str | None = None,
 ) -> TranscriptSummary:
+    """Summarize transcript text with the configured LLM and the toolkit's grounded summary policy."""
     clean_text = text.strip()
     if not clean_text:
         raise ValueError("Summary text cannot be empty")

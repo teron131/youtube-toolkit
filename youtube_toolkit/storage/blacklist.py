@@ -11,6 +11,7 @@ def upsert_blacklist_channel(
     connection: LanceConnection,
     channel_identity: ChannelIdentity,
 ) -> str | None:
+    """Ensure a channel exists and mark it as blacklisted for search filters."""
     youtube_channel_id = upsert_channel(connection, channel_identity)
     if youtube_channel_id is None:
         return None
@@ -47,6 +48,7 @@ def delete_blacklist_channel(
 
 
 def list_blacklist_channel_identities(connection: LanceConnection) -> list[ChannelIdentity]:
+    """Return blacklisted channel identities in stable display order."""
     blacklisted_ids = {row["channel_id"] for row in connection.rows("channels_blacklist")}
     rows = sorted(
         [row for row in connection.rows("channels") if row["youtube_channel_id"] in blacklisted_ids],

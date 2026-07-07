@@ -1,4 +1,4 @@
-"""Chinese script conversion helpers."""
+"""Chinese text conversion centralizes the OpenCC configuration form accepted by the toolkit."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ def convert_zh(
 
 
 def normalize_opencc_config(opencc_config: str) -> str:
+    """Normalize short OpenCC config names into the JSON filename form expected by opencc."""
     stripped_config = opencc_config.strip()
     if not stripped_config:
         raise ValueError("--opencc must not be empty")

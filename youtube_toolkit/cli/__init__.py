@@ -1,4 +1,4 @@
-"""Command-line package surface."""
+"""CLI entrypoint, JSON output policy, and human-readable command renderers."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ LONG_STDOUT_TEXT_FIELDS = frozenset({"description", "overview", "summary", "text
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Dispatch parsed CLI commands and keep user-facing failures on stderr."""
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
@@ -34,11 +35,13 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def emit_json(payload: object) -> None:
+    """Agent-readable command payloads go through stdout text caps before JSON emission."""
     json.dump(stdout_payload(payload), sys.stdout, indent=2, ensure_ascii=False)
     print()
 
 
 def render_doctor(payload: object) -> str:
+    """Render the health-check payload for humans while preserving JSON output for other commands."""
     if not isinstance(payload, dict):
         return str(payload)
 
@@ -65,6 +68,7 @@ def render_doctor(payload: object) -> str:
 
 
 def render_model_setup(payload: object) -> str:
+    """Render model setup state without exposing configured secret values."""
     if not isinstance(payload, dict):
         return str(payload)
 
@@ -104,6 +108,7 @@ def render_model_setup(payload: object) -> str:
 
 
 def render_index(payload: object) -> str:
+    """Render embedding index results with per-video failure detail only when needed."""
     if not isinstance(payload, dict):
         return str(payload)
 
@@ -123,12 +128,14 @@ def render_index(payload: object) -> str:
 
 
 def payload_list(value: object) -> list[dict[str, object]]:
+    """Narrow untrusted command payload fields before rendering their item details."""
     if not isinstance(value, list):
         return []
     return [cast(dict[str, object], item) for item in value if isinstance(item, dict)]
 
 
 def index_dimensions_text(indexed: list[dict[str, object]]) -> str:
+    """Show embedding dimensions only when every indexed result reports the same size."""
     dimensions = {item.get("dimensions") for item in indexed if item.get("dimensions") is not None}
     if len(dimensions) != 1:
         return ""
@@ -142,6 +149,7 @@ def append_index_details(
     title: str,
     items: list[dict[str, object]],
 ) -> None:
+    """Append compact per-video detail blocks to the human index renderer."""
     if not items:
         return
     lines.extend(("", title))
@@ -152,6 +160,7 @@ def append_index_details(
 
 
 def health_text(payload: object) -> str:
+    """Collapse structured health payloads into one status line."""
     if not isinstance(payload, dict):
         return str(payload)
     status = str(payload.get("status", "unknown"))
@@ -162,6 +171,7 @@ def health_text(payload: object) -> str:
 
 
 def schedule_health_text(payload: object) -> str:
+    """Collapse LaunchAgent health into one status line with interval detail when available."""
     if not isinstance(payload, dict):
         return str(payload)
     status = str(payload.get("status", "unknown"))
@@ -173,6 +183,7 @@ def schedule_health_text(payload: object) -> str:
 
 
 def schedule_interval_text(detail: str) -> str | None:
+    """Extract the scheduler interval phrase from LaunchAgent status detail text."""
     if "runs every" not in detail:
         return None
     seconds_text = detail.rsplit("runs every ", 1)[-1].removesuffix(" seconds")
@@ -191,6 +202,7 @@ def model_health_text(
     *,
     setup_hint: str,
 ) -> str:
+    """Format one model API health result with a setup hint only for missing config."""
     if not isinstance(payload, dict):
         return str(payload)
     status = str(payload.get("status", "unknown"))
@@ -203,6 +215,7 @@ def model_health_text(
 
 
 def setting_text(value: object) -> str:
+    """Render boolean setup settings in the CLI's compact on/off vocabulary."""
     if value is True:
         return "on"
     if value is False:
@@ -211,6 +224,7 @@ def setting_text(value: object) -> str:
 
 
 def verification_text(payload: object, detail_prefixes: tuple[str, ...]) -> str:
+    """Strip provider-specific verification prefixes before showing setup results."""
     if not isinstance(payload, dict):
         return str(payload)
     status = str(payload.get("status", "unknown"))
