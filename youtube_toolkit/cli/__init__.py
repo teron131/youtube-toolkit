@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from typing import cast
 
 from .parser import build_parser
 
@@ -124,7 +125,7 @@ def render_index(payload: object) -> str:
 def payload_list(value: object) -> list[dict[str, object]]:
     if not isinstance(value, list):
         return []
-    return [item for item in value if isinstance(item, dict)]
+    return [cast(dict[str, object], item) for item in value if isinstance(item, dict)]
 
 
 def index_dimensions_text(indexed: list[dict[str, object]]) -> str:

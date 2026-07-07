@@ -1,3 +1,5 @@
+from typing import Any, cast
+
 import pytest
 
 import youtube_toolkit
@@ -1292,7 +1294,7 @@ def test_extra_queries_require_youtube_source() -> None:
             SearchRequest(
                 query="agents",
                 limit=10,
-                sources=("vimeo",),  # type: ignore[arg-type]
+                sources=cast(Any, ("vimeo",)),
             ),
             "search source must be one of",
         ),
@@ -1300,7 +1302,7 @@ def test_extra_queries_require_youtube_source() -> None:
             SearchRequest(
                 query="agents",
                 limit=10,
-                mode="adjacent",  # type: ignore[arg-type]
+                mode=cast(Any, "adjacent"),
             ),
             "search mode must be one of",
         ),
@@ -1308,7 +1310,7 @@ def test_extra_queries_require_youtube_source() -> None:
             SearchRequest(
                 query="agents",
                 limit=10,
-                sort="random",  # type: ignore[arg-type]
+                sort=cast(Any, "random"),
             ),
             "search sort must be one of",
         ),

@@ -8,7 +8,7 @@ from typing import Any, Literal, NotRequired, TypedDict
 
 import lancedb
 from lancedb.index import FTS, BTree
-from lancedb.table import LanceTable
+from lancedb.table import Table
 import pyarrow as pa
 
 STORAGE_DIRNAME = ".cache"
@@ -183,7 +183,7 @@ class LanceConnection:
         self,
         table_name: str,
         schema: pa.Schema,
-    ) -> LanceTable:
+    ) -> Table:
         if table_name in self.table_names():
             return self.database.open_table(table_name)
         return self.database.create_table(table_name, schema=schema)
@@ -191,7 +191,7 @@ class LanceConnection:
     def ensure_video_embedding_table(
         self,
         vector_dimensions: int,
-    ) -> LanceTable:
+    ) -> Table:
         table = self.ensure_table(
             "video_embeddings",
             vector_schema(
@@ -205,7 +205,7 @@ class LanceConnection:
     def ensure_video_title_embedding_table(
         self,
         vector_dimensions: int,
-    ) -> LanceTable:
+    ) -> Table:
         table = self.ensure_table(
             "video_title_embeddings",
             vector_schema(
@@ -223,7 +223,7 @@ class LanceConnection:
     def ensure_search_candidate_title_embedding_table(
         self,
         vector_dimensions: int,
-    ) -> LanceTable:
+    ) -> Table:
         table = self.ensure_table(
             "search_candidate_title_embeddings",
             vector_schema(
@@ -243,7 +243,7 @@ class LanceConnection:
     def ensure_transcript_chunk_table(
         self,
         vector_dimensions: int,
-    ) -> LanceTable:
+    ) -> Table:
         table = self.ensure_table(
             "video_transcript_chunks",
             vector_schema(
@@ -373,13 +373,13 @@ class LanceConnection:
     def table(
         self,
         table_name: str,
-    ) -> LanceTable:
+    ) -> Table:
         return self.database.open_table(table_name)
 
     def optional_table(
         self,
         table_name: str,
-    ) -> LanceTable | None:
+    ) -> Table | None:
         if table_name not in self.table_names():
             return None
         return self.table(table_name)

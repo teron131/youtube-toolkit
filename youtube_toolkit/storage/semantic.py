@@ -377,9 +377,12 @@ def cosine_similarity(
 ) -> float:
     if not isinstance(right, list) or len(left) != len(right):
         return 0.0
-    numerator = sum(left_value * float(right_value) for left_value, right_value in zip(left, right, strict=True))
+    if not all(isinstance(value, int | float) and not isinstance(value, bool) for value in right):
+        return 0.0
+    right_values = [float(value) for value in right]
+    numerator = sum(left_value * right_value for left_value, right_value in zip(left, right_values, strict=True))
     left_norm = math.sqrt(sum(left_value * left_value for left_value in left))
-    right_norm = math.sqrt(sum(float(right_value) * float(right_value) for right_value in right))
+    right_norm = math.sqrt(sum(right_value * right_value for right_value in right_values))
     if not left_norm or not right_norm:
         return 0.0
     return numerator / (left_norm * right_norm)

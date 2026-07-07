@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, Literal
+from typing import Any, Literal, Protocol, cast
 
 from ..identity import VideoRef, extract_video_id
 from ..model_config import EmbeddingConfig
@@ -16,6 +16,16 @@ EmbedText = Callable[[str], list[float]]
 SearchSort = Literal["upload_date", "relevance"]
 SEARCH_SORTS = {"upload_date", "relevance"}
 TRANSCRIPT_PRESENT_SQL = "transcript IS NOT NULL AND transcript != ''"
+
+
+class VectorSearchQuery(Protocol):
+    """LanceDB vector query methods used by stored-video semantic lookup."""
+
+    def distance_type(self, distance_type: Literal["l2", "cosine", "dot"]) -> VectorSearchQuery: ...
+
+    def limit(self, limit: int) -> VectorSearchQuery: ...
+
+    def to_list(self) -> list[dict[str, object]]: ...
 
 
 def search_stored_videos(
@@ -149,8 +159,12 @@ def search_video_payloads_by_semantic(
     if connection.optional_table("video_embeddings") is None:
         return []
     query_embedding = embed_text(query) if embed_text is not None else embed_text_with_gemini(query, config=embedding_config)
-    rows = connection.table("video_embeddings").search(query_embedding, vector_column_name="embedding").metric("cosine").limit(MAX_TABLE_SCAN_ROWS).to_list()
-    video_ids = [row["video_id"] for row in rows]
+    vector_query = cast(
+        VectorSearchQuery,
+        connection.table("video_embeddings").search(query_embedding, vector_column_name="embedding"),
+    )
+    rows = vector_query.distance_type("cosine").limit(MAX_TABLE_SCAN_ROWS).to_list()
+    video_ids = [video_id for row in rows if isinstance(video_id := row.get("video_id"), str)]
     if not video_ids:
         return []
     clauses = [f"youtube_video_id IN ({filter_in_values(video_ids)})"]
@@ -165,11 +179,17 @@ def search_video_payloads_by_semantic(
     }
     semantic_payloads: list[dict[str, Any]] = []
     for row in rows:
-        video = videos_by_id.get(row["video_id"])
+        video_id = row.get("video_id")
+        if not isinstance(video_id, str):
+            continue
+        video = videos_by_id.get(video_id)
         if video is None:
             continue
+        distance = row.get("_distance")
+        if not isinstance(distance, int | float):
+            continue
         payload = stored_video_payload(video)
-        payload["semantic_score"] = 1.0 - float(row["_distance"])
+        payload["semantic_score"] = 1.0 - float(distance)
         semantic_payloads.append(payload)
     return semantic_payloads
 

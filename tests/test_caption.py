@@ -41,7 +41,7 @@ def test_fetch_transcript_returns_stored_transcript_without_client(
         )
 
     class FailingClient:
-        def metadata(self, video):
+        def metadata(self, video_ref: str) -> dict:
             raise AssertionError("metadata should not be fetched")
 
     document = fetch_transcript(
@@ -75,7 +75,7 @@ def test_fetch_transcript_does_not_use_stored_transcript_for_custom_options(
         )
 
     class FailingClient:
-        def metadata(self, video):
+        def metadata(self, video_ref: str) -> dict:
             raise AssertionError("metadata fetched")
 
     with pytest.raises(AssertionError, match="metadata fetched"):
