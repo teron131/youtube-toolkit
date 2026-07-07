@@ -4,14 +4,17 @@ from .convert_zh import convert_zh
 from .identity import ChannelRef, ChannelRefInput, VideoRef, VideoRefInput, YouTubeRefs, extract_video_id, normalize_youtube_url
 from .model_config import EmbeddingConfig, ModelConfig
 from .schemas import TranscriptDocument, TranscriptSection, VideoMetadata
+from .search import ChannelTarget, SearchRequest, search as run_search
 from .youtube import SearchOptions, TranscriptOptions, fetch_transcript, search_videos
 
 __all__ = [
     "ChannelRef",
     "ChannelRefInput",
+    "ChannelTarget",
     "EmbeddingConfig",
     "ModelConfig",
     "SearchOptions",
+    "SearchRequest",
     "TranscriptDocument",
     "TranscriptOptions",
     "TranscriptSection",
@@ -23,5 +26,6 @@ __all__ = [
     "extract_video_id",
     "fetch_transcript",
     "normalize_youtube_url",
+    "run_search",
     "search_videos",
 ]

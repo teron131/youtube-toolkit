@@ -13,12 +13,15 @@ from ..watchlist_schedule import (
 from .commands import (
     BlacklistCommands,
     ChannelCommands,
+    DEFAULT_SEARCH_MAX_DURATION,
+    DEFAULT_SEARCH_MIN_DURATION,
+    DEFAULT_SEARCH_MIN_VIEWS,
     IndexCommands,
+    SearchCommands,
     SetupCommands,
     VideoCommands,
     WatchlistCommands,
     run_doctor,
-    run_search,
 )
 
 
@@ -26,7 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="youtube", description="Transcript-first YouTube toolkit.")
     subparsers = parser.add_subparsers(dest="command", required=True)
     VideoCommandParser.add_to(subparsers)
-    add_search_parser(subparsers)
+    SearchCommandParser.add_to(subparsers)
     ChannelCommandParser.add_to(subparsers)
     WatchlistCommandParser.add_to(subparsers)
     BlacklistCommandParser.add_to(subparsers)
@@ -55,19 +58,28 @@ class VideoCommandParser:
         transcript_parser.set_defaults(handler=VideoCommands.transcript)
 
 
-def add_search_parser(subparsers: argparse._SubParsersAction) -> None:
-    search_parser = subparsers.add_parser("search", help="Query YouTube through yt-dlp with local filters")
-    search_parser.add_argument("query", help="Search query")
-    search_parser.add_argument("--limit", type=int, default=10)
-    search_parser.add_argument("--sort", choices=("relevance", "views"), default="relevance")
-    search_parser.add_argument("--min-views", type=int, default=10_000)
-    search_parser.add_argument("--min-duration", default="3:00")
-    search_parser.add_argument("--max-duration", default="8:00:00")
-    search_parser.add_argument("--include-channel", action="append", default=[])
-    search_parser.add_argument("--exclude-channel", action="append", default=[])
-    search_parser.add_argument("--include-title", action="append", default=[])
-    search_parser.add_argument("--exclude-title", action="append", default=[])
-    search_parser.set_defaults(handler=run_search)
+class SearchCommandParser:
+    @staticmethod
+    def add_to(subparsers: argparse._SubParsersAction) -> None:
+        search_parser = subparsers.add_parser("search", help="Search videos or transcript chunks from selected sources")
+        search_parser.add_argument("query", nargs="?", default="", help="Search query")
+        search_parser.add_argument("--extra-query", dest="extra_queries", action="append", default=[], help="Additional YouTube relevance query")
+        search_parser.add_argument("--source", action="append", choices=("youtube", "channel", "db"), default=None)
+        search_parser.add_argument("--mode", choices=("native", "semantic"), default="native")
+        search_parser.add_argument("--return", dest="return_type", choices=("video", "chunk"), default=None)
+        search_parser.add_argument("--channels", action="append", default=[], metavar="CHANNEL", help="Channel URL, handle, or ID for channel source")
+        search_parser.add_argument("--limit", type=int, default=None)
+        search_parser.add_argument("--sort", choices=("relevance", "recency", "popularity"), default=None)
+        search_parser.add_argument("--min-views", type=int, default=DEFAULT_SEARCH_MIN_VIEWS)
+        search_parser.add_argument("--min-duration", default=DEFAULT_SEARCH_MIN_DURATION)
+        search_parser.add_argument("--max-duration", default=DEFAULT_SEARCH_MAX_DURATION)
+        search_parser.add_argument("--uploaded-after", default=None, help="Only include videos uploaded on or after YYYY-MM-DD")
+        search_parser.add_argument("--uploaded-within-days", type=int, default=None, help="Only include videos uploaded within the last N days")
+        search_parser.add_argument("--include-channel", action="append", default=[])
+        search_parser.add_argument("--exclude-channel", action="append", default=[])
+        search_parser.add_argument("--include-title", action="append", default=[])
+        search_parser.add_argument("--exclude-title", action="append", default=[])
+        search_parser.set_defaults(handler=SearchCommands.search)
 
 
 class ChannelCommandParser:

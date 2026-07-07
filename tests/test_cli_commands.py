@@ -10,6 +10,7 @@ from youtube_toolkit import cli
 from youtube_toolkit.cli import commands, main
 from youtube_toolkit.cli.parser import build_parser
 from youtube_toolkit.schemas import ChannelIdentity
+from youtube_toolkit.search import ChannelTarget, SearchRequest
 from youtube_toolkit.storage import get_connection, upsert_video, upsert_watchlist_channel
 
 MODEL_CONFIG_ENV_KEYS = (
@@ -65,13 +66,13 @@ def test_doctor_returns_runtime_and_database_path(
 
     assert isinstance(payload, dict)
     assert str(payload["yt_dlp_version"])
-    assert payload["database"] == str(storage_home / "youtube.sqlite3")
+    assert payload["database"] == str(storage_home / "youtube.lancedb")
     assert payload["database_schema"] == {
-        "path": str(storage_home / "youtube.sqlite3"),
+        "path": str(storage_home / "youtube.lancedb"),
         "ok": False,
         "status": "missing",
-        "detail": "Database file is missing",
-        "repair": "Run youtube setup database to create a fresh schema",
+        "detail": "LanceDB store is missing",
+        "repair": "Run youtube setup database to create a fresh LanceDB store",
     }
     assert payload["watchlist_schedule"] == {
         "label": "com.teron.youtube-toolkit.watchlist",
@@ -142,8 +143,8 @@ def test_main_emits_doctor_as_human_report(
 
     output = capsys.readouterr().out
     assert "YouTube Toolkit" in output
-    assert f"  database   {storage_home / 'youtube.sqlite3'}" in output
-    assert "  schema     missing - Database file is missing" in output
+    assert f"  database   {storage_home / 'youtube.lancedb'}" in output
+    assert "  schema     missing - LanceDB store is missing" in output
     assert "  schedule   not_installed - LaunchAgent plist is missing" in output
     assert "  embedding  missing (gemini-embedding-2) - set EMBEDDING_API_KEY" in output
     assert "  llm        missing - set LLM_API_KEY, LLM_BASE_URL, LLM_MODEL" in output
@@ -303,6 +304,17 @@ def test_video_and_channel_command_groups_parse_public_actions() -> None:
     assert channel_args.channel_ref == "@OpenAI"
     assert channel_args.last == 5
     assert search_args.command == "search"
+    assert search_args.source is None
+    assert search_args.mode == "native"
+    assert search_args.return_type is None
+    assert search_args.channels == []
+    assert search_args.extra_queries == []
+    assert search_args.limit is None
+    assert search_args.min_views == commands.DEFAULT_SEARCH_MIN_VIEWS
+    assert search_args.min_duration == commands.DEFAULT_SEARCH_MIN_DURATION
+    assert search_args.max_duration == commands.DEFAULT_SEARCH_MAX_DURATION
+    assert search_args.uploaded_after is None
+    assert search_args.uploaded_within_days is None
     assert index_args.command == "index"
     assert index_args.video_refs == ["JpSHyEIZ_bo"]
     assert index_args.include_without_transcript is False
@@ -310,6 +322,230 @@ def test_video_and_channel_command_groups_parse_public_actions() -> None:
     assert setup_args.llm_model == "summary-model"
     assert setup_args.auto_embeddings is False
     assert setup_args.verify is True
+
+
+def test_search_command_group_parses_channel_source() -> None:
+    search_args = build_parser().parse_args(
+        [
+            "search",
+            "agents",
+            "--source",
+            "channel",
+            "--channels",
+            "@OpenAI",
+            "--channels",
+            "UC123",
+            "--limit",
+            "2",
+            "--sort",
+            "popularity",
+        ]
+    )
+
+    assert search_args.command == "search"
+    assert search_args.source == ["channel"]
+    assert search_args.channels == ["@OpenAI", "UC123"]
+    assert search_args.limit == 2
+    assert search_args.sort == "popularity"
+
+
+def test_search_command_group_allows_channel_source_without_query() -> None:
+    search_args = build_parser().parse_args(
+        [
+            "search",
+            "--source",
+            "channel",
+            "--channels",
+            "@OpenAI",
+        ]
+    )
+
+    assert search_args.query == ""
+    assert search_args.source == ["channel"]
+    assert search_args.channels == ["@OpenAI"]
+
+
+def test_search_command_group_parses_extra_queries() -> None:
+    search_args = build_parser().parse_args(
+        [
+            "search",
+            "agents",
+            "--extra-query",
+            "agent skills",
+            "--extra-query",
+            "tool use",
+        ]
+    )
+
+    assert search_args.query == "agents"
+    assert search_args.extra_queries == [
+        "agent skills",
+        "tool use",
+    ]
+
+
+def test_search_command_builds_default_youtube_request(monkeypatch) -> None:
+    requests = []
+
+    def fake_run_search_request(request: SearchRequest) -> list[dict]:
+        requests.append(request)
+        return [{"id": "aaaaaaaaaaa"}]
+
+    monkeypatch.setattr(commands, "run_search_request", fake_run_search_request)
+    payload = commands.SearchCommands.search(
+        argparse.Namespace(
+            query="agents",
+            extra_queries=["agent skills", "tool use"],
+            source=None,
+            mode="native",
+            return_type=None,
+            channels=[],
+            limit=None,
+            sort="relevance",
+            min_views=5000,
+            min_duration="3:00",
+            max_duration="8:00:00",
+            uploaded_after="2026-07-01",
+            uploaded_within_days=7,
+            include_channel=["OpenAI"],
+            exclude_channel=[],
+            include_title=[],
+            exclude_title=["shorts"],
+        )
+    )
+
+    assert payload == [{"id": "aaaaaaaaaaa"}]
+    assert requests == [
+        SearchRequest(
+            query="agents",
+            extra_queries=("agent skills", "tool use"),
+            sources=("youtube",),
+            mode="native",
+            return_type=None,
+            limit=commands.DEFAULT_YOUTUBE_SEARCH_LIMIT,
+            sort="relevance",
+            min_views=5000,
+            min_duration="3:00",
+            max_duration="8:00:00",
+            uploaded_after="2026-07-01",
+            uploaded_within_days=7,
+            include_channel=("OpenAI",),
+            exclude_title=("shorts",),
+        )
+    ]
+
+
+def test_search_command_builds_channel_request(monkeypatch) -> None:
+    requests = []
+
+    def fake_run_search_request(request: SearchRequest) -> list[dict]:
+        requests.append(request)
+        return [{"id": "aaaaaaaaaaa"}]
+
+    monkeypatch.setattr(commands, "run_search_request", fake_run_search_request)
+    payload = commands.SearchCommands.search(
+        argparse.Namespace(
+            query="agents",
+            source=["channel"],
+            mode="native",
+            return_type=None,
+            channels=["@OpenAI", "UC123"],
+            limit=None,
+            sort="popularity",
+            min_views=5000,
+            min_duration="3:00",
+            max_duration="8:00:00",
+            include_channel=[],
+            exclude_channel=[],
+            include_title=[],
+            exclude_title=[],
+        )
+    )
+
+    assert payload == [{"id": "aaaaaaaaaaa"}]
+    assert requests == [
+        SearchRequest(
+            query="agents",
+            sources=("channel",),
+            mode="native",
+            return_type=None,
+            channels=(
+                ChannelTarget(channel_handle="@OpenAI"),
+                ChannelTarget(youtube_channel_id="UC123"),
+            ),
+            limit=commands.DEFAULT_CHANNEL_SEARCH_LIMIT,
+            sort="popularity",
+            min_views=5000,
+            min_duration="3:00",
+            max_duration="8:00:00",
+        )
+    ]
+
+
+def test_search_command_requires_channels_for_channel_source() -> None:
+    with pytest.raises(ValueError, match="at least one --channels"):
+        commands.SearchCommands.search(
+            argparse.Namespace(
+                query="agents",
+                source=["channel"],
+                mode="native",
+                return_type=None,
+                channels=[],
+                limit=2,
+                sort="recency",
+                min_views=5000,
+                min_duration="3:00",
+                max_duration="8:00:00",
+                include_channel=[],
+                exclude_channel=[],
+                include_title=[],
+                exclude_title=[],
+            )
+        )
+
+
+def test_search_command_rejects_channels_option_without_channel_source() -> None:
+    with pytest.raises(ValueError, match="--channels requires --source channel"):
+        commands.SearchCommands.search(
+            argparse.Namespace(
+                query="agents",
+                source=["youtube"],
+                mode="native",
+                return_type=None,
+                channels=["@OpenAI"],
+                limit=2,
+                sort="relevance",
+                min_views=5000,
+                min_duration="3:00",
+                max_duration="8:00:00",
+                include_channel=[],
+                exclude_channel=[],
+                include_title=[],
+                exclude_title=[],
+            )
+        )
+
+
+def test_search_command_rejects_native_youtube_recency() -> None:
+    with pytest.raises(ValueError, match="does not support --sort recency"):
+        commands.SearchCommands.search(
+            argparse.Namespace(
+                query="agents",
+                source=["youtube"],
+                mode="native",
+                return_type=None,
+                channels=[],
+                limit=2,
+                sort="recency",
+                min_views=5000,
+                min_duration="3:00",
+                max_duration="8:00:00",
+                include_channel=[],
+                exclude_channel=[],
+                include_title=[],
+                exclude_title=[],
+            )
+        )
 
 
 def test_index_command_indexes_stored_transcript_videos(

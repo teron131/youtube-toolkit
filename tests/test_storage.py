@@ -17,12 +17,19 @@ from youtube_toolkit.storage import (
     explain_transcript_chunk_search,
     get_connection,
     get_stored_video,
+    index_search_candidate_titles,
     index_transcript_chunks,
     index_video_embedding,
+    index_video_title_embedding,
+    index_video_title_embeddings,
     resolve_storage_dir,
+    search_candidate_title_scores,
     search_stored_videos,
+    search_transcript_chunks,
     search_transcript_chunk_scores,
+    search_video_title_scores,
     split_transcript_chunks,
+    store_search_candidates,
     upsert_watchlist_channel,
     upsert_video,
     upsert_video_summary,
@@ -579,6 +586,145 @@ def test_search_stored_videos_semantic_search_uses_saved_embeddings(
     assert results[0]["semantic_score"] == pytest.approx(1.0)
 
 
+def test_video_title_embedding_scores_title_matches(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "Introducing Claude Fable 5",
+            },
+        )
+        upsert_video(
+            connection,
+            {
+                "id": "dQw4w9WgXcQ",
+                "title": "Interview with the research team",
+            },
+        )
+        index_video_title_embedding(connection, "JpSHyEIZ_bo", embed_text=title_embed)
+        index_video_title_embedding(connection, "dQw4w9WgXcQ", embed_text=title_embed)
+        scores = search_video_title_scores(
+            connection,
+            "product announcement",
+            [
+                "JpSHyEIZ_bo",
+                "dQw4w9WgXcQ",
+            ],
+            embed_text=title_embed,
+        )
+
+    assert scores["JpSHyEIZ_bo"] > scores["dQw4w9WgXcQ"]
+
+
+def test_video_title_embeddings_are_indexed_concurrently(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    from threading import Barrier, Lock
+
+    barrier = Barrier(2)
+    lock = Lock()
+    active_count = 0
+    max_active_count = 0
+
+    def embed_title(text: str) -> list[float]:
+        nonlocal active_count, max_active_count
+        with lock:
+            active_count += 1
+            max_active_count = max(max_active_count, active_count)
+        try:
+            barrier.wait(timeout=2)
+        finally:
+            with lock:
+                active_count -= 1
+        return fake_embed(text)
+
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "GPU capex update",
+            },
+        )
+        upsert_video(
+            connection,
+            {
+                "id": "dQw4w9WgXcQ",
+                "title": "Semiconductor cycle",
+            },
+        )
+        results = index_video_title_embeddings(
+            connection,
+            [
+                "JpSHyEIZ_bo",
+                "dQw4w9WgXcQ",
+            ],
+            embed_text=embed_title,
+        )
+
+    assert max_active_count == 2
+    assert {result["video_id"] for result in results if result["status"] == "indexed"} == {
+        "JpSHyEIZ_bo",
+        "dQw4w9WgXcQ",
+    }
+
+
+def test_search_candidate_title_scores_use_staged_rows(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        store_search_candidates(
+            connection,
+            "search-session",
+            "product announcement",
+            [
+                {
+                    "id": "JpSHyEIZ_bo",
+                    "source": "youtube",
+                    "title": "Introducing Claude Fable 5",
+                    "view_count": 10_000,
+                    "duration": 120,
+                },
+                {
+                    "id": "dQw4w9WgXcQ",
+                    "source": "youtube",
+                    "title": "Interview with the research team",
+                    "view_count": 10_000,
+                    "duration": 600,
+                },
+            ],
+        )
+        index_search_candidate_titles(
+            connection,
+            "search-session",
+            embed_text=title_embed,
+        )
+        scores = search_candidate_title_scores(
+            connection,
+            "search-session",
+            "product announcement",
+            limit=2,
+            min_similarity=0.3,
+            embed_text=title_embed,
+        )
+        durable_video = get_stored_video(connection, "JpSHyEIZ_bo")
+
+    assert scores["JpSHyEIZ_bo"] > scores.get("dQw4w9WgXcQ", 0)
+    assert durable_video is None
+
+
 def test_split_transcript_chunks_uses_overlap() -> None:
     chunks = split_transcript_chunks(
         "abcdefghijklmnopqrstuvwxyz",
@@ -606,6 +752,12 @@ def test_transcript_chunk_index_scores_best_matching_chunk(
             {
                 "id": "JpSHyEIZ_bo",
                 "title": "GPU topic",
+                "channel_id": "UC123",
+                "channel_handle": "@Chips",
+                "upload_date": "20260703",
+                "duration": 600,
+                "view_count": 40_000,
+                "like_count": 2_000,
             },
             transcript="first chunk about pasta " * 80 + "second chunk about GPU capex " * 80,
         )
@@ -628,6 +780,31 @@ def test_transcript_chunk_index_scores_best_matching_chunk(
             ],
             embed_text=fake_embed,
         )
+        all_video_scores = search_transcript_chunk_scores(
+            connection,
+            "GPU capex",
+            None,
+            embed_text=fake_embed,
+        )
+        filtered_chunks = search_transcript_chunks(
+            connection,
+            "GPU capex",
+            None,
+            where_sql="view_count >= 10000 AND duration <= 700",
+            columns=[
+                "video_id",
+                "chunk_index",
+                "text",
+            ],
+            embed_text=fake_embed,
+        )
+        blocked_chunks = search_transcript_chunks(
+            connection,
+            "GPU capex",
+            None,
+            where_sql="view_count >= 100000",
+            embed_text=fake_embed,
+        )
         explain_plan = explain_transcript_chunk_search(
             connection,
             "GPU capex",
@@ -647,10 +824,40 @@ def test_transcript_chunk_index_scores_best_matching_chunk(
             embed_text=fake_embed,
         )
         transcript_chunk_indices = connection.table("video_transcript_chunks").list_indices()
+        chunk_row = connection.find_row("video_transcript_chunks", "video_id", "JpSHyEIZ_bo")
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "view_count": 60_000,
+                "like_count": 3_000,
+            },
+        )
+        updated_chunk_row = connection.find_row("video_transcript_chunks", "video_id", "JpSHyEIZ_bo")
 
     assert any(index.name == TRANSCRIPT_CHUNK_TEXT_INDEX for index in transcript_chunk_indices)
+    assert chunk_row is not None
+    assert chunk_row["title"] == "GPU topic"
+    assert chunk_row["channel_id"] == "UC123"
+    assert chunk_row["channel_handle"] == "@Chips"
+    assert chunk_row["upload_date"] == "2026-07-03"
+    assert chunk_row["duration"] == 600.0
+    assert chunk_row["view_count"] == 40_000
+    assert chunk_row["like_count"] == 2_000
+    assert updated_chunk_row is not None
+    assert updated_chunk_row["view_count"] == 60_000
+    assert updated_chunk_row["like_count"] == 3_000
     assert scores["JpSHyEIZ_bo"] > 0
     assert scores["dQw4w9WgXcQ"] < scores["JpSHyEIZ_bo"]
+    assert set(all_video_scores) == {
+        "JpSHyEIZ_bo",
+        "dQw4w9WgXcQ",
+    }
+    assert filtered_chunks
+    assert filtered_chunks[0]["video_id"] == "JpSHyEIZ_bo"
+    assert "similarity" in filtered_chunks[0]
+    assert "title" not in filtered_chunks[0]
+    assert blocked_chunks == []
     assert "LanceRead" in explain_plan
     assert "AnalyzeExec" in analyze_plan
 
@@ -1000,6 +1207,13 @@ def test_search_stored_videos_semantic_search_is_lightweight_without_index(
 def fake_embed(text: str) -> list[float]:
     lowered_text = text.lower()
     if "gpu" in lowered_text or "semiconductor" in lowered_text or "晶片" in lowered_text:
+        return [1.0, 0.0]
+    return [0.0, 1.0]
+
+
+def title_embed(text: str) -> list[float]:
+    lowered_text = text.lower()
+    if any(term in lowered_text for term in ("product", "introducing", "launch")):
         return [1.0, 0.0]
     return [0.0, 1.0]
 

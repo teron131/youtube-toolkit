@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Literal, NotRequired, TypedDict
 
 import lancedb
-from lancedb.index import BTree, FTS
+from lancedb.index import FTS, BTree
 from lancedb.table import LanceTable
 import pyarrow as pa
 
@@ -17,6 +17,18 @@ DATABASE_FILENAME = "youtube.lancedb"
 DATABASE_SCHEMA_REPAIR = "Run youtube setup database to create a fresh LanceDB store"
 MAX_TABLE_SCAN_ROWS = 100_000
 TRANSCRIPT_CHUNK_TEXT_INDEX = "transcript_chunk_text_idx"
+VIDEO_TITLE_TEXT_INDEX = "video_title_text_idx"
+SEARCH_CANDIDATE_TITLE_TEXT_INDEX = "search_candidate_title_text_idx"
+TRANSCRIPT_CHUNK_METADATA_TYPES = {
+    "title": pa.string(),
+    "channel_id": pa.string(),
+    "channel_handle": pa.string(),
+    "upload_date": pa.string(),
+    "duration": pa.float64(),
+    "view_count": pa.int64(),
+    "like_count": pa.int64(),
+}
+TRANSCRIPT_CHUNK_METADATA_FIELDS = tuple(pa.field(name, field_type) for name, field_type in TRANSCRIPT_CHUNK_METADATA_TYPES.items())
 SCALAR_INDEX_COLUMNS = {
     "channels": (
         "youtube_channel_id",
@@ -32,10 +44,24 @@ SCALAR_INDEX_COLUMNS = {
     "channels_watchlist": ("channel_id",),
     "watchlist_videos": ("video_id",),
     "channels_blacklist": ("channel_id",),
+    "search_candidates": (
+        "session_id",
+        "source",
+        "youtube_video_id",
+        "upload_date",
+        "view_count",
+        "duration",
+    ),
+    "search_candidate_title_embeddings": (
+        "session_id",
+        "video_id",
+    ),
     "video_embeddings": ("video_id",),
+    "video_title_embeddings": ("video_id",),
     "video_transcript_chunks": (
         "video_id",
         "chunk_index",
+        *(column_name for column_name in TRANSCRIPT_CHUNK_METADATA_TYPES if column_name != "title"),
     ),
 }
 
@@ -78,6 +104,24 @@ BASE_TABLE_SCHEMAS: dict[str, pa.Schema] = {
         ]
     ),
     "channels_blacklist": pa.schema([pa.field("channel_id", pa.string())]),
+    "search_candidates": pa.schema(
+        [
+            pa.field("session_id", pa.string()),
+            pa.field("query", pa.string()),
+            pa.field("source", pa.string()),
+            pa.field("source_rank", pa.int64()),
+            pa.field("youtube_video_id", pa.string()),
+            pa.field("channel_id", pa.string()),
+            pa.field("channel_handle", pa.string()),
+            pa.field("title", pa.string()),
+            pa.field("upload_date", pa.string()),
+            pa.field("duration", pa.float64()),
+            pa.field("view_count", pa.int64()),
+            pa.field("like_count", pa.int64()),
+            pa.field("metadata_fetched_at", pa.string()),
+            pa.field("created_at", pa.string()),
+        ]
+    ),
 }
 
 
@@ -126,6 +170,12 @@ class LanceConnection:
 
     def ensure_optional_table_indexes(self) -> None:
         self.ensure_scalar_indexes("video_embeddings")
+        self.ensure_scalar_indexes("video_title_embeddings")
+        self.ensure_video_title_text_index()
+        self.ensure_scalar_indexes("search_candidate_title_embeddings")
+        self.ensure_search_candidate_title_text_index()
+        if self.ensure_transcript_chunk_metadata_columns():
+            self.backfill_transcript_chunk_metadata()
         self.ensure_scalar_indexes("video_transcript_chunks")
         self.ensure_transcript_chunk_text_index()
 
@@ -152,6 +202,44 @@ class LanceConnection:
         self.ensure_scalar_indexes("video_embeddings")
         return table
 
+    def ensure_video_title_embedding_table(
+        self,
+        vector_dimensions: int,
+    ) -> LanceTable:
+        table = self.ensure_table(
+            "video_title_embeddings",
+            vector_schema(
+                id_field="video_id",
+                vector_dimensions=vector_dimensions,
+                extra_fields=[
+                    pa.field("title", pa.string()),
+                ],
+            ),
+        )
+        self.ensure_scalar_indexes("video_title_embeddings")
+        self.ensure_video_title_text_index()
+        return table
+
+    def ensure_search_candidate_title_embedding_table(
+        self,
+        vector_dimensions: int,
+    ) -> LanceTable:
+        table = self.ensure_table(
+            "search_candidate_title_embeddings",
+            vector_schema(
+                id_field="video_id",
+                vector_dimensions=vector_dimensions,
+                extra_fields=[
+                    pa.field("session_id", pa.string()),
+                    pa.field("source_rank", pa.int64()),
+                    pa.field("title", pa.string()),
+                ],
+            ),
+        )
+        self.ensure_scalar_indexes("search_candidate_title_embeddings")
+        self.ensure_search_candidate_title_text_index()
+        return table
+
     def ensure_transcript_chunk_table(
         self,
         vector_dimensions: int,
@@ -164,11 +252,53 @@ class LanceConnection:
                 extra_fields=[
                     pa.field("chunk_index", pa.int64()),
                     pa.field("text", pa.string()),
+                    *TRANSCRIPT_CHUNK_METADATA_FIELDS,
                 ],
             ),
         )
         self.ensure_scalar_indexes("video_transcript_chunks")
         return table
+
+    def ensure_transcript_chunk_metadata_columns(self) -> bool:
+        table = self.optional_table("video_transcript_chunks")
+        if table is None:
+            return False
+        existing_columns = set(table.schema.names)
+        missing_fields = [field for field in TRANSCRIPT_CHUNK_METADATA_FIELDS if field.name not in existing_columns]
+        if not missing_fields:
+            return False
+        table.add_columns(missing_fields)
+        return True
+
+    def backfill_transcript_chunk_metadata(self) -> None:
+        table = self.optional_table("video_transcript_chunks")
+        if table is None:
+            return
+        channels_by_id = {row["youtube_channel_id"]: row for row in self.rows("channels") if row.get("youtube_channel_id") is not None}
+        videos_by_id = {
+            row["youtube_video_id"]: {
+                **row,
+                "channel_handle": channels_by_id.get(row.get("channel_id"), {}).get("channel_handle"),
+            }
+            for row in self.rows("videos")
+            if row.get("youtube_video_id") is not None
+        }
+        updated_rows = []
+        for row in self.rows("video_transcript_chunks"):
+            video = videos_by_id.get(row.get("video_id"))
+            if video is None:
+                continue
+            metadata = transcript_chunk_metadata(video)
+            if any(row.get(column_name) != value for column_name, value in metadata.items()):
+                updated_rows.append({**row, **metadata})
+        self.upsert_rows(
+            "video_transcript_chunks",
+            [
+                "video_id",
+                "chunk_index",
+            ],
+            updated_rows,
+        )
 
     def ensure_scalar_indexes(
         self,
@@ -201,6 +331,40 @@ class LanceConnection:
             "text",
             config=FTS(base_tokenizer="icu"),
             name=TRANSCRIPT_CHUNK_TEXT_INDEX,
+        )
+
+    def ensure_video_title_text_index(
+        self,
+        *,
+        refresh: bool = False,
+    ) -> None:
+        table = self.optional_table("video_title_embeddings")
+        if table is None:
+            return
+        if not refresh and any(index.name == VIDEO_TITLE_TEXT_INDEX for index in table.list_indices()):
+            return
+        table.create_index(
+            "title",
+            config=FTS(base_tokenizer="icu"),
+            name=VIDEO_TITLE_TEXT_INDEX,
+            replace=True,
+        )
+
+    def ensure_search_candidate_title_text_index(
+        self,
+        *,
+        refresh: bool = False,
+    ) -> None:
+        table = self.optional_table("search_candidate_title_embeddings")
+        if table is None:
+            return
+        if not refresh and any(index.name == SEARCH_CANDIDATE_TITLE_TEXT_INDEX for index in table.list_indices()):
+            return
+        table.create_index(
+            "title",
+            config=FTS(base_tokenizer="icu"),
+            name=SEARCH_CANDIDATE_TITLE_TEXT_INDEX,
+            replace=True,
         )
 
     def table_names(self) -> set[str]:
@@ -359,3 +523,7 @@ def filter_equal(
 
 def filter_in_values(values: list[str]) -> str:
     return ", ".join(filter_literal(value) for value in values)
+
+
+def transcript_chunk_metadata(video: dict[str, Any]) -> dict[str, Any]:
+    return {column_name: video.get(column_name) for column_name in TRANSCRIPT_CHUNK_METADATA_TYPES}
