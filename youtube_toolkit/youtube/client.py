@@ -14,7 +14,7 @@ from ..identity import ALLOWED_VIDEO_HOSTS, VideoRef, normalize_youtube_url, req
 
 SEARCH_SORT_PARAMS = {
     "relevance": "EgIQAQ==",  # boolean "true"
-    "views": "CAMSAhAB",  # sort search results by view count in descending order
+    "popularity": "CAMSAhAB",  # sort search results by view count in descending order
 }
 DEFAULT_AUDIO_DIR = Path(".cache/audio")
 STT_AUDIO_FORMAT_SELECTOR = "bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio[ext=aac]"

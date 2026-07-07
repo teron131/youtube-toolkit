@@ -14,12 +14,15 @@ EMBEDDING_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 DEFAULT_EMBEDDING_MODEL = "gemini-embedding-2"
 DEFAULT_EMBEDDING_DIMENSIONALITY = 768
 DEFAULT_EMBEDDING_AUTO_INDEX = True
+DEFAULT_EMBEDDING_CONCURRENCY = 16
+MAX_EMBEDDING_CONCURRENCY = 50
 MODEL_CONFIG_KEYS = (
     "EMBEDDING_API_KEY",
     "EMBEDDING_BASE_URL",
     "EMBEDDING_MODEL",
     "EMBEDDING_DIMENSIONS",
     "EMBEDDING_AUTO_INDEX",
+    "EMBEDDING_CONCURRENCY",
     "LLM_API_KEY",
     "LLM_BASE_URL",
     "LLM_MODEL",
@@ -83,6 +86,17 @@ def embedding_config_from_env(
 
 def embedding_auto_index_enabled() -> bool:
     return config_bool_value("EMBEDDING_AUTO_INDEX", DEFAULT_EMBEDDING_AUTO_INDEX)
+
+
+def embedding_concurrency(job_count: int) -> int:
+    configured_concurrency = config_int_value("EMBEDDING_CONCURRENCY", DEFAULT_EMBEDDING_CONCURRENCY)
+    return min(
+        job_count,
+        max(
+            1,
+            min(configured_concurrency, MAX_EMBEDDING_CONCURRENCY),
+        ),
+    )
 
 
 def llm_config_from_env() -> ModelConfig:

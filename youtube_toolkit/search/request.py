@@ -1,0 +1,172 @@
+"""Public search request types and default policy values."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import date
+from typing import Literal, get_args
+
+from ..identity import ChannelRef, is_channel_id, parse_channel_ref
+
+SearchSource = Literal["youtube", "channel", "db"]
+SearchMode = Literal["native", "semantic"]
+SearchReturnType = Literal["video", "chunk"]
+SearchSort = Literal["relevance", "recency", "popularity"]
+SortableValue = str | int | float | tuple[int | float, ...]
+SOURCE_OVERSAMPLE_FACTOR = 3
+DATE_FILTER_SOURCE_OVERSAMPLE_FACTOR = 12
+TITLE_SEMANTIC_PREFILTER_FACTOR = 3
+TITLE_SEMANTIC_PREFILTER_MIN = 15
+TITLE_SEMANTIC_PREFILTER_MAX = 60
+TITLE_MIN_SIMILARITY = 0.3
+RESULT_MIN_SIMILARITY = 0.5
+CHANNEL_NAME_SEARCH_LIMIT = 10
+VIDEO_RESULT_KEYS = (
+    "title",
+    "channel_id",
+    "channel_handle",
+    "upload_date",
+    "duration",
+    "view_count",
+    "like_count",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelTarget:
+    youtube_channel_id: str | None = None
+    channel_handle: str | None = None
+    channel_name: str | None = None
+    exact_ref: str | None = None
+
+    @classmethod
+    def from_ref(cls, channel_ref: ChannelRef) -> ChannelTarget:
+        if not is_exact_channel_ref(channel_ref):
+            channel_name = channel_ref.strip()
+            if not channel_name:
+                raise ValueError("channel target must include a name, handle, URL, or channel ID")
+            return cls(channel_name=channel_name)
+        identity = parse_channel_ref(channel_ref)
+        return cls(
+            youtube_channel_id=identity.youtube_channel_id,
+            channel_handle=identity.channel_handle,
+            exact_ref=channel_ref.strip() if not identity.has_identity() else None,
+        )
+
+    def channel_ref(self) -> str:
+        if self.channel_handle is not None:
+            return self.channel_handle
+        if self.youtube_channel_id is not None:
+            return self.youtube_channel_id
+        if self.exact_ref is not None:
+            return self.exact_ref
+        raise ValueError("channel target must include a channel ID, handle, URL, or resolved name")
+
+
+def is_exact_channel_ref(channel_ref: ChannelRef) -> bool:
+    stripped_ref = channel_ref.strip()
+    stripped_path = stripped_ref.lstrip("/")
+    return stripped_ref.startswith(("@", "http://", "https://")) or stripped_path.startswith(("channel/", "user/", "c/")) or is_channel_id(stripped_path)
+
+
+@dataclass(frozen=True, slots=True)
+class SearchRequest:
+    query: str
+    limit: int
+    extra_queries: tuple[str, ...] = ()
+    sources: tuple[SearchSource, ...] = ("youtube",)
+    mode: SearchMode = "native"
+    return_type: SearchReturnType | None = None
+    channels: tuple[ChannelTarget, ...] = ()
+    sort: SearchSort | None = None
+    min_views: int | None = None
+    min_duration: str | None = None
+    max_duration: str | None = None
+    include_channel: tuple[str, ...] = ()
+    exclude_channel: tuple[str, ...] = ()
+    include_title: tuple[str, ...] = ()
+    exclude_title: tuple[str, ...] = ()
+    uploaded_after: str | None = None
+    uploaded_within_days: int | None = None
+    title_prefilter_factor: int = TITLE_SEMANTIC_PREFILTER_FACTOR
+    title_prefilter_min: int = TITLE_SEMANTIC_PREFILTER_MIN
+    title_prefilter_max: int = TITLE_SEMANTIC_PREFILTER_MAX
+    title_min_similarity: float | None = TITLE_MIN_SIMILARITY
+    result_min_similarity: float | None = RESULT_MIN_SIMILARITY
+
+
+def normalize_filter_date(value: str) -> str:
+    try:
+        return date.fromisoformat(value).isoformat()
+    except ValueError as error:
+        raise ValueError("uploaded-after must be YYYY-MM-DD") from error
+
+
+def resolve_return_type(request: SearchRequest) -> SearchReturnType:
+    if request.return_type is not None:
+        return request.return_type
+    if request.mode == "semantic":
+        return "chunk"
+    return "video"
+
+
+def resolve_sort(request: SearchRequest) -> SearchSort:
+    if request.sort is not None:
+        return request.sort
+    if request.sources == ("channel",) and request.mode == "native":
+        return "recency"
+    return "relevance"
+
+
+def validate_request(request: SearchRequest) -> None:
+    if any(source not in get_args(SearchSource) for source in request.sources):
+        raise ValueError("search source must be one of: youtube, channel, db")
+    if request.mode not in get_args(SearchMode):
+        raise ValueError("search mode must be one of: native, semantic")
+    if request.return_type is not None and request.return_type not in get_args(SearchReturnType):
+        raise ValueError("search return type must be one of: video, chunk")
+    if request.sort is not None and request.sort not in get_args(SearchSort):
+        raise ValueError("search sort must be one of: relevance, recency, popularity")
+    query_required = request.mode == "semantic" or any(source in ("youtube", "db") for source in request.sources)
+    if query_required and not request.query.strip():
+        raise ValueError("search query must be non-empty")
+    if request.limit <= 0:
+        raise ValueError("search limit must be greater than 0")
+    if request.title_prefilter_factor <= 0:
+        raise ValueError("title prefilter factor must be greater than 0")
+    if request.title_prefilter_min <= 0:
+        raise ValueError("title prefilter minimum must be greater than 0")
+    if request.title_prefilter_max <= 0:
+        raise ValueError("title prefilter maximum must be greater than 0")
+    if request.title_prefilter_min > request.title_prefilter_max:
+        raise ValueError("title prefilter minimum cannot exceed maximum")
+    validate_similarity_threshold(
+        request.title_min_similarity,
+        "title min similarity",
+    )
+    validate_similarity_threshold(
+        request.result_min_similarity,
+        "result min similarity",
+    )
+    if request.uploaded_within_days is not None and request.uploaded_within_days < 0:
+        raise ValueError("uploaded-within-days must be non-negative")
+    if request.uploaded_after is not None:
+        normalize_filter_date(request.uploaded_after)
+    if not request.sources:
+        raise ValueError("search requires at least one source")
+    if request.extra_queries and "youtube" not in request.sources:
+        raise ValueError("extra queries require youtube source")
+    if request.return_type == "chunk" and request.mode != "semantic":
+        raise ValueError("chunk return requires semantic mode")
+    if "channel" in request.sources and not request.channels:
+        raise ValueError("channel source requires at least one --channels value")
+
+
+def validate_similarity_threshold(
+    value: float | None,
+    label: str,
+) -> None:
+    if value is None:
+        return
+    if value < -1 or value > 1:
+        raise ValueError(f"{label} must be between -1 and 1")

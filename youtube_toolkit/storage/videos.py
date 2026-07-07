@@ -7,7 +7,7 @@ from typing import Any
 
 from ..schemas import ChannelIdentity, VideoRecord, extract_channel_identity, extract_video_record
 from .channels import upsert_channel
-from .connection import LanceConnection, filter_literal
+from .connection import LanceConnection, filter_literal, transcript_chunk_metadata
 from .payloads import stored_video_payload
 
 
@@ -151,6 +151,17 @@ def update_video(
     if next_transcript != existing_row["transcript"]:
         clear_video_summary(connection, existing_row["youtube_video_id"])
         clear_video_transcript_chunks(connection, existing_row["youtube_video_id"])
+    else:
+        updated_row = {
+            **existing_row,
+            "channel_id": next_channel_id,
+            "title": next_title,
+            "upload_date": next_upload_date,
+            "duration": next_duration,
+            "view_count": next_view_count,
+            "like_count": next_like_count,
+        }
+        refresh_video_transcript_chunk_metadata(connection, updated_row)
 
 
 def video_payload_row(
@@ -198,6 +209,34 @@ def video_embedding_source_changed(
         existing_row["channel_id"],
         existing_row["title"],
         existing_row["transcript"],
+    )
+
+
+def refresh_video_transcript_chunk_metadata(
+    connection: LanceConnection,
+    video: dict[str, Any],
+) -> None:
+    """Refresh derived chunk filter columns without changing chunk embeddings."""
+    rows = connection.rows(
+        "video_transcript_chunks",
+        where_sql=f"video_id = {filter_literal(video['youtube_video_id'])}",
+    )
+    if not rows:
+        return
+    metadata = transcript_chunk_metadata(video_payload_row(connection, video))
+    connection.upsert_rows(
+        "video_transcript_chunks",
+        [
+            "video_id",
+            "chunk_index",
+        ],
+        [
+            {
+                **row,
+                **metadata,
+            }
+            for row in rows
+        ],
     )
 
 

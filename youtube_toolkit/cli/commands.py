@@ -24,6 +24,8 @@ from ..model_config import (
     write_model_config,
 )
 from ..schemas import ChannelRemovalResult, EmbeddingIndexResult, WatchlistSyncResult
+from ..search import ChannelTarget, SearchRequest
+from ..search import search as run_search_request
 from ..storage import (
     DATABASE_FILENAME,
     database_schema_health,
@@ -59,7 +61,6 @@ from ..youtube.channels import (
     remove_watchlist_channels,
     sync_watchlist,
 )
-from ..youtube.search import SearchOptions, search_videos
 
 
 class DoctorResult(TypedDict):
@@ -119,6 +120,15 @@ class IndexCommandResult(TypedDict):
     failed: list[EmbeddingIndexResult]
 
 
+SEARCH_SOURCES = ("youtube", "channel", "db")
+SEARCH_SORTS = ("relevance", "recency", "popularity")
+DEFAULT_YOUTUBE_SEARCH_LIMIT = 10
+DEFAULT_CHANNEL_SEARCH_LIMIT = 30
+DEFAULT_SEARCH_MIN_VIEWS = 10_000
+DEFAULT_SEARCH_MIN_DURATION = "3:00"
+DEFAULT_SEARCH_MAX_DURATION = "8:00:00"
+
+
 class VideoCommands:
     @staticmethod
     def transcript(args: argparse.Namespace) -> dict[str, Any]:
@@ -133,6 +143,46 @@ class ChannelCommands:
     @staticmethod
     def videos(args: argparse.Namespace) -> dict[str, Any]:
         return fetch_channel_videos(args.channel_ref, options=channel_options(args))
+
+
+class SearchCommands:
+    @staticmethod
+    def search(args: argparse.Namespace) -> list[dict[str, Any]]:
+        sources = tuple(dict.fromkeys(args.source or ["youtube"]))
+        limit = args.limit
+        if limit is None:
+            limit = DEFAULT_CHANNEL_SEARCH_LIMIT if sources == ("channel",) else DEFAULT_YOUTUBE_SEARCH_LIMIT
+        if any(source not in SEARCH_SOURCES for source in sources):
+            raise ValueError("--source must be one of: youtube, channel, db")
+        if "channel" not in sources and args.channels:
+            raise ValueError("--channels requires --source channel")
+        if "channel" in sources and not args.channels:
+            raise ValueError("channel source requires at least one --channels")
+        if args.sort is not None and args.sort not in SEARCH_SORTS:
+            raise ValueError("--sort must be one of: relevance, recency, popularity")
+        if args.mode == "native" and sources == ("youtube",) and args.sort == "recency":
+            raise ValueError("native YouTube search does not support --sort recency")
+        return run_search_request(
+            SearchRequest(
+                query=args.query,
+                extra_queries=tuple(getattr(args, "extra_queries", [])),
+                sources=sources,
+                mode=args.mode,
+                return_type=args.return_type,
+                channels=tuple(ChannelTarget.from_ref(channel) for channel in args.channels),
+                limit=limit,
+                sort=args.sort,
+                min_views=args.min_views,
+                min_duration=args.min_duration,
+                max_duration=args.max_duration,
+                uploaded_after=getattr(args, "uploaded_after", None),
+                uploaded_within_days=getattr(args, "uploaded_within_days", None),
+                include_channel=tuple(args.include_channel),
+                exclude_channel=tuple(args.exclude_channel),
+                include_title=tuple(args.include_title),
+                exclude_title=tuple(args.exclude_title),
+            )
+        )
 
 
 class WatchlistCommands:
@@ -615,23 +665,6 @@ def setup_text_value(
     if value is not None:
         return str(value)
     return config_value(key) or default
-
-
-def run_search(args: argparse.Namespace) -> list[dict[str, Any]]:
-    return search_videos(
-        args.query,
-        options=SearchOptions(
-            limit=args.limit,
-            sort=args.sort,
-            min_views=args.min_views,
-            min_duration=args.min_duration,
-            max_duration=args.max_duration,
-            include_channel=tuple(args.include_channel),
-            exclude_channel=tuple(args.exclude_channel),
-            include_title=tuple(args.include_title),
-            exclude_title=tuple(args.exclude_title),
-        ),
-    )
 
 
 def run_doctor(args: argparse.Namespace) -> DoctorResult:

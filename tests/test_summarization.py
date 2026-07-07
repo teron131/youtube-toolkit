@@ -1,6 +1,7 @@
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from youtube_toolkit import ModelConfig
+from youtube_toolkit.model_config import DEFAULT_EMBEDDING_CONCURRENCY, MAX_EMBEDDING_CONCURRENCY, embedding_concurrency
 from youtube_toolkit.summarization import Chapter, TranscriptSummary, summarize_transcript
 
 
@@ -14,6 +15,15 @@ def test_model_config_normalizes_values() -> None:
     assert config.model == "summary-model"
     assert config.api_key == "summary-key"
     assert config.base_url == "https://summary.example/v1"
+
+
+def test_embedding_concurrency_defaults_and_caps(monkeypatch) -> None:
+    monkeypatch.delenv("EMBEDDING_CONCURRENCY", raising=False)
+    assert embedding_concurrency(50) == DEFAULT_EMBEDDING_CONCURRENCY
+    assert embedding_concurrency(3) == 3
+
+    monkeypatch.setenv("EMBEDDING_CONCURRENCY", "999")
+    assert embedding_concurrency(80) == MAX_EMBEDDING_CONCURRENCY
 
 
 def test_text_summary_formats_chapters() -> None:
