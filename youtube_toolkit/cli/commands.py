@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict
-from dataclasses import dataclass
+import builtins
+from dataclasses import asdict, dataclass
 import getpass
 import sys
-from typing import Any, Literal, NotRequired, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict, cast
+
+from pydantic import SecretStr
 
 from ..identity import require_video_id
 from ..model_config import (
@@ -24,8 +26,8 @@ from ..model_config import (
     write_model_config,
 )
 from ..schemas import ChannelRemovalResult, EmbeddingIndexResult, WatchlistSyncResult
-from ..search import ChannelTarget, SearchRequest
-from ..search import search as run_search_request
+from ..search import ChannelTarget, SearchRequest, search as run_search_request
+from ..search.request import SearchSource
 from ..storage import (
     DATABASE_FILENAME,
     database_schema_health,
@@ -148,12 +150,13 @@ class ChannelCommands:
 class SearchCommands:
     @staticmethod
     def search(args: argparse.Namespace) -> list[dict[str, Any]]:
-        sources = tuple(dict.fromkeys(args.source or ["youtube"]))
+        raw_sources = tuple(dict.fromkeys(args.source or ["youtube"]))
         limit = args.limit
         if limit is None:
-            limit = DEFAULT_CHANNEL_SEARCH_LIMIT if sources == ("channel",) else DEFAULT_YOUTUBE_SEARCH_LIMIT
-        if any(source not in SEARCH_SOURCES for source in sources):
+            limit = DEFAULT_CHANNEL_SEARCH_LIMIT if raw_sources == ("channel",) else DEFAULT_YOUTUBE_SEARCH_LIMIT
+        if any(source not in SEARCH_SOURCES for source in raw_sources):
             raise ValueError("--source must be one of: youtube, channel, db")
+        sources = cast(tuple[SearchSource, ...], raw_sources)
         if "channel" not in sources and args.channels:
             raise ValueError("--channels requires --source channel")
         if "channel" in sources and not args.channels:
@@ -187,16 +190,16 @@ class SearchCommands:
 
 class WatchlistCommands:
     @staticmethod
-    def add(args: argparse.Namespace) -> list[str]:
+    def add(args: argparse.Namespace) -> builtins.list[str]:
         return add_watchlist_channels(args.channel_refs)
 
     @staticmethod
-    def list(args: argparse.Namespace) -> list[str]:
+    def list(args: argparse.Namespace) -> builtins.list[str]:
         del args
         return list_watchlist_channels()
 
     @staticmethod
-    def remove(args: argparse.Namespace) -> list[ChannelRemovalResult]:
+    def remove(args: argparse.Namespace) -> builtins.list[ChannelRemovalResult]:
         return remove_watchlist_channels(args.channel_refs)
 
     @staticmethod
@@ -208,7 +211,7 @@ class WatchlistCommands:
         return scheduled_sync_watchlist(options=channel_options(args))
 
     @staticmethod
-    def recent(args: argparse.Namespace) -> list[dict[str, Any]]:
+    def recent(args: argparse.Namespace) -> builtins.list[dict[str, Any]]:
         return list_recent_watchlist_videos(
             channel_refs=args.channel_refs,
             days=args.days,
@@ -669,7 +672,7 @@ def setup_text_value(
 
 def run_doctor(args: argparse.Namespace) -> DoctorResult:
     del args
-    import yt_dlp
+    import yt_dlp.version
 
     return {
         "yt_dlp_version": yt_dlp.version.__version__,
@@ -801,7 +804,7 @@ def call_llm_hello(config: ModelConfig) -> str:
 
     response = ChatOpenAI(
         model=config.model,
-        api_key=config.api_key,
+        api_key=SecretStr(config.api_key),
         base_url=config.base_url,
     ).invoke([HumanMessage(content="Hello")])
     return str(getattr(response, "content", "")).strip()

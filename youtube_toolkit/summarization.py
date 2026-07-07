@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 from .model_config import ModelConfig
 
@@ -69,12 +71,13 @@ def summarize_transcript(
 
     llm = ChatOpenAI(
         model=config.model,
-        api_key=config.api_key,
+        api_key=SecretStr(config.api_key),
         base_url=config.base_url,
     )
-    return llm.with_structured_output(TranscriptSummary).invoke(
+    result = llm.with_structured_output(TranscriptSummary).invoke(
         [
             SystemMessage(content=system_prompt),
             HumanMessage(content=f"Text to summarize:\n{clean_text}"),
         ]
     )
+    return cast(TranscriptSummary, result)

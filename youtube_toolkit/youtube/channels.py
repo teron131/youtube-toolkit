@@ -6,7 +6,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
+from typing import Any, Protocol
 
 from ..identity import ChannelRef, ChannelRefInput, YouTubeRefs, normalize_channel_url, parse_channel_ref
 from ..schemas import (
@@ -46,11 +46,23 @@ class ChannelOptions:
     days: int | None = None
 
 
+class ChannelVideosClient(Protocol):
+    """Minimal yt-dlp surface needed for channel listing workflows."""
+
+    def channel_videos(
+        self,
+        channel_url: str,
+        *,
+        last: int | None,
+        flat: bool = True,
+    ) -> dict[str, Any]: ...
+
+
 def fetch_channel_videos(
     channel_ref: ChannelRef,
     *,
     options: ChannelOptions | None = None,
-    client: YtDlpClient | None = None,
+    client: ChannelVideosClient | None = None,
 ) -> dict[str, Any]:
     metadata = fetch_channel_metadata(
         channel_ref,
@@ -66,7 +78,7 @@ def fetch_channel_metadata(
     channel_ref: ChannelRef,
     *,
     options: ChannelOptions | None = None,
-    client: YtDlpClient | None = None,
+    client: ChannelVideosClient | None = None,
 ) -> dict[str, Any]:
     options = options or ChannelOptions()
     client = client or YtDlpClient()
@@ -87,7 +99,7 @@ def validate_channel_options(options: ChannelOptions) -> None:
 
 
 def get_recent_channel_entries(
-    client: YtDlpClient,
+    client: ChannelVideosClient,
     channel_url: str,
     *,
     options: ChannelOptions,

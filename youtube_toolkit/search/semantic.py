@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..schemas import EmbeddingIndexResult
 from ..storage import (
     auto_index_transcript_chunks,
     get_connection,
@@ -120,8 +121,8 @@ def title_prefilter_limit(
     )
 
 
-def index_transcripts(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    results: list[dict[str, Any]] = []
+def index_transcripts(candidates: list[dict[str, Any]]) -> list[EmbeddingIndexResult]:
+    results: list[EmbeddingIndexResult] = []
     for candidate in candidates:
         video_id = candidate_id(candidate)
         if video_id is None:
@@ -155,7 +156,7 @@ def index_transcripts(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def ensure_semantic_ready(
     candidates: list[dict[str, Any]],
-    index_results: list[dict[str, Any]],
+    index_results: list[EmbeddingIndexResult],
     ready_ids: set[str] | None = None,
 ) -> None:
     video_ids = candidate_ids(candidates)
@@ -169,7 +170,7 @@ def ensure_semantic_ready(
 
 def semantic_ready_ids(
     candidates: list[dict[str, Any]],
-    index_results: list[dict[str, Any]],
+    index_results: list[EmbeddingIndexResult],
 ) -> set[str]:
     video_ids = candidate_ids(candidates)
     indexed_ids = {str(result["video_id"]) for result in index_results if result.get("status") == "indexed" and result.get("video_id")}
@@ -179,7 +180,7 @@ def semantic_ready_ids(
     return indexed_ids | stored_ids
 
 
-def index_failure_detail(index_results: list[dict[str, Any]]) -> str:
+def index_failure_detail(index_results: list[EmbeddingIndexResult]) -> str:
     if not index_results:
         return ""
     details: list[str] = []
@@ -191,7 +192,7 @@ def index_failure_detail(index_results: list[dict[str, Any]]) -> str:
 
 
 def index_warnings(
-    index_results: list[dict[str, Any]],
+    index_results: list[EmbeddingIndexResult],
     ready_ids: set[str],
 ) -> dict[str, list[str]]:
     warnings: dict[str, list[str]] = {}

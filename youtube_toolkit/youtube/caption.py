@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import html
 import json
+from pathlib import Path
+from typing import Any, Protocol, cast
 import urllib.error
 import urllib.request
 
@@ -28,11 +30,23 @@ class CaptionTranscriptUnavailable(RuntimeError):
     """Raised when metadata has no usable caption transcript for the requested policy."""
 
 
+class CaptionMetadataClient(Protocol):
+    """Minimal yt-dlp surface needed before a transcript source is selected."""
+
+    def metadata(self, video_ref: VideoRef) -> dict[str, Any]: ...
+
+
+class SttAudioClient(CaptionMetadataClient, Protocol):
+    """yt-dlp surface needed when caption lookup falls back to speech-to-text."""
+
+    def download_transcription_audio(self, video_id: str) -> Path: ...
+
+
 def fetch_transcript(
     video_ref: VideoRef,
     *,
     options: TranscriptOptions | None = None,
-    client: YtDlpClient | None = None,
+    client: CaptionMetadataClient | None = None,
     auto_index: bool = True,
 ) -> TranscriptDocument:
     options = options or TranscriptOptions()
@@ -53,7 +67,7 @@ def fetch_transcript(
     except CaptionTranscriptUnavailable:
         document = fetch_stt_transcript(
             metadata_payload,
-            client=client,
+            client=cast(SttAudioClient, client),
         )
         if auto_index:
             index_stored_transcript(document.metadata.video_id)
@@ -107,7 +121,7 @@ def fetch_caption_transcript(
 def fetch_stt_transcript(
     metadata_payload: dict,
     *,
-    client: YtDlpClient,
+    client: SttAudioClient,
 ) -> TranscriptDocument:
     metadata = VideoMetadata.from_yt_dlp(metadata_payload)
     audio_path = client.download_transcription_audio(metadata.video_id)

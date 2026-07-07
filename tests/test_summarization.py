@@ -1,4 +1,5 @@
 from langchain_core.messages import HumanMessage, SystemMessage
+from pydantic import SecretStr
 
 from youtube_toolkit import ModelConfig
 from youtube_toolkit.model_config import DEFAULT_EMBEDDING_CONCURRENCY, MAX_EMBEDDING_CONCURRENCY, embedding_concurrency
@@ -104,7 +105,7 @@ def test_summarize_transcript_uses_langchain_structured_output(monkeypatch) -> N
     assert summary.overview == "A compact summary."
     assert calls["kwargs"] == {
         "model": "summary-model",
-        "api_key": "summary-key",
+        "api_key": SecretStr("summary-key"),
         "base_url": "https://summary.example/v1",
     }
     assert calls["schema"] is TranscriptSummary
