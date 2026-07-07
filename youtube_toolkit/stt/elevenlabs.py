@@ -19,6 +19,7 @@ def request_speech_to_text(
     language: str | None,
     timeout_seconds: float,
 ) -> dict[str, Any]:
+    """Send one audio file to the ElevenLabs STT API and return the decoded JSON response."""
     body, content_type = encode_multipart_form(
         fields={
             "model_id": model,

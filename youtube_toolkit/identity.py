@@ -1,4 +1,4 @@
-"""YouTube reference parsing for video and channel identities."""
+"""User-facing YouTube references become validated video IDs, channel IDs, handles, or canonical URLs here."""
 
 from __future__ import annotations
 
@@ -42,6 +42,8 @@ VIDEO_ID_URL_PATTERNS = (
 
 @dataclass(frozen=True, slots=True)
 class YouTubeRefs:
+    """Immutable collection boundary for accepting one or many user-supplied YouTube references."""
+
     values: tuple[YouTubeRef, ...]
 
     @classmethod
@@ -59,12 +61,15 @@ class YouTubeRefs:
         return iter(self.values)
 
     def video_ids(self) -> list[str]:
+        """Resolve every reference as a required YouTube video ID."""
         return [require_video_id(video_ref) for video_ref in self.values]
 
     def video_urls(self) -> list[str]:
+        """Resolve every reference into a canonical YouTube watch URL."""
         return [normalize_youtube_url(video_ref) for video_ref in self.values]
 
     def channel_identities(self) -> list[ChannelIdentity]:
+        """Resolve every reference into the channel identity shape used by storage."""
         return [parse_channel_ref(channel_ref) for channel_ref in self.values]
 
 
@@ -78,6 +83,7 @@ def validate_url(
     *,
     allowed_hosts: set[str] | tuple[str, ...],
 ) -> None:
+    """Reject URLs outside the scheme and host allowlist before external fetches."""
     parsed = urlparse(url)
     if parsed.scheme not in {"https", "http"}:
         raise ValueError(f"Unsupported URL scheme: {parsed.scheme or 'missing'}")
@@ -99,6 +105,7 @@ def is_channel_id(value: str) -> bool:
 
 
 def extract_video_id(video_ref: VideoRef) -> str | None:
+    """Extract a YouTube video ID from accepted ID, URL, or embedded URL forms."""
     candidate = video_ref.strip()
     if is_video_id(candidate):
         return candidate
@@ -136,6 +143,7 @@ def normalize_youtube_url(video_ref: VideoRef) -> str:
 
 
 def require_video_id(video_ref: VideoRef) -> str:
+    """Extract a video ID or raise with the public validation error for bad video refs."""
     video_id = extract_video_id(video_ref)
     if video_id is None:
         raise ValueError("Could not find a YouTube video ID")
@@ -143,7 +151,7 @@ def require_video_id(video_ref: VideoRef) -> str:
 
 
 def parse_channel_ref(channel_ref: ChannelRef) -> ChannelIdentity:
-    """Parse a durable channel identity from a user-facing channel reference."""
+    """Resolve only durable channel IDs and handles; names that require lookup stay unresolved."""
     channel_handle = normalize_handle(channel_ref)
     if channel_handle is not None:
         return ChannelIdentity(
@@ -172,6 +180,7 @@ def parse_channel_ref(channel_ref: ChannelRef) -> ChannelIdentity:
 
 
 def extract_channel_id(channel_ref: str) -> str | None:
+    """Extract a durable channel ID only when the reference matches YouTube channel-ID shape."""
     channel_id = normalize_channel_id(channel_ref)
     if channel_id is None or not is_channel_id(channel_id):
         return None
@@ -179,6 +188,7 @@ def extract_channel_id(channel_ref: str) -> str | None:
 
 
 def normalize_channel_url(channel_ref: ChannelRef) -> str:
+    """Canonicalize accepted channel references to the videos tab URL required by yt-dlp."""
     candidate = channel_ref.strip()
     if not candidate:
         raise ValueError("Expected a non-empty YouTube channel reference")

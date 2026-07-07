@@ -1,4 +1,4 @@
-"""Speech-to-text provider dispatch, upload helpers, and parsed provider results."""
+"""Speech-to-text dispatch keeps provider HTTP quirks behind one plain-text and one metadata-preserving API."""
 
 from __future__ import annotations
 
@@ -47,8 +47,7 @@ def transcribe_audio(
     *,
     options: SpeechToTextOptions | None = None,
 ) -> str:
-    """Transcribe one local audio file to plain text."""
-
+    """Return only transcript text for callers that do not need provider metadata."""
     options = options or SpeechToTextOptions()
     if not audio_path.is_file():
         raise ValueError(f"audio file does not exist: {audio_path}")
@@ -88,8 +87,7 @@ def transcribe_audio_details(
     *,
     options: SpeechToTextOptions | None = None,
 ) -> SpeechTranscription:
-    """Transcribe one local audio file and preserve provider metadata."""
-
+    """Preserve normalized provider metadata for storage and transcript-document workflows."""
     options = options or SpeechToTextOptions()
     if not audio_path.is_file():
         raise ValueError(f"audio file does not exist: {audio_path}")
@@ -130,8 +128,7 @@ def run_json_request(
     timeout_seconds: float,
     provider_name: str,
 ) -> dict[str, Any]:
-    """Run an STT HTTP request and return its JSON object response."""
-
+    """Run one provider request while preserving HTTP and JSON failure context."""
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310 - fixed HTTPS API endpoint.
             raw_response = response.read()
@@ -156,8 +153,7 @@ def encode_multipart_form(
     file_field: str,
     file_path: Path,
 ) -> tuple[bytes, str]:
-    """Encode STT form fields and one audio file as multipart form data."""
-
+    """Build the multipart payload shared by providers without leaking boundary details to adapters."""
     boundary = f"----youtube-toolkit-{uuid4().hex}"
     chunks: list[bytes] = []
 

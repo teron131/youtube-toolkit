@@ -1,4 +1,4 @@
-"""CLI command handlers."""
+"""CLI command handlers, setup persistence, and runtime health probes."""
 
 from __future__ import annotations
 
@@ -66,6 +66,8 @@ from ..youtube.channels import (
 
 
 class DoctorResult(TypedDict):
+    """Structured health payload rendered by the doctor command."""
+
     yt_dlp_version: str
     database: str
     database_schema: DatabaseSchemaHealthResult
@@ -74,6 +76,8 @@ class DoctorResult(TypedDict):
 
 
 class ModelSetupResult(TypedDict):
+    """Structured setup payload after config persistence and optional verification."""
+
     config: str
     model_apis: ModelApisHealthResult
     settings: ModelSettingsResult
@@ -81,15 +85,21 @@ class ModelSetupResult(TypedDict):
 
 
 class ModelSettingsResult(TypedDict):
+    """Persisted model behavior switches exposed by setup and doctor output."""
+
     auto_embeddings: bool
 
 
 class ModelApisHealthResult(TypedDict):
+    """Health payload for every configured model API role."""
+
     embedding: ModelApiHealthResult
     llm: ModelApiHealthResult
 
 
 class ModelApiHealthResult(TypedDict):
+    """Configuration readiness for one model API role without exposing secrets."""
+
     ok: bool
     model: str
     status: Literal["configured", "missing", "invalid"]
@@ -97,17 +107,23 @@ class ModelApiHealthResult(TypedDict):
 
 
 class ModelApisVerificationResult(TypedDict):
+    """Live verification payload for every configured model API role."""
+
     embedding: ModelApiVerificationResult
     llm: ModelApiVerificationResult
 
 
 class ModelApiVerificationResult(TypedDict):
+    """Result of one live model API smoke request."""
+
     ok: bool
     status: Literal["skipped", "passed", "failed"]
     detail: str
 
 
 class WatchlistScheduleHealthResult(TypedDict):
+    """Doctor-facing LaunchAgent status with plist detail when installed."""
+
     label: str
     ok: bool
     status: Literal["unsupported", "not_installed", "not_loaded", "running", "idle", "failed"]
@@ -116,6 +132,8 @@ class WatchlistScheduleHealthResult(TypedDict):
 
 
 class IndexCommandResult(TypedDict):
+    """Embedding index command result split into indexed, skipped, and failed videos."""
+
     videos: int
     indexed: list[EmbeddingIndexResult]
     skipped: list[EmbeddingIndexResult]
@@ -132,6 +150,8 @@ DEFAULT_SEARCH_MAX_DURATION = "8:00:00"
 
 
 class VideoCommands:
+    """Handlers for commands that operate on one video reference."""
+
     @staticmethod
     def transcript(args: argparse.Namespace) -> dict[str, Any]:
         return asdict(fetch_transcript(args.video_ref))
@@ -142,14 +162,19 @@ class VideoCommands:
 
 
 class ChannelCommands:
+    """Handlers for direct channel listing commands."""
+
     @staticmethod
     def videos(args: argparse.Namespace) -> dict[str, Any]:
         return fetch_channel_videos(args.channel_ref, options=channel_options(args))
 
 
 class SearchCommands:
+    """Handlers for the public mixed-source search command."""
+
     @staticmethod
     def search(args: argparse.Namespace) -> list[dict[str, Any]]:
+        """Validate CLI-only search combinations before handing off to the workflow layer."""
         raw_sources = tuple(dict.fromkeys(args.source or ["youtube"]))
         limit = args.limit
         if limit is None:
@@ -189,6 +214,8 @@ class SearchCommands:
 
 
 class WatchlistCommands:
+    """Handlers for watchlist membership, sync, recency, and scheduler commands."""
+
     @staticmethod
     def add(args: argparse.Namespace) -> builtins.list[str]:
         return add_watchlist_channels(args.channel_refs)
@@ -200,6 +227,7 @@ class WatchlistCommands:
 
     @staticmethod
     def remove(args: argparse.Namespace) -> builtins.list[ChannelRemovalResult]:
+        """Remove watchlist membership without deleting catalog data."""
         return remove_watchlist_channels(args.channel_refs)
 
     @staticmethod
@@ -208,10 +236,12 @@ class WatchlistCommands:
 
     @staticmethod
     def scheduled_sync(args: argparse.Namespace) -> ScheduledSyncResult:
+        """The hidden scheduler entrypoint uses scheduled default arguments."""
         return scheduled_sync_watchlist(options=channel_options(args))
 
     @staticmethod
     def recent(args: argparse.Namespace) -> builtins.list[dict[str, Any]]:
+        """Recent watchlist output is storage-only and does not mutate catalog state."""
         return list_recent_watchlist_videos(
             channel_refs=args.channel_refs,
             days=args.days,
@@ -219,6 +249,7 @@ class WatchlistCommands:
 
     @staticmethod
     def install_schedule(args: argparse.Namespace) -> WatchlistScheduleInstallResult:
+        """Install the LaunchAgent that runs hidden watchlist scheduled-sync."""
         return install_watchlist_schedule(
             options=WatchlistScheduleOptions(
                 minutes=args.minutes,
@@ -231,26 +262,34 @@ class WatchlistCommands:
 
     @staticmethod
     def schedule_status(args: argparse.Namespace) -> WatchlistScheduleStatusResult:
+        """Inspect the LaunchAgent state for the configured watchlist schedule label."""
         return watchlist_schedule_status(label=args.label)
 
     @staticmethod
     def uninstall_schedule(args: argparse.Namespace) -> WatchlistScheduleUninstallResult:
+        """Unload and remove the LaunchAgent for the configured watchlist schedule label."""
         return uninstall_watchlist_schedule(label=args.label)
 
 
 class BlacklistCommands:
+    """Handlers for search blacklist membership commands."""
+
     @staticmethod
     def add(args: argparse.Namespace) -> list[str]:
         return add_blacklist_channels(args.channel_refs)
 
     @staticmethod
     def remove(args: argparse.Namespace) -> list[ChannelRemovalResult]:
+        """Remove blacklist membership without deleting catalog data."""
         return remove_blacklist_channels(args.channel_refs)
 
 
 class IndexCommands:
+    """Handlers for embedding index maintenance commands."""
+
     @staticmethod
     def videos(args: argparse.Namespace) -> IndexCommandResult:
+        """Index explicit videos or all eligible stored videos when no refs are provided."""
         video_ids = [require_video_id(video_ref) for video_ref in args.video_refs]
         indexed: list[EmbeddingIndexResult] = []
         skipped: list[EmbeddingIndexResult] = []
@@ -282,8 +321,11 @@ class IndexCommands:
 
 
 class SetupCommands:
+    """Handlers for persistent model API setup."""
+
     @staticmethod
     def models(args: argparse.Namespace) -> ModelSetupResult:
+        """Model setup either opens the terminal menu or saves supplied flags directly."""
         if setup_interactive_terminal() and setup_args_missing(args):
             return run_model_setup_menu(args)
 
@@ -298,6 +340,7 @@ def index_one_video(
     connection: Any,
     video_id: str,
 ) -> EmbeddingIndexResult:
+    """Index one stored video and convert storage outcomes into command result rows."""
     try:
         payload = index_video_embedding(connection, video_id)
     except Exception as error:
@@ -321,6 +364,8 @@ def index_one_video(
 
 @dataclass(slots=True)
 class ModelSetupDraft:
+    """Mutable setup draft shared by direct flags and the interactive menu before persistence."""
+
     embedding_api_key: str | None
     embedding_base_url: str | None
     embedding_model: str | None
@@ -332,6 +377,7 @@ class ModelSetupDraft:
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> ModelSetupDraft:
+        """Seed an interactive draft from explicit flags, stored config, and setup defaults."""
         return cls(
             embedding_api_key=args.embedding_api_key if args.embedding_api_key is not None else config_value("EMBEDDING_API_KEY"),
             embedding_base_url=setup_text_value(args.embedding_base_url, "EMBEDDING_BASE_URL", EMBEDDING_BASE_URL),
@@ -344,6 +390,7 @@ class ModelSetupDraft:
         )
 
     def updates(self) -> dict[str, str | None]:
+        """Project the draft into persisted config keys, including boolean normalization."""
         return {
             "EMBEDDING_API_KEY": self.embedding_api_key,
             "EMBEDDING_BASE_URL": self.embedding_base_url,
@@ -358,11 +405,14 @@ class ModelSetupDraft:
 
 @dataclass(frozen=True, slots=True)
 class MenuItem:
+    """Selectable terminal menu row mapped to an internal setup action."""
+
     label: str
     action: str
 
 
 def run_model_setup_menu(args: argparse.Namespace) -> ModelSetupResult:
+    """Drive the terminal setup menu until the user saves or quits."""
     draft = ModelSetupDraft.from_args(args)
     verification = skipped_model_verification()
     selected_index = 0
@@ -403,6 +453,7 @@ def select_menu_item(
     selected_index: int,
     message: str | None,
 ) -> tuple[str, int, str | None]:
+    """Handle one reusable raw-key terminal menu loop."""
     while True:
         render_menu(
             title=title,
@@ -435,6 +486,7 @@ def render_menu(
     selected_index: int,
     message: str | None,
 ) -> None:
+    """Redraw the full terminal menu in place."""
     lines = [
         f"\x1b[2J\x1b[H{title}",
         help_text,
@@ -449,10 +501,12 @@ def render_menu(
 
 
 def clear_setup_menu() -> None:
+    """Clear the terminal after the setup menu exits."""
     print("\x1b[2J\x1b[H", end="", flush=True)
 
 
 def setup_menu_items(draft: ModelSetupDraft) -> tuple[MenuItem, ...]:
+    """The top-level setup menu mirrors the current draft state."""
     return (
         MenuItem(f"Embedding API  {setup_section_status(draft.embedding_api_key, draft.embedding_model)}", "embedding"),
         MenuItem(f"LLM API        {setup_section_status(draft.llm_api_key and draft.llm_base_url, draft.llm_model)}", "llm"),
@@ -464,6 +518,7 @@ def setup_menu_items(draft: ModelSetupDraft) -> tuple[MenuItem, ...]:
 
 
 def read_setup_key() -> str:
+    """Raw terminal input is translated into the setup menu's supported navigation keys."""
     import termios
     import tty
 
@@ -494,15 +549,18 @@ def setup_section_status(
     configured: object,
     model: str | None,
 ) -> str:
+    """Summarize whether a setup section has enough config to be useful."""
     status = "configured" if configured else "missing"
     return f"{status} ({model})" if model else status
 
 
 def setup_bool_text(value: bool) -> str:
+    """Render setup booleans in the menu's compact on/off vocabulary."""
     return "on" if value else "off"
 
 
 def configure_embedding(draft: ModelSetupDraft) -> None:
+    """Prompt for embedding API fields and mutate the setup draft."""
     print("\nEmbedding API")
     draft.embedding_api_key = prompt_secret("API key", draft.embedding_api_key)
     draft.embedding_base_url = prompt_text("Base URL", draft.embedding_base_url)
@@ -511,6 +569,7 @@ def configure_embedding(draft: ModelSetupDraft) -> None:
 
 
 def configure_llm(draft: ModelSetupDraft) -> None:
+    """Prompt for LLM API fields and mutate the setup draft."""
     print("\nLLM API")
     draft.llm_api_key = prompt_secret("API key", draft.llm_api_key)
     draft.llm_base_url = prompt_text("Base URL", draft.llm_base_url)
@@ -518,6 +577,7 @@ def configure_llm(draft: ModelSetupDraft) -> None:
 
 
 def configure_model_settings(draft: ModelSetupDraft) -> str | None:
+    """Toggle non-secret model settings from a nested setup menu."""
     selected_index = 0
     message: str | None = None
     while True:
@@ -536,6 +596,7 @@ def configure_model_settings(draft: ModelSetupDraft) -> str | None:
 
 
 def settings_menu_items(draft: ModelSetupDraft) -> tuple[MenuItem, ...]:
+    """Setup setting rows mirror the current draft state."""
     return (
         MenuItem(f"Auto-index transcript embeddings {setup_bool_text(draft.auto_embeddings)}", "auto_embeddings"),
         MenuItem("Back", "back"),
@@ -546,6 +607,7 @@ def prompt_secret(
     label: str,
     existing: str | None,
 ) -> str | None:
+    """Prompt for a secret while preserving the current value on blank input."""
     state = "configured" if existing else "empty"
     return getpass.getpass(f"{label} [{state}; blank keeps current]: ").strip() or existing
 
@@ -554,12 +616,14 @@ def prompt_text(
     label: str,
     existing: str | None,
 ) -> str | None:
+    """Prompt for non-secret setup text while preserving the current value on blank input."""
     if existing:
         return input(f"{label} [{existing}]: ").strip() or existing
     return input(f"{label}: ").strip() or None
 
 
 def prompt_model_setup(args: argparse.Namespace) -> ModelSetupDraft:
+    """Collect missing setup values from prompts when direct flags are incomplete."""
     interactive = setup_args_missing(args)
     return ModelSetupDraft(
         embedding_api_key=configured_secret(args.embedding_api_key, "Embedding API key", "EMBEDDING_API_KEY"),
@@ -584,6 +648,7 @@ def save_model_setup(
     verify: bool,
     verification: ModelApisVerificationResult | None = None,
 ) -> ModelSetupResult:
+    """Persist model setup and attach either live or supplied verification results."""
     config_path = write_model_config(draft.updates())
     return model_setup_result(
         draft,
@@ -598,6 +663,7 @@ def model_setup_result(
     *,
     config_path: str | None = None,
 ) -> ModelSetupResult:
+    """The public setup payload combines persisted state with verification results."""
     return {
         "config": config_path or str(app_config_path()),
         "model_apis": model_api_health(),
@@ -609,6 +675,7 @@ def model_setup_result(
 
 
 def setup_verification_text(verification: ModelApisVerificationResult) -> str:
+    """Render verification results for the interactive setup menu."""
     return "\n".join(
         [
             "",
@@ -620,6 +687,7 @@ def setup_verification_text(verification: ModelApisVerificationResult) -> str:
 
 
 def verify_model_apis() -> ModelApisVerificationResult:
+    """Live smoke requests cover every model API role."""
     return {
         "embedding": verify_embedding_api(),
         "llm": verify_llm_api(),
@@ -627,6 +695,7 @@ def verify_model_apis() -> ModelApisVerificationResult:
 
 
 def skipped_model_verification() -> ModelApisVerificationResult:
+    """Skipped verification keeps the setup payload shape stable without live requests."""
     return {
         "embedding": {
             "ok": False,
@@ -642,6 +711,7 @@ def skipped_model_verification() -> ModelApisVerificationResult:
 
 
 def setup_args_missing(args: argparse.Namespace) -> bool:
+    """Setup needs prompts when at least one setup flag is absent."""
     return any(
         getattr(args, name) is None
         for name in (
@@ -657,6 +727,7 @@ def setup_args_missing(args: argparse.Namespace) -> bool:
 
 
 def setup_interactive_terminal() -> bool:
+    """The raw-key setup menu requires an interactive stdin."""
     return sys.stdin.isatty()
 
 
@@ -665,12 +736,14 @@ def setup_text_value(
     key: str,
     default: str | None,
 ) -> str | None:
+    """Resolve a setup value from explicit input, persisted config, then default."""
     if value is not None:
         return str(value)
     return config_value(key) or default
 
 
 def run_doctor(args: argparse.Namespace) -> DoctorResult:
+    """Collect runtime, storage, schedule, and model health for the doctor command."""
     del args
     import yt_dlp.version
 
@@ -687,6 +760,7 @@ def watchlist_schedule_health(
     *,
     label: str = DEFAULT_WATCHLIST_SCHEDULE_LABEL,
 ) -> WatchlistScheduleHealthResult:
+    """Normalize LaunchAgent status into the doctor command's health vocabulary."""
     try:
         status = watchlist_schedule_status(label=label)
     except RuntimeError as error:
@@ -706,6 +780,7 @@ def watchlist_schedule_health(
 
 
 def model_api_health() -> ModelApisHealthResult:
+    """Collect configuration health for every model API role."""
     return {
         "embedding": embedding_api_health(),
         "llm": llm_api_health(),
@@ -713,6 +788,7 @@ def model_api_health() -> ModelApisHealthResult:
 
 
 def embedding_api_health() -> ModelApiHealthResult:
+    """Validate embedding configuration without sending a live embedding request."""
     model = config_value("EMBEDDING_MODEL") or DEFAULT_EMBEDDING_MODEL
     if config_value("EMBEDDING_API_KEY") is None:
         return {
@@ -739,6 +815,7 @@ def embedding_api_health() -> ModelApiHealthResult:
 
 
 def llm_api_health() -> ModelApiHealthResult:
+    """Validate LLM configuration without sending a live chat request."""
     model = config_value("LLM_MODEL") or "not configured"
     missing = [label for key, label in LLM_REQUIRED_CONFIG if config_value(key) is None]
     if missing:
@@ -766,6 +843,7 @@ def llm_api_health() -> ModelApiHealthResult:
 
 
 def verify_embedding_api() -> ModelApiVerificationResult:
+    """One embedding smoke request is collapsed into setup status vocabulary."""
     try:
         embedding = embed_text_with_gemini("Hello")
     except Exception as error:
@@ -782,6 +860,7 @@ def verify_embedding_api() -> ModelApiVerificationResult:
 
 
 def verify_llm_api() -> ModelApiVerificationResult:
+    """One LLM smoke request is collapsed into setup status vocabulary."""
     try:
         config = llm_config_from_env()
         text = call_llm_hello(config)
@@ -799,6 +878,7 @@ def verify_llm_api() -> ModelApiVerificationResult:
 
 
 def call_llm_hello(config: ModelConfig) -> str:
+    """Call the configured chat model with the setup smoke-test prompt."""
     from langchain_core.messages import HumanMessage
     from langchain_openai import ChatOpenAI
 
@@ -815,6 +895,7 @@ def confirm(
     *,
     default: bool,
 ) -> bool:
+    """Prompt for a yes/no answer with a default used on blank input."""
     suffix = "[Y/n]" if default else "[y/N]"
     answer = input(f"{prompt} {suffix} ").strip().lower()
     if not answer:
@@ -827,6 +908,7 @@ def configured_secret(
     label: str,
     key: str,
 ) -> str | None:
+    """Resolve a secret from explicit setup input, stored config, or an interactive prompt."""
     if value is not None:
         return value
     existing = config_value(key)
@@ -840,6 +922,7 @@ def configured_text(
     key: str,
     default: str | None,
 ) -> str | None:
+    """Resolve non-secret setup text from explicit input, stored config, default, or prompt."""
     if value is not None:
         return str(value)
     existing = config_value(key)
@@ -855,6 +938,7 @@ def configured_auto_embeddings(
     *,
     interactive: bool,
 ) -> bool:
+    """Resolve the auto-embedding switch from flags, prompt, or persisted config."""
     if value is not None:
         return value
     if interactive:
@@ -863,4 +947,5 @@ def configured_auto_embeddings(
 
 
 def channel_options(args: argparse.Namespace) -> ChannelOptions:
+    """Translate shared CLI window flags into channel workflow options."""
     return ChannelOptions(last=args.last, days=args.days)

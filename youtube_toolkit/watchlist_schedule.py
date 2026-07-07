@@ -39,6 +39,8 @@ class WatchlistScheduleOptions:
 
 
 class WatchlistScheduleInstallResult(TypedDict):
+    """Result contract for installing or loading the macOS watchlist LaunchAgent."""
+
     label: str
     plist_path: str
     loaded: bool
@@ -46,6 +48,8 @@ class WatchlistScheduleInstallResult(TypedDict):
 
 
 class WatchlistScheduleUninstallResult(TypedDict):
+    """Result contract for unloading and removing the macOS watchlist LaunchAgent."""
+
     label: str
     plist_path: str
     removed: bool
@@ -53,6 +57,8 @@ class WatchlistScheduleUninstallResult(TypedDict):
 
 
 class WatchlistScheduleStatusResult(TypedDict):
+    """Status contract combining LaunchAgent file presence and launchd runtime state."""
+
     label: str
     plist_path: str
     ok: bool
@@ -61,6 +67,8 @@ class WatchlistScheduleStatusResult(TypedDict):
 
 
 class ScheduledSyncResult(TypedDict):
+    """Result contract for one lock-protected scheduled watchlist sync attempt."""
+
     status: Literal["skipped", "synced"]
     reason: NotRequired[str]
     sync: NotRequired[WatchlistSyncResult]
@@ -217,6 +225,7 @@ def scheduled_sync_watchlist(
 def build_watchlist_schedule_plist(
     options: WatchlistScheduleOptions,
 ) -> dict[str, Any]:
+    """Build the LaunchAgent plist payload owned by the scheduler installer."""
     validate_schedule_options(options)
     storage_home = resolve_storage_dir()
     program_arguments = [
@@ -246,6 +255,7 @@ def build_watchlist_schedule_plist(
 
 
 def validate_schedule_options(options: WatchlistScheduleOptions) -> None:
+    """Validate scheduler interval, fetch limits, and launchd label before file writes."""
     if options.minutes <= 0:
         raise ValueError("--minutes must be greater than 0")
     if options.last is not None and options.last <= 0:
@@ -257,19 +267,23 @@ def validate_schedule_options(options: WatchlistScheduleOptions) -> None:
 
 
 def ensure_launchd_supported() -> None:
+    """Raise when launchd management is invoked outside macOS."""
     if platform.system() != "Darwin":
         raise RuntimeError("watchlist schedule management uses macOS launchd")
 
 
 def launch_agent_path(label: str) -> Path:
+    """Return the user LaunchAgents plist path for a scheduler label."""
     return Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
 
 
 def project_root() -> Path:
+    """Return the repository root used as the scheduled command working directory."""
     return Path(__file__).resolve().parents[1]
 
 
 def launchctl_domain() -> str:
+    """Return the current user's GUI launchctl domain."""
     return f"gui/{os.getuid()}"
 
 
@@ -278,6 +292,7 @@ def load_launch_agent(
     *,
     check: bool,
 ) -> subprocess.CompletedProcess[str]:
+    """Bootstrap a LaunchAgent plist into the current user GUI domain."""
     return run_launchctl(
         ["bootstrap", launchctl_domain(), str(plist_path)],
         check=check,
@@ -289,6 +304,7 @@ def unload_launch_agent(
     *,
     check: bool,
 ) -> subprocess.CompletedProcess[str]:
+    """Boot out a LaunchAgent plist from the current user GUI domain."""
     return run_launchctl(
         ["bootout", launchctl_domain(), str(plist_path)],
         check=check,
@@ -300,6 +316,7 @@ def print_launch_agent(
     *,
     check: bool,
 ) -> subprocess.CompletedProcess[str]:
+    """Print launchd state for the scheduler label in the current user GUI domain."""
     return run_launchctl(
         ["print", f"{launchctl_domain()}/{label}"],
         check=check,
@@ -307,6 +324,7 @@ def print_launch_agent(
 
 
 def parse_launchctl_print(output: str) -> dict[str, int | str]:
+    """Extract the small scheduler status subset from launchctl print output."""
     status: dict[str, int | str] = {}
     for line in output.splitlines():
         key, separator, value = line.strip().partition(" = ")
@@ -328,6 +346,7 @@ def run_launchctl(
     *,
     check: bool,
 ) -> subprocess.CompletedProcess[str]:
+    """Run launchctl with fixed binary path and caller-provided subcommand arguments."""
     return subprocess.run(  # noqa: S603 - launchctl subcommands are assembled by this module from fixed operations.
         [LAUNCHCTL_PATH, *arguments],
         capture_output=True,

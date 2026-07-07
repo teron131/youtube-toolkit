@@ -67,6 +67,8 @@ SCALAR_INDEX_COLUMNS = {
 
 
 class DatabaseSchemaHealthResult(TypedDict):
+    """Public diagnostic shape for checking whether the LanceDB store is usable."""
+
     path: str
     ok: bool
     status: Literal["ready", "missing", "invalid", "unreadable"]
@@ -131,6 +133,7 @@ def vector_schema(
     vector_dimensions: int,
     extra_fields: list[pa.Field] | None = None,
 ) -> pa.Schema:
+    """Build the shared vector table schema used by embedding-backed tables."""
     return pa.schema(
         [
             pa.field(id_field, pa.string()),
@@ -161,14 +164,17 @@ class LanceConnection:
         return None
 
     def ensure_base_tables(self) -> None:
+        """Create the required scalar tables if this is a fresh store."""
         for table_name, schema in BASE_TABLE_SCHEMAS.items():
             self.ensure_table(table_name, schema)
 
     def ensure_base_scalar_indexes(self) -> None:
+        """Ensure indexes for required scalar tables."""
         for table_name in BASE_TABLE_SCHEMAS:
             self.ensure_scalar_indexes(table_name)
 
     def ensure_optional_table_indexes(self) -> None:
+        """Refresh indexes and metadata columns for optional embedding tables when present."""
         self.ensure_scalar_indexes("video_embeddings")
         self.ensure_scalar_indexes("video_title_embeddings")
         self.ensure_video_title_text_index()
@@ -184,6 +190,7 @@ class LanceConnection:
         table_name: str,
         schema: pa.Schema,
     ) -> Table:
+        """Open an existing table or create it with the owned schema."""
         if table_name in self.table_names():
             return self.database.open_table(table_name)
         return self.database.create_table(table_name, schema=schema)
@@ -192,6 +199,7 @@ class LanceConnection:
         self,
         vector_dimensions: int,
     ) -> Table:
+        """Ensure the video-level embedding table matches the requested vector dimensionality."""
         table = self.ensure_table(
             "video_embeddings",
             vector_schema(
@@ -206,6 +214,7 @@ class LanceConnection:
         self,
         vector_dimensions: int,
     ) -> Table:
+        """Ensure the title embedding table and title text index exist."""
         table = self.ensure_table(
             "video_title_embeddings",
             vector_schema(
@@ -224,6 +233,7 @@ class LanceConnection:
         self,
         vector_dimensions: int,
     ) -> Table:
+        """Ensure the short-lived search candidate title embedding table and indexes exist."""
         table = self.ensure_table(
             "search_candidate_title_embeddings",
             vector_schema(
@@ -244,6 +254,7 @@ class LanceConnection:
         self,
         vector_dimensions: int,
     ) -> Table:
+        """Ensure the transcript chunk embedding table and scalar indexes exist."""
         table = self.ensure_table(
             "video_transcript_chunks",
             vector_schema(
@@ -260,6 +271,7 @@ class LanceConnection:
         return table
 
     def ensure_transcript_chunk_metadata_columns(self) -> bool:
+        """Add missing metadata columns to older transcript chunk tables."""
         table = self.optional_table("video_transcript_chunks")
         if table is None:
             return False
@@ -271,6 +283,7 @@ class LanceConnection:
         return True
 
     def backfill_transcript_chunk_metadata(self) -> None:
+        """Backfill chunk filter metadata from stored video and channel rows."""
         table = self.optional_table("video_transcript_chunks")
         if table is None:
             return
@@ -306,6 +319,7 @@ class LanceConnection:
         *,
         refresh: bool = False,
     ) -> None:
+        """Ensure configured B-tree indexes for a table when it exists."""
         table = self.optional_table(table_name)
         if table is None:
             return
@@ -322,6 +336,7 @@ class LanceConnection:
             )
 
     def ensure_transcript_chunk_text_index(self) -> None:
+        """Ensure the full-text index over transcript chunk text exists."""
         table = self.optional_table("video_transcript_chunks")
         if table is None:
             return
@@ -338,6 +353,7 @@ class LanceConnection:
         *,
         refresh: bool = False,
     ) -> None:
+        """Ensure or refresh the full-text index over stored video titles."""
         table = self.optional_table("video_title_embeddings")
         if table is None:
             return
@@ -355,6 +371,7 @@ class LanceConnection:
         *,
         refresh: bool = False,
     ) -> None:
+        """Ensure or refresh the full-text index over staged search candidate titles."""
         table = self.optional_table("search_candidate_title_embeddings")
         if table is None:
             return
@@ -368,18 +385,21 @@ class LanceConnection:
         )
 
     def table_names(self) -> set[str]:
+        """Return the current LanceDB table names."""
         return set(self.database.list_tables().tables)
 
     def table(
         self,
         table_name: str,
     ) -> Table:
+        """Open a required table by name."""
         return self.database.open_table(table_name)
 
     def optional_table(
         self,
         table_name: str,
     ) -> Table | None:
+        """Open a table only when it already exists."""
         if table_name not in self.table_names():
             return None
         return self.table(table_name)
@@ -391,6 +411,7 @@ class LanceConnection:
         where_sql: str | None = None,
         limit: int = MAX_TABLE_SCAN_ROWS,
     ) -> list[dict[str, Any]]:
+        """Return table rows with optional SQL filtering and a bounded scan limit."""
         table = self.optional_table(table_name)
         if table is None:
             return []
@@ -405,6 +426,7 @@ class LanceConnection:
         key: str,
         value: Any,
     ) -> dict[str, Any] | None:
+        """Return one row by scalar equality against an indexed key."""
         rows = self.rows(
             table_name,
             where_sql=filter_equal(key, value),
@@ -418,6 +440,7 @@ class LanceConnection:
         key: str | list[str],
         rows: list[dict[str, Any]],
     ) -> None:
+        """Merge rows by key and refresh scalar indexes for the mutated table."""
         if not rows:
             return
         self.table(table_name).merge_insert(key).when_matched_update_all().when_not_matched_insert_all().execute(rows)
@@ -428,6 +451,7 @@ class LanceConnection:
         table_name: str,
         where_sql: str,
     ) -> None:
+        """Delete rows from a table when that table exists."""
         table = self.optional_table(table_name)
         if table is None:
             return
@@ -459,6 +483,7 @@ def _resolve_user_state_dir() -> Path:
 
 
 def database_schema_health(database_path: Path | None = None) -> DatabaseSchemaHealthResult:
+    """Inspect the active or provided database path for setup diagnostics."""
     path = database_path or resolve_storage_dir() / DATABASE_FILENAME
     return inspect_database_schema(path)
 
@@ -503,6 +528,7 @@ def inspect_database_schema(database_path: Path) -> DatabaseSchemaHealthResult:
 
 
 def filter_literal(value: str) -> str:
+    """Quote a string literal for the small LanceDB SQL fragments this module owns."""
     return "'" + value.replace("'", "''") + "'"
 
 
@@ -510,6 +536,7 @@ def filter_equal(
     column_name: str,
     value: Any,
 ) -> str:
+    """Build an equality SQL fragment for scalar values used by storage lookups."""
     if value is None:
         return f"{column_name} IS NULL"
     if isinstance(value, bool):
@@ -522,8 +549,10 @@ def filter_equal(
 
 
 def filter_in_values(values: list[str]) -> str:
+    """Quote a list of string values for use inside an IN clause."""
     return ", ".join(filter_literal(value) for value in values)
 
 
 def transcript_chunk_metadata(video: dict[str, Any]) -> dict[str, Any]:
+    """Project stored video metadata columns duplicated onto transcript chunks for filtering."""
     return {column_name: video.get(column_name) for column_name in TRANSCRIPT_CHUNK_METADATA_TYPES}

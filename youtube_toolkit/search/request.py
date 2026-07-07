@@ -1,4 +1,4 @@
-"""Public search request types and default policy values."""
+"""Search request contracts validate caller policy before workflows touch YouTube, storage, or embeddings."""
 
 from __future__ import annotations
 
@@ -34,6 +34,8 @@ VIDEO_RESULT_KEYS = (
 
 @dataclass(frozen=True, slots=True)
 class ChannelTarget:
+    """Resolved channel-search target, separating exact channel refs from fuzzy channel names."""
+
     youtube_channel_id: str | None = None
     channel_handle: str | None = None
     channel_name: str | None = None
@@ -41,6 +43,7 @@ class ChannelTarget:
 
     @classmethod
     def from_ref(cls, channel_ref: ChannelRef) -> ChannelTarget:
+        """Interpret a user channel argument as either an exact ref or a channel-name lookup."""
         if not is_exact_channel_ref(channel_ref):
             channel_name = channel_ref.strip()
             if not channel_name:
@@ -54,6 +57,7 @@ class ChannelTarget:
         )
 
     def channel_ref(self) -> str:
+        """Only resolved channel targets can be converted into concrete refs for channel listing fetches."""
         if self.channel_handle is not None:
             return self.channel_handle
         if self.youtube_channel_id is not None:
@@ -71,6 +75,8 @@ def is_exact_channel_ref(channel_ref: ChannelRef) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class SearchRequest:
+    """Validated public search contract shared by CLI and Python callers."""
+
     query: str
     limit: int
     extra_queries: tuple[str, ...] = ()
@@ -96,6 +102,7 @@ class SearchRequest:
 
 
 def normalize_filter_date(value: str) -> str:
+    """Validate and normalize the upload-date filter to ISO date form."""
     try:
         return date.fromisoformat(value).isoformat()
     except ValueError as error:
@@ -103,6 +110,7 @@ def normalize_filter_date(value: str) -> str:
 
 
 def resolve_return_type(request: SearchRequest) -> SearchReturnType:
+    """Choose the default result shape from semantic mode while honoring explicit caller choice."""
     if request.return_type is not None:
         return request.return_type
     if request.mode == "semantic":
@@ -111,6 +119,7 @@ def resolve_return_type(request: SearchRequest) -> SearchReturnType:
 
 
 def resolve_sort(request: SearchRequest) -> SearchSort:
+    """Choose the default ranking policy from source and mode while honoring explicit caller choice."""
     if request.sort is not None:
         return request.sort
     if request.sources == ("channel",) and request.mode == "native":
@@ -119,6 +128,7 @@ def resolve_sort(request: SearchRequest) -> SearchSort:
 
 
 def validate_request(request: SearchRequest) -> None:
+    """Validate the public search contract before any network, storage, or embedding work starts."""
     if any(source not in get_args(SearchSource) for source in request.sources):
         raise ValueError("search source must be one of: youtube, channel, db")
     if request.mode not in get_args(SearchMode):
@@ -166,6 +176,7 @@ def validate_similarity_threshold(
     value: float | None,
     label: str,
 ) -> None:
+    """Validate optional cosine-similarity thresholds for semantic search stages."""
     if value is None:
         return
     if value < -1 or value > 1:

@@ -17,6 +17,8 @@ DEFAULT_MAX_DURATION = "8:00:00"
 
 @dataclass(frozen=True, slots=True)
 class SearchOptions:
+    """Low-level YouTube search policy before the public mixed-source workflow adds storage search."""
+
     limit: int = DEFAULT_LIMIT
     sort: str = "relevance"
     min_views: int | None = DEFAULT_MIN_VIEWS
@@ -30,6 +32,8 @@ class SearchOptions:
 
 @dataclass(frozen=True, slots=True)
 class SearchFilters:
+    """Resolved low-level filters for one yt-dlp YouTube result page."""
+
     min_views: int | None
     min_duration_seconds: float | None
     max_duration_seconds: float | None
@@ -46,6 +50,7 @@ def search_videos(
     options: SearchOptions | None = None,
     client: YtDlpClient | None = None,
 ) -> list[dict[str, Any]]:
+    """Run a YouTube-only search, apply local filters, and persist accepted metadata."""
     options = options or SearchOptions()
     client = client or YtDlpClient()
     validate_options(query, options)
@@ -70,6 +75,7 @@ def validate_options(
     query: str,
     options: SearchOptions,
 ) -> None:
+    """Validate low-level YouTube search options before invoking yt-dlp."""
     if not query.strip():
         raise ValueError("query must be non-empty")
     if options.limit <= 0:
@@ -90,6 +96,7 @@ def filter_entries(
     *,
     blacklisted_channels: list[ChannelIdentity] | None = None,
 ) -> list[dict[str, Any]]:
+    """Filter yt-dlp entries by video shape, blacklist, metadata constraints, and limit."""
     filters = resolve_filters(
         options,
         blacklisted_channels=blacklisted_channels or [],
@@ -110,6 +117,7 @@ def resolve_filters(
     *,
     blacklisted_channels: list[ChannelIdentity],
 ) -> SearchFilters:
+    """Precompute parsed filter values for one low-level YouTube search."""
     return SearchFilters(
         min_views=options.min_views,
         min_duration_seconds=parse_duration(options.min_duration),
@@ -133,6 +141,7 @@ def is_blacklisted_channel(
     entry: dict[str, Any],
     blacklisted_channels: tuple[ChannelIdentity, ...],
 ) -> bool:
+    """Return whether an entry's channel identity matches the local blacklist."""
     if not blacklisted_channels:
         return False
     entry_channel = extract_channel_identity(entry)
@@ -150,6 +159,7 @@ def entry_matches_filters(
     entry: dict[str, Any],
     filters: SearchFilters,
 ) -> bool:
+    """Evaluate resolved low-level YouTube filters for one entry."""
     view_count = entry.get("view_count")
     if filters.min_views is not None and (not isinstance(view_count, int) or view_count < filters.min_views):
         return False
@@ -169,6 +179,7 @@ def entry_matches_filters(
 
 
 def parse_duration(value: str | None) -> float | None:
+    """Parse seconds, MM:SS, or HH:MM:SS duration filters into seconds."""
     if value is None:
         return None
     stripped = value.strip()

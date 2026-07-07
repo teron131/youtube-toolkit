@@ -33,6 +33,7 @@ def auto_index_video_embedding(
     *,
     embed_text: EmbedText | None = None,
 ) -> EmbeddingIndexResult:
+    """Best-effort wrapper for maintaining video embeddings during write workflows."""
     try:
         if not embedding_auto_index_enabled():
             return {
@@ -70,6 +71,7 @@ def auto_index_video_title_embedding(
     *,
     embed_text: EmbedText | None = None,
 ) -> EmbeddingIndexResult:
+    """Best-effort wrapper for maintaining title embeddings during search workflows."""
     try:
         if not embedding_auto_index_enabled():
             return {
@@ -107,6 +109,7 @@ def auto_index_transcript_chunks(
     *,
     embed_text: EmbedText | None = None,
 ) -> EmbeddingIndexResult:
+    """Best-effort wrapper for maintaining transcript chunk embeddings during semantic search."""
     try:
         if not embedding_auto_index_enabled():
             return {
@@ -145,6 +148,7 @@ def index_transcript_chunks(
     embed_text: EmbedText | None = None,
     embedding_config: EmbeddingConfig | None = None,
 ) -> dict[str, Any] | None:
+    """Index stored transcript text into reusable overlapping chunks with content-hash reuse."""
     row = find_video_row(connection, youtube_video_id)
     if row is None or not row["transcript"]:
         return None
@@ -216,6 +220,7 @@ def split_transcript_chunks(
     chunk_chars: int = TRANSCRIPT_CHUNK_CHARS,
     overlap_chars: int = TRANSCRIPT_CHUNK_OVERLAP_CHARS,
 ) -> list[str]:
+    """Split normalized transcript text into overlapping chunks for embedding search."""
     clean_transcript = " ".join(transcript.split())
     if not clean_transcript:
         return []
@@ -247,6 +252,7 @@ def search_transcript_chunk_scores(
     embed_text: EmbedText | None = None,
     embedding_config: EmbeddingConfig | None = None,
 ) -> dict[str, float]:
+    """Return each video's best semantic transcript-chunk score for a query."""
     rows = search_transcript_chunks(
         connection,
         query,
@@ -276,6 +282,7 @@ def search_transcript_chunks(
     embed_text: EmbedText | None = None,
     embedding_config: EmbeddingConfig | None = None,
 ) -> list[dict[str, Any]]:
+    """Search transcript chunk embeddings with optional video and SQL filters."""
     if video_ids == [] or connection.optional_table("video_transcript_chunks") is None:
         return []
     query_embedding = embed_text(query) if embed_text is not None else embed_text_with_gemini(query, config=embedding_config)
@@ -311,6 +318,7 @@ def search_video_title_scores(
     embed_text: EmbedText | None = None,
     embedding_config: EmbeddingConfig | None = None,
 ) -> dict[str, float]:
+    """Return semantic title scores keyed by video ID for requested stored videos."""
     rows = search_video_titles(
         connection,
         query,
@@ -333,6 +341,7 @@ def search_video_titles(
     embed_text: EmbedText | None = None,
     embedding_config: EmbeddingConfig | None = None,
 ) -> list[dict[str, Any]]:
+    """Search stored title embeddings with hybrid text/vector ranking and cosine scoring."""
     if not video_ids or connection.optional_table("video_title_embeddings") is None:
         return []
     query_embedding = embed_text(query) if embed_text is not None else embed_text_with_gemini(query, config=embedding_config)
@@ -357,6 +366,7 @@ def rows_with_similarity(
     rows: list[dict[str, Any]],
     query_embedding: list[float],
 ) -> list[dict[str, Any]]:
+    """Attach cosine similarity and sort vector-search rows by that score."""
     return sorted(
         [
             {
@@ -375,6 +385,7 @@ def cosine_similarity(
     left: list[float],
     right: Any,
 ) -> float:
+    """Compute cosine similarity for same-length numeric vectors, treating invalid rows as zero."""
     if not isinstance(right, list) or len(left) != len(right):
         return 0.0
     if not all(isinstance(value, int | float) and not isinstance(value, bool) for value in right):
@@ -396,6 +407,7 @@ def explain_transcript_chunk_search(
     embed_text: EmbedText | None = None,
     embedding_config: EmbeddingConfig | None = None,
 ) -> str:
+    """Return LanceDB's plan explanation for a transcript chunk search."""
     if not video_ids or connection.optional_table("video_transcript_chunks") is None:
         return ""
     query_embedding = embed_text(query) if embed_text is not None else embed_text_with_gemini(query, config=embedding_config)
@@ -410,6 +422,7 @@ def analyze_transcript_chunk_search(
     embed_text: EmbedText | None = None,
     embedding_config: EmbeddingConfig | None = None,
 ) -> str:
+    """Return LanceDB's analyzed execution plan for a transcript chunk search."""
     if not video_ids or connection.optional_table("video_transcript_chunks") is None:
         return ""
     query_embedding = embed_text(query) if embed_text is not None else embed_text_with_gemini(query, config=embedding_config)
@@ -424,6 +437,7 @@ def transcript_chunk_search_query(
     limit: int = MAX_TABLE_SCAN_ROWS,
     where_sql: str | None = None,
 ) -> Any:
+    """Build the filtered LanceDB transcript chunk query before scoring or column projection."""
     query = connection.table("video_transcript_chunks").search(query_embedding)
     filters: list[str] = []
     if video_ids is not None:
@@ -440,6 +454,7 @@ def list_video_ids_for_embedding_index(
     *,
     require_transcript: bool = True,
 ) -> list[str]:
+    """List stored video IDs eligible for embedding jobs, newest first."""
     rows = [row for row in connection.rows("videos") if not require_transcript or row["transcript"]]
     return [
         row["youtube_video_id"]
@@ -461,6 +476,7 @@ def index_video_embedding(
     embed_text: EmbedText | None = None,
     embedding_config: EmbeddingConfig | None = None,
 ) -> dict[str, Any] | None:
+    """Index the combined video title, channel, and transcript text for stored-video semantic search."""
     video = find_video_row(connection, youtube_video_id)
     if video is None:
         return None
@@ -508,6 +524,7 @@ def index_video_title_embedding(
     embed_text: EmbedText | None = None,
     embedding_config: EmbeddingConfig | None = None,
 ) -> dict[str, Any] | None:
+    """Index one stored title for title-prefilter semantic search."""
     video = find_video_row(connection, youtube_video_id)
     if video is None:
         return None
@@ -568,6 +585,7 @@ def index_video_title_embeddings(
     embed_text: EmbedText | None = None,
     embedding_config: EmbeddingConfig | None = None,
 ) -> list[EmbeddingIndexResult]:
+    """Batch-index stored titles while reusing unchanged embeddings and reporting per-video status."""
     existing_rows = {row["video_id"]: row for row in connection.rows("video_title_embeddings") if row.get("video_id") is not None}
     jobs: list[tuple[str, str, str]] = []
     results: list[EmbeddingIndexResult] = []
@@ -617,6 +635,7 @@ def index_video_title_embeddings(
         return results
 
     def embed_job(job: tuple[str, str, str]) -> dict[str, Any]:
+        """Embed one stored title and carry enough metadata for idempotent upsert."""
         video_id, source_text, content_hash = job
         embedding = embed_text(source_text) if embed_text is not None else embed_text_with_gemini(source_text, config=embedding_config)
         if not embedding:
@@ -666,6 +685,7 @@ def index_video_title_embeddings(
 
 
 def embedding_source_text(row: Mapping[str, Any]) -> str:
+    """Build the video-level embedding source text from stable searchable fields."""
     return "\n".join(
         str(part)
         for part in (
@@ -682,6 +702,7 @@ def embed_text_with_gemini(
     *,
     config: EmbeddingConfig | None = None,
 ) -> list[float]:
+    """Call the configured Gemini embedding endpoint and return the numeric vector."""
     try:
         resolved_config = config or embedding_config_from_env()
     except ValueError as error:
@@ -708,6 +729,7 @@ def post_embedding_json(
     config: EmbeddingConfig,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
+    """POST one embedding request after enforcing the configured base URL boundary."""
     if not url.startswith(f"{config.base_url}/"):
         raise EmbeddingSearchError("Unsupported embedding URL")
     request = urllib.request.Request(  # noqa: S310
@@ -730,6 +752,7 @@ def post_embedding_json(
 
 
 def compact_embedding_error(text: str) -> str:
+    """Extract a short useful message from an embedding API error payload."""
     try:
         payload = json.loads(text)
     except json.JSONDecodeError:

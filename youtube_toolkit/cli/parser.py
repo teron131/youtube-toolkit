@@ -26,6 +26,7 @@ from .commands import (
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Assemble the top-level parser and attach command handlers as parser defaults."""
     parser = argparse.ArgumentParser(prog="youtube", description="Transcript-first YouTube toolkit.")
     subparsers = parser.add_subparsers(dest="command", required=True)
     VideoCommandParser.add_to(subparsers)
@@ -40,6 +41,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 class VideoCommandParser:
+    """Parser group for video metadata and transcript commands."""
+
     @staticmethod
     def add_to(subparsers: argparse._SubParsersAction) -> None:
         video_parser = subparsers.add_parser("video", help="Fetch video metadata or transcripts")
@@ -59,6 +62,8 @@ class VideoCommandParser:
 
 
 class SearchCommandParser:
+    """Parser group for mixed YouTube, channel, and stored-video search."""
+
     @staticmethod
     def add_to(subparsers: argparse._SubParsersAction) -> None:
         search_parser = subparsers.add_parser("search", help="Search videos or transcript chunks from selected sources")
@@ -83,6 +88,8 @@ class SearchCommandParser:
 
 
 class ChannelCommandParser:
+    """Parser group for direct channel listing commands."""
+
     @staticmethod
     def add_to(subparsers: argparse._SubParsersAction) -> None:
         channel_parser = subparsers.add_parser("channel", help="Work with YouTube channels")
@@ -99,6 +106,8 @@ class ChannelCommandParser:
 
 
 class WatchlistCommandParser:
+    """Parser group for watchlist membership, sync, recency, and schedule commands."""
+
     @staticmethod
     def add_to(subparsers: argparse._SubParsersAction) -> None:
         watchlist_parser = subparsers.add_parser("watchlist", help="Manage or sync watchlist channels")
@@ -159,6 +168,8 @@ class WatchlistCommandParser:
 
 
 class BlacklistCommandParser:
+    """Parser group for search blacklist membership commands."""
+
     @staticmethod
     def add_to(subparsers: argparse._SubParsersAction) -> None:
         blacklist_parser = subparsers.add_parser("blacklist", help="Manage search blacklist channels")
@@ -172,6 +183,8 @@ class BlacklistCommandParser:
 
 
 class IndexCommandParser:
+    """Parser group for embedding index maintenance commands."""
+
     @staticmethod
     def add_to(subparsers: argparse._SubParsersAction) -> None:
         index_parser = subparsers.add_parser("index", help="Index stored video embeddings")
@@ -185,6 +198,8 @@ class IndexCommandParser:
 
 
 class SetupCommandParser:
+    """Parser group for persistent model API configuration."""
+
     @staticmethod
     def add_to(subparsers: argparse._SubParsersAction) -> None:
         setup_parser = subparsers.add_parser("setup", help="Configure model API keys, base URLs, and model IDs")
@@ -221,11 +236,13 @@ def add_channel_window_args(
     default_last: int | None = 10,
     default_days: int | None = None,
 ) -> None:
+    """Add the shared count and recency window controls for channel listings."""
     parser.add_argument("--last", type=int, default=default_last, help="Return the latest N videos")
     parser.add_argument("--days", type=int, default=default_days, help="Return videos uploaded in the last N days")
 
 
 def add_channel_refs_arg(parser: argparse.ArgumentParser) -> None:
+    """Add the shared one-or-more channel reference positional argument."""
     parser.add_argument(
         "channel_refs",
         nargs="+",

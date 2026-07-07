@@ -1,4 +1,4 @@
-"""Stored-video lookup across IDs, URLs, keywords, and optional semantic ranking."""
+"""Stored-video lookup owns direct ID hits, keyword scans, optional semantic ranking, and public payload projection."""
 
 from __future__ import annotations
 
@@ -21,11 +21,17 @@ TRANSCRIPT_PRESENT_SQL = "transcript IS NOT NULL AND transcript != ''"
 class VectorSearchQuery(Protocol):
     """LanceDB vector query methods used by stored-video semantic lookup."""
 
-    def distance_type(self, distance_type: Literal["l2", "cosine", "dot"]) -> VectorSearchQuery: ...
+    def distance_type(self, distance_type: Literal["l2", "cosine", "dot"]) -> VectorSearchQuery:
+        """Select the vector distance metric while preserving LanceDB's fluent query shape."""
+        ...
 
-    def limit(self, limit: int) -> VectorSearchQuery: ...
+    def limit(self, limit: int) -> VectorSearchQuery:
+        """Bound semantic lookup rows before payload projection."""
+        ...
 
-    def to_list(self) -> list[dict[str, object]]: ...
+    def to_list(self) -> list[dict[str, object]]:
+        """Materialize LanceDB query rows as dictionaries for storage projection."""
+        ...
 
 
 def search_stored_videos(
@@ -39,6 +45,7 @@ def search_stored_videos(
     embedding_config: EmbeddingConfig | None = None,
     sort: SearchSort | None = None,
 ) -> list[dict[str, Any]]:
+    """Search stored videos by direct video ref, keyword scan, and optional semantic ranking."""
     normalized_query = query.strip()
     if not normalized_query:
         raise ValueError("search query must be non-empty")
@@ -89,7 +96,7 @@ def get_stored_video(
     *,
     require_transcript: bool = False,
 ) -> dict[str, Any] | None:
-    """Return one stored video payload by ID or URL."""
+    """Direct stored-video lookups accept the same ID and URL forms as public video refs."""
     video_id = extract_video_id(video_ref)
     if video_id is None:
         return None
@@ -109,6 +116,7 @@ def stored_video_rows(
     where_sql: str | None = None,
     limit: int = MAX_TABLE_SCAN_ROWS,
 ) -> list[dict[str, Any]]:
+    """Return stored video rows with channel handles attached for all search projections."""
     return [
         video_payload_row(connection, row)
         for row in connection.rows(
@@ -124,6 +132,7 @@ def video_lookup_filter(
     *,
     require_transcript: bool,
 ) -> str:
+    """Exact-ID filters can require transcript text without turning lookup into a broader search."""
     clauses = [filter_equal("youtube_video_id", video_id)]
     if require_transcript:
         clauses.append(TRANSCRIPT_PRESENT_SQL)
@@ -134,6 +143,7 @@ def video_row_matches_keyword(
     row: dict[str, Any],
     normalized_keyword: str,
 ) -> bool:
+    """Match a normalized keyword against the searchable stored-video fields."""
     return any(
         normalized_keyword in str(value).casefold()
         for value in (
@@ -156,6 +166,7 @@ def search_video_payloads_by_semantic(
     embed_text: EmbedText | None,
     embedding_config: EmbeddingConfig | None,
 ) -> list[dict[str, Any]]:
+    """Search video-level embeddings and project matching videos into stored-video payloads."""
     if connection.optional_table("video_embeddings") is None:
         return []
     query_embedding = embed_text(query) if embed_text is not None else embed_text_with_gemini(query, config=embedding_config)
@@ -198,6 +209,7 @@ def merge_search_payloads(
     keyword_payloads: list[dict[str, Any]],
     semantic_payloads: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """Merge keyword and semantic stored-video hits while preserving keyword order."""
     merged: list[dict[str, Any]] = []
     payload_by_video_id: dict[str, dict[str, Any]] = {}
     for payload in keyword_payloads:
@@ -220,6 +232,7 @@ def rank_search_payloads(
     sort: SearchSort,
     limit: int,
 ) -> list[dict[str, Any]]:
+    """Apply the final stored-video sort policy after keyword and semantic merge."""
     if sort == "upload_date":
         sorted_payloads = sorted(
             payloads,
@@ -244,6 +257,7 @@ def rank_search_payloads(
 
 
 def sort_video_rows_by_upload_date(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sort stored video rows newest-first with video ID as the stable tie-breaker."""
     return sorted(
         rows,
         key=lambda row: (

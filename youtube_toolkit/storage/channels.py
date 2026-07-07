@@ -12,6 +12,7 @@ def upsert_channel(
     connection: LanceConnection,
     channel_identity: ChannelIdentity,
 ) -> str | None:
+    """Persist or merge a channel identity and return the durable channel ID used by videos."""
     matching_rows = find_matching_channel_rows(connection, channel_identity)
     if channel_identity.youtube_channel_id is None:
         if not matching_rows:
@@ -38,6 +39,7 @@ def find_matching_channel_rows(
     connection: LanceConnection,
     channel_identity: ChannelIdentity,
 ) -> list[dict[str, Any]]:
+    """Find stored channels that match either side of a partial channel identity."""
     return sorted(
         [
             row
@@ -54,6 +56,7 @@ def merge_channel_rows(
     rows: list[dict[str, Any]],
     channel_identity: ChannelIdentity,
 ) -> str:
+    """Collapse duplicate channel rows and move dependent memberships to the final channel ID."""
     final_channel_id = channel_identity.youtube_channel_id or next(
         (row["youtube_channel_id"] for row in rows if row["youtube_channel_id"] is not None),
         None,
@@ -101,6 +104,7 @@ def merge_duplicate_channel_references(
     final_channel_id: str,
     duplicate_channel_ids: list[str],
 ) -> None:
+    """Retarget videos and channel membership tables from duplicate IDs to the final ID."""
     duplicate_ids = set(duplicate_channel_ids)
     videos = [
         {
@@ -126,6 +130,7 @@ def channel_embedding_source_changed(
     final_channel_id: str,
     final_channel_handle: str | None,
 ) -> bool:
+    """Return whether channel merge data changes video embedding source text."""
     return any(row["youtube_channel_id"] != final_channel_id for row in rows) or (
         final_channel_handle is not None and any(row["channel_handle"] != final_channel_handle for row in rows)
     )
@@ -135,6 +140,7 @@ def clear_channel_video_embeddings(
     connection: LanceConnection,
     youtube_channel_id: str,
 ) -> None:
+    """Clear video embeddings affected by channel identity changes."""
     video_ids = [row["youtube_video_id"] for row in connection.rows("videos") if row["channel_id"] == youtube_channel_id]
     if not video_ids:
         return

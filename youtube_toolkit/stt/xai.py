@@ -18,6 +18,7 @@ def request_speech_to_text(
     language: str | None,
     timeout_seconds: float,
 ) -> dict[str, Any]:
+    """Send one audio file to the xAI STT API and return the decoded JSON response."""
     body, content_type = encode_multipart_form(
         fields={"language": language} if language else {},
         file_field="file",

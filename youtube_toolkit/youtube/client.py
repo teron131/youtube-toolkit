@@ -21,10 +21,14 @@ STT_AUDIO_FORMAT_SELECTOR = "bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio[ext
 
 
 class YtDlpClient:
+    """Subprocess adapter that owns all direct yt-dlp command construction."""
+
     def command_prefix(self) -> list[str]:
+        """Return the Python-module command prefix used to invoke yt-dlp from this environment."""
         return [sys.executable, "-m", "yt_dlp"]
 
     def metadata(self, video_ref: VideoRef) -> dict[str, Any]:
+        """Fetch full yt-dlp metadata for one validated YouTube video reference."""
         url = normalize_youtube_url(video_ref)
         validate_url(url, allowed_hosts=ALLOWED_VIDEO_HOSTS)
         return self._json(
@@ -46,6 +50,7 @@ class YtDlpClient:
         fetch: int,
         sort: str,
     ) -> dict[str, Any]:
+        """Fetch a flat YouTube search result page through yt-dlp."""
         search_params = {
             "search_query": query,
             "sp": SEARCH_SORT_PARAMS[sort],
@@ -72,6 +77,7 @@ class YtDlpClient:
         last: int | None,
         flat: bool = True,
     ) -> dict[str, Any]:
+        """Fetch a channel videos listing through yt-dlp with optional playlist truncation."""
         command = [
             *self.command_prefix(),
             "--quiet",
@@ -94,6 +100,7 @@ class YtDlpClient:
         )
 
     def download_transcription_audio(self, video_ref: VideoRef) -> Path:
+        """Download one temporary audio file for STT and return its created path."""
         video_id = require_video_id(video_ref)
         url = normalize_youtube_url(video_ref)
         validate_url(url, allowed_hosts=ALLOWED_VIDEO_HOSTS)
@@ -133,6 +140,7 @@ class YtDlpClient:
         *,
         error_message: str,
     ) -> dict[str, Any]:
+        """Run a yt-dlp command expected to emit one JSON object."""
         result = subprocess.run(  # noqa: S603 - command is assembled from a fixed yt-dlp executable prefix and argument list.
             command,
             capture_output=True,

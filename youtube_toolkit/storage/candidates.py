@@ -22,6 +22,7 @@ def store_search_candidates(
     query: str,
     candidates: list[dict[str, Any]],
 ) -> None:
+    """Stage non-DB search candidates so title embeddings can be scoped to one search session."""
     rows = [
         search_candidate_row(
             session_id,
@@ -49,6 +50,7 @@ def index_search_candidate_titles(
     embed_text: EmbedText | None = None,
     embedding_config: EmbeddingConfig | None = None,
 ) -> list[EmbeddingIndexResult]:
+    """Index staged candidate titles for one search session with content-hash reuse."""
     candidates = connection.rows(
         "search_candidates",
         where_sql=f"session_id = {filter_literal(session_id)}",
@@ -93,6 +95,7 @@ def index_search_candidate_titles(
         return results
 
     def embed_job(job: tuple[str, int, str, str]) -> dict[str, Any]:
+        """Embed one staged title and carry enough metadata for idempotent upsert."""
         video_id, source_rank, source_text, content_hash = job
         embedding = embed_text(source_text) if embed_text is not None else embed_text_with_gemini(source_text, config=embedding_config)
         if not embedding:
@@ -156,6 +159,7 @@ def search_candidate_title_scores(
     embed_text: EmbedText | None = None,
     embedding_config: EmbeddingConfig | None = None,
 ) -> dict[str, float]:
+    """Return title-semantic scores for staged candidates in one search session."""
     if connection.optional_table("search_candidate_title_embeddings") is None:
         return {}
     query_embedding = embed_text(query) if embed_text is not None else embed_text_with_gemini(query, config=embedding_config)
@@ -182,6 +186,7 @@ def search_candidate_row(
     candidate: Mapping[str, Any],
     source_rank: int,
 ) -> dict[str, Any]:
+    """Project a raw external candidate into the short-lived search staging schema."""
     return {
         "session_id": session_id,
         "query": query,
@@ -201,6 +206,7 @@ def search_candidate_row(
 
 
 def candidate_video_id(candidate: Mapping[str, Any]) -> str | None:
+    """Resolve a staged candidate's video ID from accepted candidate ID fields."""
     for key in (
         "id",
         "youtube_video_id",
@@ -213,16 +219,19 @@ def candidate_video_id(candidate: Mapping[str, Any]) -> str | None:
 
 
 def text_value(value: Any) -> str | None:
+    """Normalize optional staging text fields from external candidate payloads."""
     return value if isinstance(value, str) and value else None
 
 
 def int_value(value: Any) -> int | None:
+    """Normalize optional integer staging fields while rejecting booleans."""
     if isinstance(value, bool):
         return None
     return value if isinstance(value, int) else None
 
 
 def float_value(value: Any) -> float | None:
+    """Normalize optional numeric staging fields as floats while rejecting booleans."""
     if isinstance(value, bool):
         return None
     return float(value) if isinstance(value, int | float) else None

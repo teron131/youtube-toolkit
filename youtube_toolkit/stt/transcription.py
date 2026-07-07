@@ -10,11 +10,14 @@ from ..schemas import normalize_text
 
 @dataclass(frozen=True, slots=True)
 class SpeechTranscription:
+    """Provider-neutral speech-to-text result used by storage and plain-text STT callers."""
+
     text: str
     language: str | None = None
 
     @classmethod
     def from_xai_stt(cls, response: dict[str, Any]) -> SpeechTranscription:
+        """Translate xAI STT JSON into the provider-neutral transcription result."""
         text = normalize_text(response.get("text"))
         if text is None:
             raise ValueError("xAI STT response did not include transcript text")
@@ -26,6 +29,7 @@ class SpeechTranscription:
 
     @classmethod
     def from_elevenlabs_stt(cls, response: dict[str, Any]) -> SpeechTranscription:
+        """Translate ElevenLabs STT JSON, including multichannel output, into one transcription result."""
         text = normalize_text(response.get("text")) or extract_multichannel_text(response)
         if text is None:
             raise ValueError("ElevenLabs STT response did not include transcript text")
@@ -37,6 +41,7 @@ class SpeechTranscription:
 
 
 def extract_multichannel_text(response: dict[str, Any]) -> str | None:
+    """Join ElevenLabs multichannel transcript text into one storage-ready transcript string."""
     transcripts = response.get("transcripts")
     if not isinstance(transcripts, list):
         return None
