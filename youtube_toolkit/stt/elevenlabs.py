@@ -1,17 +1,17 @@
-"""ElevenLabs speech-to-text provider."""
+"""ElevenLabs speech-to-text provider request construction."""
 
 from __future__ import annotations
 
-import urllib.request
 from pathlib import Path
 from typing import Any
+import urllib.request
 
-from .common import encode_multipart_form, run_json_request
+from .transcription import encode_multipart_form, run_json_request
 
 ELEVENLABS_STT_URL = "https://api.elevenlabs.io/v1/speech-to-text"
 
 
-def request_speech_to_text(
+def elevenlabs_stt(
     audio_path: Path,
     *,
     api_key: str,

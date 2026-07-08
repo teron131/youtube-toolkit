@@ -1,11 +1,11 @@
 """Public speech-to-text package surface."""
 
-from .common import (
+from .transcription import (
     SpeechToTextOptions,
+    SpeechTranscription,
     transcribe_audio,
     transcribe_audio_details,
 )
-from .transcription import SpeechTranscription
 
 __all__ = [
     "SpeechToTextOptions",
