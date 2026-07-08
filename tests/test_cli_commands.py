@@ -384,6 +384,36 @@ def test_search_command_group_parses_extra_queries() -> None:
     ]
 
 
+def test_search_command_group_accepts_plural_filter_aliases() -> None:
+    search_args = build_parser().parse_args(
+        [
+            "search",
+            "agents",
+            "--include-channels",
+            "OpenAI",
+            "--include-channels",
+            "Anthropic",
+            "--exclude-channels",
+            "shorts",
+            "--exclude-channels",
+            "clips",
+            "--include-titles",
+            "agent",
+            "--include-titles",
+            "tools",
+            "--exclude-titles",
+            "reaction",
+            "--exclude-titles",
+            "drama",
+        ]
+    )
+
+    assert search_args.include_channel == ["OpenAI", "Anthropic"]
+    assert search_args.exclude_channel == ["shorts", "clips"]
+    assert search_args.include_title == ["agent", "tools"]
+    assert search_args.exclude_title == ["reaction", "drama"]
+
+
 def test_search_command_builds_default_youtube_request(monkeypatch) -> None:
     requests = []
 

@@ -1,17 +1,15 @@
 ---
 name: youtube
-description: Use this repo-local YouTube toolkit for transcript-first research workflows: fetch normalized transcripts, search YouTube videos, fetch metadata, list recent channel videos, manage watchlists/blacklists, and persist state in the local database.
+description: Use this repo-local YouTube toolkit for transcript-first YouTube research, search, watchlists, and local database-backed agent workflows.
 ---
 
 # YouTube
 
-Use this skill for YouTube transcript retrieval, metadata inspection, YouTube search via `yt-dlp` with local filters, recent channel videos, watchlist/blacklist state, and durable local database state.
-
-This repo is the toolkit source of truth. Prefer the package CLI over copying scripts from older skill installs.
+Use the `youtube` CLI as the agent surface for YouTube work. It should fetch, persist, and print structured output; do not copy old one-off scripts.
 
 ## CLI
 
-Prefer the installed command for normal use:
+Prefer the installed command:
 
 ```bash
 youtube <command>
@@ -23,62 +21,94 @@ Use `uv run` only when intentionally testing the checkout without reinstalling:
 uv run youtube <command>
 ```
 
-Commands:
+## Recipes
 
-- `doctor`: print a readable status report with the local `yt-dlp` version, active database path, database schema health, schedule health, and model API config health
-- `setup`: write app-local model API keys, base URLs, and model IDs, then print a readable setup report
-- `search "<query>"`: query YouTube through `yt-dlp`, then apply local filters and blacklist rules
-- `video transcript <url-or-id>`: fetch and store a normalized transcript, then print JSON
-- `video metadata <url-or-id>`: print full `yt-dlp` metadata JSON
-- `channel videos <channel>`: list recent videos from one YouTube channel URL, handle, or channel ID
-- `watchlist add <channel...>`: persist one or more channels for later sync
-- `watchlist remove <channel...>`: stop watching one or more channels without deleting stored catalog data
-- `watchlist sync`: refresh watched channels, record discovered videos, fetch missing transcripts, and auto-index embeddings when enabled
-- `index [video...]`: embed stored transcript text for semantic search and RAG prep
-- `watchlist schedule install|status|uninstall`: manage the macOS LaunchAgent for scheduled sync
-- `watchlist recent [channel...] --days N`: return objectively recent watched videos from the local DB without mutating storage
-- `blacklist add <channel...>`: exclude one or more channels from future search results
-- `blacklist remove <channel...>`: stop excluding one or more channels from future search results
+Video:
 
-Transcript language selection is hardcoded to English first, then common Chinese caption codes; caption lookup is hardcoded to automatic captions first, then manual subtitles. SponsorBlock-marked transcript chunks are always removed.
+```bash
+youtube video transcript <url-or-id>
+youtube video metadata <url-or-id>
+```
 
-Internal STT audio downloads prefer M4A/MP4/AAC containers for xAI and ElevenLabs compatibility without conversion.
+- `<url-or-id>` is a YouTube watch URL or bare video ID.
+- Transcript fetch is DB-first, then captions, then STT fallback; it persists the normalized transcript.
 
-Speech-to-text uses `XAI_API_KEY`, hardcodes the English language hint, and normalizes provider output with `s2hk`; the transcript workflow owns SQLite persistence and generated `.cache/audio` cleanup.
+Search:
 
-Useful search options:
+```bash
+youtube search "langgraph tutorial" --limit 5 --max-duration 20:00
+youtube search "reasoning models" --source channel --channels @OpenAI --channels @Anthropic --uploaded-within-days 30 --sort recency
+youtube search "agent memory" --source db --mode semantic --limit 5
+youtube search "model evals" --source youtube --source db --mode semantic --return video --limit 5
+youtube search "open source agents" --extra-query "LangGraph" --include-channels OpenAI --include-channels Anthropic
+youtube search "open source agents" --exclude-channels shorts --exclude-channels clips --include-titles agents --include-titles tools --exclude-titles reaction --exclude-titles drama
+```
 
-- `--limit N`
-- `--sort relevance|views`
-- `--min-views N`; default `10000`
-- `--min-duration SECONDS_OR_HH:MM:SS`; default `3:00`
-- `--max-duration SECONDS_OR_HH:MM:SS`; default `8:00:00`
-- `--include-channel TEXT` / `--exclude-channel TEXT`
-- `--include-title TEXT` / `--exclude-title TEXT`
-Useful channel/watchlist options:
+- `--limit N` caps result count.
+- `--source youtube|channel|db` selects candidate sources and can be repeated to mix them.
+- `--source channel` searches videos from specified channels; repeat `--channels <channel>` for multiple channel targets.
+- `--source db` searches stored local video rows.
+- `<channel>` is a channel URL, handle like `@OpenAI`, or channel ID.
+- `--mode semantic` uses transcript embeddings; it returns chunks by default, or ranked videos with `--return video`.
+- `--extra-query TEXT` adds another YouTube relevance query while keeping one result set.
+- `--min-views N`, `--min-duration 3:00`, and `--max-duration 20:00` filter YouTube-style candidates.
+- `--uploaded-after YYYY-MM-DD` and `--uploaded-within-days N` filter by upload date.
+- `--sort relevance|recency|popularity` changes ranking; native YouTube search cannot use `recency`.
+- `--include-channels`, `--exclude-channels`, `--include-titles`, and `--exclude-titles` are repeatable one-value filters; repeat the flag for multiple values.
 
-- `--last N`; default `10`
-- `--days N`
-- `watchlist add/remove` and `blacklist add/remove` accept multiple channel URLs, handles, or channel IDs as space-separated arguments: `@OpenAI @Anthropic UC123`
-- `watchlist recent` accepts optional watched-channel filters as space-separated arguments: `watchlist recent @OpenAI @Anthropic`
-- `watchlist schedule install --minutes N`; default `720`, with no `--last` cap and `--days 3`
+Channels and watchlist:
 
-## Storage
+```bash
+youtube channel videos @OpenAI --last 5
+youtube channel videos @OpenAI --days 7
+youtube watchlist add @OpenAI @Anthropic
+youtube watchlist list
+youtube watchlist sync
+youtube watchlist recent @OpenAI --days 3
+youtube watchlist remove @Anthropic
+youtube watchlist schedule install --minutes 720 --days 3
+youtube watchlist schedule install --label com.example.youtube --no-load
+youtube watchlist schedule status
+youtube watchlist schedule uninstall
+youtube blacklist add @SpamChannel UC123
+youtube blacklist remove @SpamChannel
+```
 
-Storage lives in this checkout's `.cache/youtube.sqlite3` during source-checkout usage. Installed CLI usage stores the database at `~/Library/Application Support/youtube-toolkit/youtube.sqlite3`. Set `YOUTUBE_TOOLKIT_STORAGE_HOME` to move it.
+- `--last 5` caps channel listing results.
+- `--days N` sets the channel listing, watchlist sync, recent, or schedule lookback window.
+- `--minutes 720` sets the LaunchAgent interval for scheduled watchlist sync.
+- `--label NAME` selects a non-default LaunchAgent label; `--no-load` writes the plist without loading it.
+- `watchlist remove` and `blacklist remove` delete membership only; stored catalog data stays.
+- Pass multiple channels as separate shell words: `@OpenAI @Anthropic UC123`.
+- `watchlist recent` reads stored recent videos without mutating storage.
 
-`doctor` prints the active database path. If `uv run youtube doctor` and `youtube doctor` disagree, the checkout and installed command are using different storage roots.
+Maintenance:
 
-`doctor` inspects database schema health without creating, migrating, or repairing the DB. Stale schema reports include a repair hint for the future `youtube setup database` flow.
+```bash
+youtube index
+youtube index --include-without-transcript
+youtube doctor
+youtube setup
+youtube setup --no-auto-embeddings --verify
+youtube setup --embedding-api-key ... --embedding-base-url ... --embedding-model ... --embedding-dimensions 768
+youtube setup --llm-api-key ... --llm-base-url ... --llm-model ... --no-verify
+```
 
-The schema source of truth is `youtube_toolkit/storage/schema.sql`; DB creation and doctor inspection both read that SQL file.
+- `index` with no videos indexes all stored videos that already have transcripts.
+- `--include-without-transcript` also considers stored videos that do not have transcripts.
+- Bare `setup` opens the interactive model config menu; setup flags save scriptable config.
+- `--auto-embeddings` and `--no-auto-embeddings` control automatic transcript embedding after storage.
+- `--embedding-*` configures embedding API key, base URL, model, and dimensions.
+- `--llm-*` configures LLM API key, base URL, and model.
+- `--verify` sends a small live check to configured model APIs after saving; `--no-verify` skips it.
 
-Model configuration lives in `~/Library/Application Support/youtube-toolkit/config.env`. Bare `youtube setup` opens an Up/Down selector for embedding, LLM, settings, verification, and save. Flag-based setup writes `EMBEDDING_API_KEY`, `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`, `EMBEDDING_AUTO_INDEX`, `LLM_API_KEY`, `LLM_BASE_URL`, and `LLM_MODEL`; use `--verify` to force a `Hello` check, `--no-verify` to skip it, and `--no-auto-embeddings` to turn off automatic transcript embedding. Environment variables with those names override the app-local file for one-off runs.
+## Rules
 
-YouTube search via `yt-dlp` automatically applies stored blacklist channels and persists returned video metadata for later workflows. Transcript, channel listing, and watchlist commands also persist normalized channel/video rows.
+- Search defaults to YouTube; use repeated `--source youtube|channel|db` flags only when mixing sources is useful.
+- `watchlist sync` discovers watched-channel videos, stores transcripts, and may auto-index embeddings.
+- Use `watchlist schedule install|status|uninstall`; the hidden `scheduled-sync` subcommand is for launchd.
+- Summarize only when the user asks for analysis or a summary.
 
-## Workflow
+## Storage Gotcha
 
-Treat the CLI as an agent operation surface. It should fetch, persist, and return structured command output rather than managing export formats.
-
-Use summaries only when the user explicitly asks for summary or analysis. LLM transcript summarization is an internal DB workflow option, not the default transcript behavior.
+Installed CLI data lives under `~/Library/Application Support/youtube-toolkit`. `uv run youtube` from the checkout uses this repo's `.cache` unless `YOUTUBE_TOOLKIT_STORAGE_HOME` is set. Run `youtube doctor` when storage behavior matters.
