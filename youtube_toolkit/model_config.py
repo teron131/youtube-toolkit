@@ -10,9 +10,9 @@ from urllib.parse import urlparse
 
 APP_STATE_DIRNAME = "youtube-toolkit"
 CONFIG_FILENAME = "config.env"
-EMBEDDING_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
-DEFAULT_EMBEDDING_MODEL = "gemini-embedding-2"
-DEFAULT_EMBEDDING_DIMENSIONALITY = 768
+EMBEDDING_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
+DEFAULT_EMBEDDING_DIMENSIONALITY = 1536
 DEFAULT_EMBEDDING_AUTO_INDEX = True
 DEFAULT_EMBEDDING_CONCURRENCY = 16
 MAX_EMBEDDING_CONCURRENCY = 50
