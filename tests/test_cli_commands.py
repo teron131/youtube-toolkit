@@ -49,7 +49,7 @@ def test_doctor_returns_runtime_and_database_path(
         lambda: {
             "embedding": {
                 "ok": True,
-                "model": "gemini-embedding-2",
+                "model": "text-embedding-3-small",
                 "status": "configured",
                 "detail": "Embedding API key is configured",
             },
@@ -126,7 +126,7 @@ def test_main_emits_doctor_as_human_report(
         lambda: {
             "embedding": {
                 "ok": False,
-                "model": "gemini-embedding-2",
+                "model": "text-embedding-3-small",
                 "status": "missing",
                 "detail": "Embedding API key is missing",
             },
@@ -146,7 +146,7 @@ def test_main_emits_doctor_as_human_report(
     assert f"  database   {storage_home / 'youtube.lancedb'}" in output
     assert "  schema     missing - LanceDB store is missing" in output
     assert "  schedule   not_installed - LaunchAgent plist is missing" in output
-    assert "  embedding  missing (gemini-embedding-2) - set EMBEDDING_API_KEY" in output
+    assert "  embedding  missing (text-embedding-3-small) - set EMBEDDING_API_KEY" in output
     assert "  llm        missing - set LLM_API_KEY, LLM_BASE_URL, LLM_MODEL" in output
 
 
@@ -243,7 +243,7 @@ def test_model_api_health_reports_key_presence(monkeypatch, tmp_path) -> None:
     for key in MODEL_CONFIG_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
     for key, value in {
-        "EMBEDDING_API_KEY": "gemini-key",
+        "EMBEDDING_API_KEY": "embedding-key",
         "EMBEDDING_BASE_URL": "https://embedding.example/v1",
         "EMBEDDING_MODEL": "embedding-model",
         "EMBEDDING_DIMENSIONS": "512",
@@ -747,7 +747,7 @@ def test_setup_can_verify_saved_config(monkeypatch, tmp_path) -> None:
         calls["config"] = config
         return "Hello back"
 
-    monkeypatch.setattr(commands, "embed_text_with_gemini", lambda text: [0.1, 0.2, 0.3])
+    monkeypatch.setattr(commands, "embed_text", lambda text: [0.1, 0.2, 0.3])
     monkeypatch.setattr(commands, "call_llm_hello", fake_call_llm_hello)
 
     args = build_parser().parse_args(

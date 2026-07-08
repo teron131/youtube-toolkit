@@ -20,16 +20,15 @@ from .connection import (
     get_connection,
     resolve_storage_dir,
 )
+from .embeddings import EmbeddingSearchError, embed_text
 from .search import get_stored_video, search_stored_videos
 from .semantic import (
     TRANSCRIPT_CHUNK_CHARS,
     TRANSCRIPT_CHUNK_OVERLAP_CHARS,
-    EmbeddingSearchError,
     analyze_transcript_chunk_search,
     auto_index_transcript_chunks,
     auto_index_video_embedding,
     auto_index_video_title_embedding,
-    embed_text_with_gemini,
     explain_transcript_chunk_search,
     index_transcript_chunks,
     index_video_embedding,
@@ -69,7 +68,7 @@ __all__ = [
     "database_schema_health",
     "delete_blacklist_channel",
     "delete_watchlist_channel",
-    "embed_text_with_gemini",
+    "embed_text",
     "explain_transcript_chunk_search",
     "get_connection",
     "get_stored_video",

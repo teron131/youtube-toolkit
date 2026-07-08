@@ -3,35 +3,19 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Literal
 
 from ..identity import VideoRef, extract_video_id
 from ..model_config import EmbeddingConfig
+from . import embeddings
 from .connection import MAX_TABLE_SCAN_ROWS, LanceConnection, filter_equal, filter_in_values
 from .payloads import stored_video_payload
-from .semantic import embed_text_with_gemini
 from .videos import video_payload_row
 
 EmbedText = Callable[[str], list[float]]
 SearchSort = Literal["upload_date", "relevance"]
 SEARCH_SORTS = {"upload_date", "relevance"}
 TRANSCRIPT_PRESENT_SQL = "transcript IS NOT NULL AND transcript != ''"
-
-
-class VectorSearchQuery(Protocol):
-    """LanceDB vector query methods used by stored-video semantic lookup."""
-
-    def distance_type(self, distance_type: Literal["l2", "cosine", "dot"]) -> VectorSearchQuery:
-        """Select the vector distance metric while preserving LanceDB's fluent query shape."""
-        ...
-
-    def limit(self, limit: int) -> VectorSearchQuery:
-        """Bound semantic lookup rows before payload projection."""
-        ...
-
-    def to_list(self) -> list[dict[str, object]]:
-        """Materialize LanceDB query rows as dictionaries for storage projection."""
-        ...
 
 
 def search_stored_videos(
@@ -169,12 +153,19 @@ def search_video_payloads_by_semantic(
     """Search video-level embeddings and project matching videos into stored-video payloads."""
     if connection.optional_table("video_embeddings") is None:
         return []
-    query_embedding = embed_text(query) if embed_text is not None else embed_text_with_gemini(query, config=embedding_config)
-    vector_query = cast(
-        VectorSearchQuery,
-        connection.table("video_embeddings").search(query_embedding, vector_column_name="embedding"),
+    query_embedding = (
+        embed_text(query)
+        if embed_text is not None
+        else embeddings.embed_text(
+            query,
+            config=embedding_config,
+        )
     )
-    rows = vector_query.distance_type("cosine").limit(MAX_TABLE_SCAN_ROWS).to_list()
+    vector_query = connection.table("video_embeddings").search(
+        query_embedding,
+        vector_column_name="embedding",
+    )
+    rows = vector_query.distance_type("cosine").limit(MAX_TABLE_SCAN_ROWS).to_list()  # ty: ignore[unresolved-attribute] LanceDB exposes this fluent method at runtime.
     video_ids = [video_id for row in rows if isinstance(video_id := row.get("video_id"), str)]
     if not video_ids:
         return []

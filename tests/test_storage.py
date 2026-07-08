@@ -13,7 +13,7 @@ from youtube_toolkit.storage import (
     auto_index_transcript_chunks,
     auto_index_video_embedding,
     database_schema_health,
-    embed_text_with_gemini,
+    embed_text,
     explain_transcript_chunk_search,
     get_connection,
     get_stored_video,
@@ -979,31 +979,31 @@ def test_auto_index_video_embedding_reports_invalid_toggle(
         }
 
 
-def test_embed_text_with_gemini_uses_embedding_config(monkeypatch) -> None:
+def test_embed_text_uses_embedding_config(monkeypatch) -> None:
     calls = {}
 
     def fake_post_embedding_json(url, config, payload):
         calls["url"] = url
         calls["config"] = config
         calls["payload"] = payload
-        return {"embedding": {"values": [0.25, 0.75]}}
+        return {"data": [{"embedding": [0.25, 0.75]}]}
 
     config = EmbeddingConfig(
-        model="gemini-embedding-test",
+        model="text-embedding-test",
         api_key="embedding-key",
-        base_url="https://embedding.example/v1beta/",
+        base_url="https://embedding.example/v1/",
         output_dimensionality=512,
     )
-    monkeypatch.setattr("youtube_toolkit.storage.semantic.post_embedding_json", fake_post_embedding_json)
+    monkeypatch.setattr("youtube_toolkit.storage.embeddings.post_embedding_json", fake_post_embedding_json)
 
-    assert embed_text_with_gemini("hello", config=config) == [0.25, 0.75]
+    assert embed_text("hello", config=config) == [0.25, 0.75]
     assert calls == {
-        "url": "https://embedding.example/v1beta/models/gemini-embedding-test:embedContent",
+        "url": "https://embedding.example/v1/embeddings",
         "config": config,
         "payload": {
-            "model": "models/gemini-embedding-test",
-            "content": {"parts": [{"text": "hello"}]},
-            "output_dimensionality": 512,
+            "model": "text-embedding-test",
+            "input": "hello",
+            "dimensions": 512,
         },
     }
 

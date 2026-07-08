@@ -31,7 +31,7 @@ from ..search.request import SearchSource
 from ..storage import (
     DATABASE_FILENAME,
     database_schema_health,
-    embed_text_with_gemini,
+    embed_text,
     get_connection,
     index_video_embedding,
     list_video_ids_for_embedding_index,
@@ -845,7 +845,7 @@ def llm_api_health() -> ModelApiHealthResult:
 def verify_embedding_api() -> ModelApiVerificationResult:
     """One embedding smoke request is collapsed into setup status vocabulary."""
     try:
-        embedding = embed_text_with_gemini("Hello")
+        embedding = embed_text("Hello")
     except Exception as error:
         return {
             "ok": False,

@@ -12,8 +12,10 @@ from lancedb.rerankers import RRFReranker
 
 from ..model_config import EmbeddingConfig, embedding_concurrency
 from ..schemas import EmbeddingIndexResult
+from . import embeddings
 from .connection import LanceConnection, filter_literal
-from .semantic import EmbeddingSearchError, EmbedText, embed_text_with_gemini, rows_with_similarity
+from .embeddings import EmbeddingSearchError
+from .semantic import EmbedText, rows_with_similarity
 
 
 def store_search_candidates(
@@ -97,7 +99,7 @@ def index_search_candidate_titles(
     def embed_job(job: tuple[str, int, str, str]) -> dict[str, Any]:
         """Embed one staged title and carry enough metadata for idempotent upsert."""
         video_id, source_rank, source_text, content_hash = job
-        embedding = embed_text(source_text) if embed_text is not None else embed_text_with_gemini(source_text, config=embedding_config)
+        embedding = embed_text(source_text) if embed_text is not None else embeddings.embed_text(source_text, config=embedding_config)
         if not embedding:
             raise EmbeddingSearchError("Embedding request returned an empty vector")
         return {
@@ -162,7 +164,14 @@ def search_candidate_title_scores(
     """Return title-semantic scores for staged candidates in one search session."""
     if connection.optional_table("search_candidate_title_embeddings") is None:
         return {}
-    query_embedding = embed_text(query) if embed_text is not None else embed_text_with_gemini(query, config=embedding_config)
+    query_embedding = (
+        embed_text(query)
+        if embed_text is not None
+        else embeddings.embed_text(
+            query,
+            config=embedding_config,
+        )
+    )
     connection.ensure_search_candidate_title_text_index()
     rows = (
         connection.table("search_candidate_title_embeddings")

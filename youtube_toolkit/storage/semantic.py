@@ -5,26 +5,21 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
-import json
 import math
 from typing import Any
-import urllib.error
-import urllib.request
 
 from lancedb.rerankers import RRFReranker
 
-from ..model_config import EmbeddingConfig, embedding_auto_index_enabled, embedding_concurrency, embedding_config_from_env
+from ..model_config import EmbeddingConfig, embedding_auto_index_enabled, embedding_concurrency
 from ..schemas import EmbeddingIndexResult
+from . import embeddings
 from .connection import MAX_TABLE_SCAN_ROWS, LanceConnection, filter_in_values, filter_literal, transcript_chunk_metadata
+from .embeddings import EmbeddingSearchError
 from .videos import find_video_row, video_payload_row
 
 EmbedText = Callable[[str], list[float]]
 TRANSCRIPT_CHUNK_CHARS = 1200
 TRANSCRIPT_CHUNK_OVERLAP_CHARS = 200
-
-
-class EmbeddingSearchError(RuntimeError):
-    """Raised when semantic search cannot call or parse the embedding response."""
 
 
 def auto_index_video_embedding(
@@ -182,7 +177,7 @@ def index_transcript_chunks(
                 )
             continue
 
-        embedding = embed_text(chunk_text) if embed_text is not None else embed_text_with_gemini(chunk_text, config=embedding_config)
+        embedding = embed_text(chunk_text) if embed_text is not None else embeddings.embed_text(chunk_text, config=embedding_config)
         if not embedding:
             raise EmbeddingSearchError("Embedding request returned an empty vector")
         dimensions = len(embedding)
@@ -285,7 +280,7 @@ def search_transcript_chunks(
     """Search transcript chunk embeddings with optional video and SQL filters."""
     if video_ids == [] or connection.optional_table("video_transcript_chunks") is None:
         return []
-    query_embedding = embed_text(query) if embed_text is not None else embed_text_with_gemini(query, config=embedding_config)
+    query_embedding = embed_text(query) if embed_text is not None else embeddings.embed_text(query, config=embedding_config)
     rows = transcript_chunk_search_query(
         connection,
         video_ids,
@@ -344,7 +339,7 @@ def search_video_titles(
     """Search stored title embeddings with hybrid text/vector ranking and cosine scoring."""
     if not video_ids or connection.optional_table("video_title_embeddings") is None:
         return []
-    query_embedding = embed_text(query) if embed_text is not None else embed_text_with_gemini(query, config=embedding_config)
+    query_embedding = embed_text(query) if embed_text is not None else embeddings.embed_text(query, config=embedding_config)
     connection.ensure_video_title_text_index()
     rows = (
         connection.table("video_title_embeddings")
@@ -410,7 +405,7 @@ def explain_transcript_chunk_search(
     """Return LanceDB's plan explanation for a transcript chunk search."""
     if not video_ids or connection.optional_table("video_transcript_chunks") is None:
         return ""
-    query_embedding = embed_text(query) if embed_text is not None else embed_text_with_gemini(query, config=embedding_config)
+    query_embedding = embed_text(query) if embed_text is not None else embeddings.embed_text(query, config=embedding_config)
     return str(transcript_chunk_search_query(connection, video_ids, query_embedding).explain_plan())
 
 
@@ -425,7 +420,7 @@ def analyze_transcript_chunk_search(
     """Return LanceDB's analyzed execution plan for a transcript chunk search."""
     if not video_ids or connection.optional_table("video_transcript_chunks") is None:
         return ""
-    query_embedding = embed_text(query) if embed_text is not None else embed_text_with_gemini(query, config=embedding_config)
+    query_embedding = embed_text(query) if embed_text is not None else embeddings.embed_text(query, config=embedding_config)
     return str(transcript_chunk_search_query(connection, video_ids, query_embedding).analyze_plan())
 
 
@@ -495,7 +490,7 @@ def index_video_embedding(
             "dimensions": len(existing_row["embedding"]),
         }
 
-    embedding = embed_text(source_text) if embed_text is not None else embed_text_with_gemini(source_text, config=embedding_config)
+    embedding = embed_text(source_text) if embed_text is not None else embeddings.embed_text(source_text, config=embedding_config)
     if not embedding:
         raise EmbeddingSearchError("Embedding request returned an empty vector")
     connection.ensure_video_embedding_table(len(embedding))
@@ -554,7 +549,7 @@ def index_video_title_embedding(
             "dimensions": len(existing_row["embedding"]),
         }
 
-    embedding = embed_text(source_text) if embed_text is not None else embed_text_with_gemini(source_text, config=embedding_config)
+    embedding = embed_text(source_text) if embed_text is not None else embeddings.embed_text(source_text, config=embedding_config)
     if not embedding:
         raise EmbeddingSearchError("Embedding request returned an empty vector")
     connection.ensure_video_title_embedding_table(len(embedding))
@@ -637,7 +632,7 @@ def index_video_title_embeddings(
     def embed_job(job: tuple[str, str, str]) -> dict[str, Any]:
         """Embed one stored title and carry enough metadata for idempotent upsert."""
         video_id, source_text, content_hash = job
-        embedding = embed_text(source_text) if embed_text is not None else embed_text_with_gemini(source_text, config=embedding_config)
+        embedding = embed_text(source_text) if embed_text is not None else embeddings.embed_text(source_text, config=embedding_config)
         if not embedding:
             raise EmbeddingSearchError("Embedding request returned an empty vector")
         return {
@@ -695,70 +690,3 @@ def embedding_source_text(row: Mapping[str, Any]) -> str:
         )
         if part not in (None, "")
     )
-
-
-def embed_text_with_gemini(
-    text: str,
-    *,
-    config: EmbeddingConfig | None = None,
-) -> list[float]:
-    """Call the configured Gemini embedding endpoint and return the numeric vector."""
-    try:
-        resolved_config = config or embedding_config_from_env()
-    except ValueError as error:
-        raise EmbeddingSearchError(str(error)) from error
-    payload = {
-        "model": f"models/{resolved_config.model}",
-        "content": {"parts": [{"text": text}]},
-        "output_dimensionality": resolved_config.output_dimensionality,
-    }
-    response = post_embedding_json(
-        resolved_config.endpoint(f"models/{resolved_config.model}:embedContent"),
-        resolved_config,
-        payload,
-    )
-    embedding = response.get("embedding")
-    values = embedding.get("values") if isinstance(embedding, dict) else response.get("values")
-    if not isinstance(values, list):
-        raise EmbeddingSearchError("Embedding response did not include values")
-    return [float(value) for value in values]
-
-
-def post_embedding_json(
-    url: str,
-    config: EmbeddingConfig,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    """POST one embedding request after enforcing the configured base URL boundary."""
-    if not url.startswith(f"{config.base_url}/"):
-        raise EmbeddingSearchError("Unsupported embedding URL")
-    request = urllib.request.Request(  # noqa: S310
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "x-goog-api-key": config.api_key,
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        message = compact_embedding_error(error.read().decode("utf-8", errors="replace"))
-        raise EmbeddingSearchError(message or f"Embedding request HTTP {error.code}") from error
-    except (OSError, json.JSONDecodeError) as error:
-        raise EmbeddingSearchError(str(error)) from error
-
-
-def compact_embedding_error(text: str) -> str:
-    """Extract a short useful message from an embedding API error payload."""
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError:
-        return " ".join(text.split())[:500]
-    if isinstance(payload, dict):
-        error = payload.get("error")
-        if isinstance(error, dict):
-            return " ".join(str(error.get("message", "")).split())[:500]
-    return ""
