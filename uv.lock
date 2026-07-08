@@ -1092,7 +1092,7 @@ wheels = [
 
 [[package]]
 name = "youtube-toolkit"
-version = "0.13.3"
+version = "0.13.4"
 source = { editable = "." }
 dependencies = [
     { name = "lancedb" },

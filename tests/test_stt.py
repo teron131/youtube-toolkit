@@ -6,7 +6,7 @@ from youtube_toolkit.stt import (
     transcribe_audio,
     transcribe_audio_details,
 )
-from youtube_toolkit.stt.common import encode_multipart_form
+from youtube_toolkit.stt.transcription import encode_multipart_form
 
 
 def test_xai_stt_response_normalizes_to_plain_contract() -> None:
@@ -47,7 +47,7 @@ def test_transcribe_audio_returns_plain_provider_text(tmp_path, monkeypatch) -> 
     audio_path = tmp_path / "audio.mp3"
     audio_path.write_bytes(b"audio")
 
-    def fake_request_speech_to_text(
+    def fake_xai_stt(
         *_args,
         **_kwargs,
     ):
@@ -55,8 +55,8 @@ def test_transcribe_audio_returns_plain_provider_text(tmp_path, monkeypatch) -> 
 
     monkeypatch.setenv("XAI_API_KEY", "test-key")
     monkeypatch.setattr(
-        "youtube_toolkit.stt.xai.request_speech_to_text",
-        fake_request_speech_to_text,
+        "youtube_toolkit.stt.xai.xai_stt",
+        fake_xai_stt,
     )
     result = transcribe_audio(audio_path)
 
@@ -68,7 +68,7 @@ def test_transcribe_audio_details_returns_plain_contract(tmp_path, monkeypatch) 
     audio_path = tmp_path / "audio.mp3"
     audio_path.write_bytes(b"audio")
 
-    def fake_request_speech_to_text(
+    def fake_xai_stt(
         *_args,
         **_kwargs,
     ):
@@ -81,8 +81,8 @@ def test_transcribe_audio_details_returns_plain_contract(tmp_path, monkeypatch) 
 
     monkeypatch.setenv("XAI_API_KEY", "test-key")
     monkeypatch.setattr(
-        "youtube_toolkit.stt.xai.request_speech_to_text",
-        fake_request_speech_to_text,
+        "youtube_toolkit.stt.xai.xai_stt",
+        fake_xai_stt,
     )
 
     assert transcribe_audio_details(audio_path) == SpeechTranscription(

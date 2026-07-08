@@ -1,17 +1,17 @@
-"""xAI speech-to-text provider."""
+"""xAI speech-to-text provider request construction."""
 
 from __future__ import annotations
 
-import urllib.request
 from pathlib import Path
 from typing import Any
+import urllib.request
 
-from .common import encode_multipart_form, run_json_request
+from .transcription import encode_multipart_form, run_json_request
 
 XAI_STT_URL = "https://api.x.ai/v1/stt"
 
 
-def request_speech_to_text(
+def xai_stt(
     audio_path: Path,
     *,
     api_key: str,
