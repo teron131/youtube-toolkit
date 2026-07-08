@@ -80,10 +80,10 @@ class SearchCommandParser:
         search_parser.add_argument("--max-duration", default=DEFAULT_SEARCH_MAX_DURATION)
         search_parser.add_argument("--uploaded-after", default=None, help="Only include videos uploaded on or after YYYY-MM-DD")
         search_parser.add_argument("--uploaded-within-days", type=int, default=None, help="Only include videos uploaded within the last N days")
-        search_parser.add_argument("--include-channel", action="append", default=[])
-        search_parser.add_argument("--exclude-channel", action="append", default=[])
-        search_parser.add_argument("--include-title", action="append", default=[])
-        search_parser.add_argument("--exclude-title", action="append", default=[])
+        search_parser.add_argument("--include-channel", "--include-channels", dest="include_channel", action="append", default=[])
+        search_parser.add_argument("--exclude-channel", "--exclude-channels", dest="exclude_channel", action="append", default=[])
+        search_parser.add_argument("--include-title", "--include-titles", dest="include_title", action="append", default=[])
+        search_parser.add_argument("--exclude-title", "--exclude-titles", dest="exclude_title", action="append", default=[])
         search_parser.set_defaults(handler=SearchCommands.search)
 
 
