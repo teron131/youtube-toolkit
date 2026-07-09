@@ -11,11 +11,11 @@ from ..watchlist_schedule import (
     DEFAULT_WATCHLIST_SCHEDULE_MINUTES,
 )
 from .commands import (
-    BlacklistCommands,
-    ChannelCommands,
     DEFAULT_SEARCH_MAX_DURATION,
     DEFAULT_SEARCH_MIN_DURATION,
     DEFAULT_SEARCH_MIN_VIEWS,
+    BlacklistCommands,
+    ChannelCommands,
     IndexCommands,
     SearchCommands,
     SetupCommands,
@@ -25,10 +25,36 @@ from .commands import (
 )
 
 
+class YoutubeArgumentParser(argparse.ArgumentParser):
+    """CLI parser normalizes shell-passed string argument values before handlers run."""
+
+    def add_argument(self, *args, **kwargs):
+        action = kwargs.get("action", "store")
+        if "type" not in kwargs and action in {"store", "append"}:
+            kwargs["type"] = normalize_arg_string
+        return super().add_argument(*args, **kwargs)
+
+
+def normalize_arg_string(value: str) -> str:
+    """Normalize one shell-passed argument string before argparse stores or validates it."""
+    candidate = str(value).strip()
+    if len(candidate) >= 2 and candidate[0] == candidate[-1] and candidate[0] in {"'", '"'}:
+        return candidate[1:-1].strip()
+    return candidate
+
+
+def add_command_subparsers(
+    parser: argparse.ArgumentParser,
+    **kwargs,
+) -> argparse._SubParsersAction:
+    """Create command subparsers that inherit CLI string normalization."""
+    return parser.add_subparsers(**kwargs, parser_class=YoutubeArgumentParser)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Assemble the top-level parser and attach command handlers as parser defaults."""
-    parser = argparse.ArgumentParser(prog="youtube", description="Transcript-first YouTube toolkit.")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    parser = YoutubeArgumentParser(prog="youtube", description="Transcript-first YouTube toolkit.")
+    subparsers = add_command_subparsers(parser, dest="command", required=True)
     VideoCommandParser.add_to(subparsers)
     SearchCommandParser.add_to(subparsers)
     ChannelCommandParser.add_to(subparsers)
@@ -46,18 +72,14 @@ class VideoCommandParser:
     @staticmethod
     def add_to(subparsers: argparse._SubParsersAction) -> None:
         video_parser = subparsers.add_parser("video", help="Fetch video metadata or transcripts")
-        video_subparsers = video_parser.add_subparsers(
-            dest="video_command",
-            required=True,
-            metavar="{metadata,transcript}",
-        )
+        video_subparsers = add_command_subparsers(video_parser, dest="video_command", required=True, metavar="{metadata,transcript}")
 
         metadata_parser = video_subparsers.add_parser("metadata", help="Fetch video metadata JSON")
-        metadata_parser.add_argument("video_ref", help="YouTube video URL or ID")
+        metadata_parser.add_argument("video_ref", metavar="url", help="YouTube video URL or ID")
         metadata_parser.set_defaults(handler=VideoCommands.metadata)
 
         transcript_parser = video_subparsers.add_parser("transcript", help="Fetch a normalized transcript")
-        transcript_parser.add_argument("video_ref", help="YouTube video URL or ID")
+        transcript_parser.add_argument("video_ref", metavar="url", help="YouTube video URL or ID")
         transcript_parser.set_defaults(handler=VideoCommands.transcript)
 
 
@@ -93,11 +115,7 @@ class ChannelCommandParser:
     @staticmethod
     def add_to(subparsers: argparse._SubParsersAction) -> None:
         channel_parser = subparsers.add_parser("channel", help="Work with YouTube channels")
-        channel_subparsers = channel_parser.add_subparsers(
-            dest="channel_command",
-            required=True,
-            metavar="{videos}",
-        )
+        channel_subparsers = add_command_subparsers(channel_parser, dest="channel_command", required=True, metavar="{videos}")
 
         videos_parser = channel_subparsers.add_parser("videos", help="List recent videos from a YouTube channel")
         videos_parser.add_argument("channel_ref", help="YouTube channel URL, handle, or channel ID")
@@ -111,11 +129,7 @@ class WatchlistCommandParser:
     @staticmethod
     def add_to(subparsers: argparse._SubParsersAction) -> None:
         watchlist_parser = subparsers.add_parser("watchlist", help="Manage or sync watchlist channels")
-        watchlist_subparsers = watchlist_parser.add_subparsers(
-            dest="watchlist_command",
-            required=True,
-            metavar="{add,list,remove,sync,recent,schedule}",
-        )
+        watchlist_subparsers = add_command_subparsers(watchlist_parser, dest="watchlist_command", required=True, metavar="{add,list,remove,sync,recent,schedule}")
         watchlist_add_parser = watchlist_subparsers.add_parser("add", help="Add one or more channels to the watchlist")
         add_channel_refs_arg(watchlist_add_parser)
         watchlist_add_parser.set_defaults(handler=WatchlistCommands.add)
@@ -151,7 +165,7 @@ class WatchlistCommandParser:
     @staticmethod
     def add_schedule(subparsers: argparse._SubParsersAction) -> None:
         schedule_parser = subparsers.add_parser("schedule", help="Manage the watchlist scheduled sync LaunchAgent")
-        schedule_subparsers = schedule_parser.add_subparsers(dest="schedule_command", required=True)
+        schedule_subparsers = add_command_subparsers(schedule_parser, dest="schedule_command", required=True)
         install_parser = schedule_subparsers.add_parser("install", help="Install and load the watchlist scheduled sync job")
         install_parser.add_argument("--minutes", type=int, default=DEFAULT_WATCHLIST_SCHEDULE_MINUTES, help="Run interval in minutes")
         install_parser.add_argument("--last", type=int, default=DEFAULT_WATCHLIST_SCHEDULE_LAST, help="Fetch the latest N videos per watched channel; omit for no limit")
@@ -173,7 +187,7 @@ class BlacklistCommandParser:
     @staticmethod
     def add_to(subparsers: argparse._SubParsersAction) -> None:
         blacklist_parser = subparsers.add_parser("blacklist", help="Manage search blacklist channels")
-        blacklist_subparsers = blacklist_parser.add_subparsers(dest="blacklist_command", required=True)
+        blacklist_subparsers = add_command_subparsers(blacklist_parser, dest="blacklist_command", required=True)
         blacklist_add_parser = blacklist_subparsers.add_parser("add", help="Add one or more channels to the search blacklist")
         add_channel_refs_arg(blacklist_add_parser)
         blacklist_add_parser.set_defaults(handler=BlacklistCommands.add)
@@ -188,7 +202,7 @@ class IndexCommandParser:
     @staticmethod
     def add_to(subparsers: argparse._SubParsersAction) -> None:
         index_parser = subparsers.add_parser("index", help="Index stored video embeddings")
-        index_parser.add_argument("video_refs", nargs="*", metavar="video", help="Stored YouTube video URL or ID")
+        index_parser.add_argument("video_refs", nargs="*", metavar="url", help="Stored YouTube video URL or ID")
         index_parser.add_argument(
             "--include-without-transcript",
             action="store_true",
