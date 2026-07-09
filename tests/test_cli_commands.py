@@ -324,6 +324,80 @@ def test_video_and_channel_command_groups_parse_public_actions() -> None:
     assert setup_args.verify is True
 
 
+def test_parser_normalizes_string_arguments_before_handlers() -> None:
+    """CLI string hygiene applies to every parsed argument value before command handlers run."""
+    video_args = build_parser().parse_args(
+        [
+            "video",
+            "transcript",
+            "'https://www.youtube.com/watch?v=JpSHyEIZ_bo'",
+        ]
+    )
+    search_args = build_parser().parse_args(
+        [
+            "search",
+            "'agent memory'",
+            "--extra-query",
+            "'langgraph'",
+            "--source",
+            "'channel'",
+            "--mode",
+            "'semantic'",
+            "--return",
+            "'video'",
+            "--channels",
+            "'@OpenAI'",
+            "--include-channel",
+            "'OpenAI'",
+            "--exclude-title",
+            "'shorts'",
+            "--sort",
+            "'popularity'",
+        ]
+    )
+    watchlist_args = build_parser().parse_args(["watchlist", "add", "'@OpenAI'", '"UC123"'])
+    setup_args = build_parser().parse_args(["setup", "--llm-model", "'summary-model'"])
+    unmatched_quote_args = build_parser().parse_args(["search", "'earnings"])
+
+    assert video_args.video_ref == "https://www.youtube.com/watch?v=JpSHyEIZ_bo"
+    assert search_args.query == "agent memory"
+    assert search_args.extra_queries == ["langgraph"]
+    assert search_args.source == ["channel"]
+    assert search_args.mode == "semantic"
+    assert search_args.return_type == "video"
+    assert search_args.channels == ["@OpenAI"]
+    assert search_args.include_channel == ["OpenAI"]
+    assert search_args.exclude_title == ["shorts"]
+    assert search_args.sort == "popularity"
+    assert watchlist_args.channel_refs == ["@OpenAI", "UC123"]
+    assert setup_args.llm_model == "summary-model"
+    assert unmatched_quote_args.query == "'earnings"
+
+
+@pytest.mark.parametrize(
+    ("args", "usage"),
+    [
+        (["video", "transcript", "--help"], "usage: youtube video transcript [-h] url"),
+        (["video", "metadata", "--help"], "usage: youtube video metadata [-h] url"),
+        (["index", "--help"], "usage: youtube index [-h] [--include-without-transcript] [url ...]"),
+    ],
+)
+def test_video_reference_help_names_positionals_url(
+    args: list[str],
+    usage: str,
+    capsys,
+) -> None:
+    """Video reference help shows the shell-facing URL placeholder instead of internal destination names."""
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(args)
+
+    output = capsys.readouterr().out
+    assert usage in output
+    assert "url" in output
+    assert "YouTube video URL or ID" in output
+    assert "video_ref" not in output
+
+
 def test_search_command_group_parses_channel_source() -> None:
     search_args = build_parser().parse_args(
         [
