@@ -111,4 +111,4 @@ youtube setup --llm-api-key ... --llm-base-url ... --llm-model ... --no-verify
 
 ## Storage Gotcha
 
-Installed CLI data lives under `~/Library/Application Support/youtube-toolkit`. `uv run youtube` from the checkout uses this repo's `.cache` unless `YOUTUBE_TOOLKIT_STORAGE_HOME` is set. Run `youtube doctor` when storage behavior matters.
+Installed CLI data follows the operating system's standard user data directory. `uv run youtube` from the checkout uses this repo's `.cache` unless `YOUTUBE_TOOLKIT_STORAGE_HOME` is set. Run `youtube doctor` when storage behavior matters.

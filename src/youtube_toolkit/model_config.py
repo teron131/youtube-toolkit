@@ -8,6 +8,8 @@ import os
 from pathlib import Path
 from urllib.parse import urlparse
 
+from platformdirs import user_data_path
+
 APP_STATE_DIRNAME = "youtube-toolkit"
 CONFIG_FILENAME = "config.env"
 EMBEDDING_BASE_URL = "https://api.openai.com/v1"
@@ -166,8 +168,8 @@ def config_bool_value(
 
 
 def app_config_path() -> Path:
-    """Installed CLI config lives in Application Support so tool installs do not depend on repo checkouts."""
-    return Path.home() / "Library" / "Application Support" / APP_STATE_DIRNAME / CONFIG_FILENAME
+    """Installed CLI config uses the platform data directory so tool installs do not depend on repo checkouts."""
+    return user_data_path(APP_STATE_DIRNAME) / CONFIG_FILENAME
 
 
 def app_config_values() -> dict[str, str]:

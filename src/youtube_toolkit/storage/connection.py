@@ -10,6 +10,7 @@ import lancedb
 from lancedb.index import FTS, BTree
 from lancedb.query import ColumnOrdering
 from lancedb.table import Table
+from platformdirs import user_data_path
 import pyarrow as pa
 
 STORAGE_DIRNAME = ".cache"
@@ -537,7 +538,7 @@ def resolve_storage_dir() -> Path:
     source_root = Path(__file__).resolve().parents[3]
     if (source_root / ".git").exists() or (source_root / "pyproject.toml").exists():
         return source_root / STORAGE_DIRNAME
-    return Path.home() / "Library" / "Application Support" / APP_STATE_DIRNAME
+    return user_data_path(APP_STATE_DIRNAME)
 
 
 def database_schema_health(database_path: Path | None = None) -> DatabaseSchemaHealthResult:
