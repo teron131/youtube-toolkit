@@ -8,14 +8,17 @@ from typing import Any, Literal
 from ..identity import VideoRef, extract_video_id
 from ..model_config import EmbeddingConfig
 from . import embeddings
-from .connection import MAX_TABLE_SCAN_ROWS, LanceConnection, filter_equal, filter_in_values
+from .connection import MAX_TABLE_SCAN_ROWS, LanceConnection, filter_contains_case_insensitive, filter_equal, filter_in_values
 from .payloads import stored_video_payload
-from .videos import video_payload_row
 
 EmbedText = Callable[[str], list[float]]
-SearchSort = Literal["upload_date", "relevance"]
-SEARCH_SORTS = {"upload_date", "relevance"}
+SearchSort = Literal["upload_date", "popularity", "relevance"]
+SEARCH_SORTS = {"upload_date", "popularity", "relevance"}
 TRANSCRIPT_PRESENT_SQL = "transcript IS NOT NULL AND transcript != ''"
+UPLOAD_DATE_ORDER = [
+    ("upload_date", False),
+    ("youtube_video_id", False),
+]
 
 
 def search_stored_videos(
@@ -28,8 +31,9 @@ def search_stored_videos(
     embed_text: EmbedText | None = None,
     embedding_config: EmbeddingConfig | None = None,
     sort: SearchSort | None = None,
+    where_sql: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Search stored videos by direct video ref, keyword scan, and optional semantic ranking."""
+    """Search stored videos through native ID, substring, ordering, and vector queries."""
     normalized_query = query.strip()
     if not normalized_query:
         raise ValueError("search query must be non-empty")
@@ -45,19 +49,38 @@ def search_stored_videos(
     if video_id is not None:
         rows = stored_video_rows(
             connection,
-            where_sql=video_lookup_filter(video_id, require_transcript=require_transcript),
+            where_sql=combine_filters(
+                video_lookup_filter(video_id, require_transcript=require_transcript),
+                where_sql,
+            ),
             limit=limit,
+            order_by=UPLOAD_DATE_ORDER,
         )
-        return [stored_video_payload(row) for row in sort_video_rows_by_upload_date(rows)]
+        return [stored_video_payload(row) for row in rows]
 
     normalized_keyword = normalized_query.casefold()
+    keyword_where_sql = combine_filters(
+        stored_video_keyword_filter(
+            connection,
+            normalized_keyword,
+        ),
+        TRANSCRIPT_PRESENT_SQL if require_transcript else None,
+        where_sql,
+    )
     rows = stored_video_rows(
         connection,
-        where_sql=TRANSCRIPT_PRESENT_SQL if require_transcript else None,
+        where_sql=keyword_where_sql,
+        limit=MAX_TABLE_SCAN_ROWS if resolved_sort == "popularity" else limit,
+        order_by=None if resolved_sort == "popularity" else UPLOAD_DATE_ORDER,
     )
-    matching_rows = [row for row in rows if video_row_matches_keyword(row, normalized_keyword)]
-    keyword_payloads = [stored_video_payload(row) for row in sort_video_rows_by_upload_date(matching_rows)[:limit]]
+    keyword_payloads = [stored_video_payload(row) for row in rows]
     if not semantic:
+        if resolved_sort == "popularity":
+            return rank_search_payloads(
+                keyword_payloads,
+                sort=resolved_sort,
+                limit=limit,
+            )
         return keyword_payloads
 
     semantic_payloads = search_video_payloads_by_semantic(
@@ -66,6 +89,8 @@ def search_stored_videos(
         require_transcript=require_transcript,
         embed_text=embed_text,
         embedding_config=embedding_config,
+        where_sql=where_sql,
+        limit=(limit if resolved_sort == "relevance" and not require_transcript and where_sql is None else MAX_TABLE_SCAN_ROWS),
     )
     return rank_search_payloads(
         merge_search_payloads(keyword_payloads, semantic_payloads),
@@ -99,15 +124,33 @@ def stored_video_rows(
     *,
     where_sql: str | None = None,
     limit: int = MAX_TABLE_SCAN_ROWS,
+    order_by: list[tuple[str, bool]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Return stored video rows with channel handles attached for all search projections."""
+    """Return filtered video rows with channel handles attached through one batched lookup."""
+    rows = connection.rows(
+        "videos",
+        where_sql=where_sql,
+        limit=limit,
+        order_by=order_by,
+    )
+    channel_ids = sorted({row["channel_id"] for row in rows if row.get("channel_id") is not None})
+    if not channel_ids:
+        return [{**row, "channel_handle": None} for row in rows]
+    channels = connection.rows(
+        "channels",
+        where_sql=f"youtube_channel_id IN ({filter_in_values(channel_ids)})",
+        columns=[
+            "youtube_channel_id",
+            "channel_handle",
+        ],
+    )
+    handle_by_channel_id = {row["youtube_channel_id"]: row["channel_handle"] for row in channels}
     return [
-        video_payload_row(connection, row)
-        for row in connection.rows(
-            "videos",
-            where_sql=where_sql,
-            limit=limit,
-        )
+        {
+            **row,
+            "channel_handle": handle_by_channel_id.get(row.get("channel_id")),
+        }
+        for row in rows
     ]
 
 
@@ -123,23 +166,41 @@ def video_lookup_filter(
     return " AND ".join(clauses)
 
 
-def video_row_matches_keyword(
-    row: dict[str, Any],
+def stored_video_keyword_filter(
+    connection: LanceConnection,
     normalized_keyword: str,
-) -> bool:
-    """Match a normalized keyword against the searchable stored-video fields."""
-    return any(
-        normalized_keyword in str(value).casefold()
-        for value in (
-            row["youtube_video_id"],
-            row["title"],
-            row["upload_date"],
-            row["transcript"],
-            row["channel_id"],
-            row["channel_handle"],
+) -> str:
+    """Build a native substring predicate across stored video fields and channel handles."""
+    clauses = [
+        filter_contains_case_insensitive(column_name, normalized_keyword)
+        for column_name in (
+            "youtube_video_id",
+            "title",
+            "upload_date",
+            "transcript",
+            "channel_id",
         )
-        if value not in (None, "")
+    ]
+    matching_channels = connection.rows(
+        "channels",
+        where_sql=filter_contains_case_insensitive(
+            "channel_handle",
+            normalized_keyword,
+        ),
+        columns=["youtube_channel_id"],
     )
+    matching_channel_ids = [row["youtube_channel_id"] for row in matching_channels if row.get("youtube_channel_id") is not None]
+    if matching_channel_ids:
+        clauses.append(f"channel_id IN ({filter_in_values(matching_channel_ids)})")
+    return " OR ".join(f"({clause})" for clause in clauses)
+
+
+def combine_filters(*filters: str | None) -> str | None:
+    """Combine optional SQL filters without leaking grouping decisions to callers."""
+    active_filters = [filter_sql for filter_sql in filters if filter_sql]
+    if not active_filters:
+        return None
+    return " AND ".join(f"({filter_sql})" for filter_sql in active_filters)
 
 
 def search_video_payloads_by_semantic(
@@ -149,6 +210,8 @@ def search_video_payloads_by_semantic(
     require_transcript: bool,
     embed_text: EmbedText | None,
     embedding_config: EmbeddingConfig | None,
+    where_sql: str | None,
+    limit: int,
 ) -> list[dict[str, Any]]:
     """Search video-level embeddings and project matching videos into stored-video payloads."""
     if connection.optional_table("video_embeddings") is None:
@@ -161,17 +224,29 @@ def search_video_payloads_by_semantic(
             config=embedding_config,
         )
     )
-    vector_query = connection.table("video_embeddings").search(
+    vector_query: Any = connection.table("video_embeddings").search(
         query_embedding,
         vector_column_name="embedding",
     )
-    rows = vector_query.distance_type("cosine").limit(MAX_TABLE_SCAN_ROWS).to_list()  # ty: ignore[unresolved-attribute] LanceDB exposes this fluent method at runtime.
+    rows = (
+        vector_query.distance_type("cosine")
+        .select(
+            [
+                "video_id",
+                "_distance",
+            ]
+        )
+        .limit(limit)
+        .to_list()
+    )
     video_ids = [video_id for row in rows if isinstance(video_id := row.get("video_id"), str)]
     if not video_ids:
         return []
     clauses = [f"youtube_video_id IN ({filter_in_values(video_ids)})"]
     if require_transcript:
         clauses.append(TRANSCRIPT_PRESENT_SQL)
+    if where_sql:
+        clauses.append(where_sql)
     videos_by_id = {
         row["youtube_video_id"]: row
         for row in stored_video_rows(
@@ -242,18 +317,15 @@ def rank_search_payloads(
             ),
             reverse=True,
         )
+    elif sort == "popularity":
+        sorted_payloads = sorted(
+            payloads,
+            key=lambda payload: (
+                payload.get("view_count") or 0,
+                payload.get("like_count") or 0,
+            ),
+            reverse=True,
+        )
     else:
         sorted_payloads = payloads
     return sorted_payloads[:limit]
-
-
-def sort_video_rows_by_upload_date(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Sort stored video rows newest-first with video ID as the stable tie-breaker."""
-    return sorted(
-        rows,
-        key=lambda row: (
-            row["upload_date"] or "",
-            row["youtube_video_id"],
-        ),
-        reverse=True,
-    )

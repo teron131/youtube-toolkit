@@ -20,6 +20,7 @@ from .videos import find_video_row, video_payload_row
 EmbedText = Callable[[str], list[float]]
 TRANSCRIPT_CHUNK_CHARS = 1200
 TRANSCRIPT_CHUNK_OVERLAP_CHARS = 200
+COSINE_DISTANCE_EPSILON = 1e-6
 
 
 def auto_index_video_embedding(
@@ -198,7 +199,6 @@ def index_transcript_chunks(
         ["video_id", "chunk_index"],
         indexed_rows,
     )
-    connection.ensure_transcript_chunk_text_index()
     connection.delete_where(
         "video_transcript_chunks",
         f"video_id = {filter_literal(youtube_video_id)} AND chunk_index >= {len(chunks)}",
@@ -253,6 +253,7 @@ def search_transcript_chunk_scores(
         query,
         video_ids,
         where_sql=where_sql,
+        columns=["video_id"],
         min_similarity=min_similarity,
         embed_text=embed_text,
         embedding_config=embedding_config,
@@ -281,26 +282,28 @@ def search_transcript_chunks(
     if video_ids == [] or connection.optional_table("video_transcript_chunks") is None:
         return []
     query_embedding = embed_text(query) if embed_text is not None else embeddings.embed_text(query, config=embedding_config)
-    rows = transcript_chunk_search_query(
+    search_query = transcript_chunk_search_query(
         connection,
         video_ids,
         query_embedding,
         limit=limit,
         where_sql=where_sql,
-    ).to_list()
-    rows = rows_with_similarity(rows, query_embedding)
+        min_similarity=min_similarity,
+    )
+    if columns is not None:
+        search_query = search_query.select(list(dict.fromkeys([*columns, "_distance"])))
+    rows = []
+    for row in search_query.to_list():
+        result = row if columns is None else {column_name: row[column_name] for column_name in columns if column_name in row}
+        rows.append(
+            {
+                **result,
+                "similarity": 1.0 - float(row["_distance"]),
+            }
+        )
     if min_similarity is not None:
         rows = [row for row in rows if row["similarity"] >= min_similarity]
-    rows = rows[:limit]
-    if columns is None:
-        return rows
-    return [
-        {
-            **{column_name: row[column_name] for column_name in columns if column_name in row},
-            "similarity": row["similarity"],
-        }
-        for row in rows
-    ]
+    return rows
 
 
 def search_video_title_scores(
@@ -341,13 +344,13 @@ def search_video_titles(
         return []
     query_embedding = embed_text(query) if embed_text is not None else embeddings.embed_text(query, config=embedding_config)
     connection.ensure_video_title_text_index()
+    search_query: Any = connection.table("video_title_embeddings").search(query_type="hybrid")
     rows = (
-        connection.table("video_title_embeddings")
-        .search(query_type="hybrid")
-        .vector(query_embedding)
+        search_query.vector(query_embedding)
         .text(query)
+        .distance_type("cosine")
         .where(f"video_id IN ({filter_in_values(video_ids)})")
-        .rerank(RRFReranker())
+        .rerank(RRFReranker(return_score="all"))
         .limit(limit)
         .to_list()
     )
@@ -361,16 +364,24 @@ def rows_with_similarity(
     rows: list[dict[str, Any]],
     query_embedding: list[float],
 ) -> list[dict[str, Any]]:
-    """Attach cosine similarity and sort vector-search rows by that score."""
-    return sorted(
-        [
+    """Attach cosine similarity to hybrid rows and preserve cosine as the final rank."""
+    scored_rows: list[dict[str, Any]] = []
+    for row in rows:
+        distance = row.get("_distance")
+        if isinstance(distance, int | float) and not isinstance(distance, bool) and math.isfinite(distance):
+            similarity = 1.0 - float(distance)
+        elif row.get("embedding") is not None:
+            similarity = cosine_similarity(query_embedding, row["embedding"])
+        else:
+            continue
+        scored_rows.append(
             {
                 **row,
-                "similarity": cosine_similarity(query_embedding, row.get("embedding")),
+                "similarity": similarity,
             }
-            for row in rows
-            if row.get("embedding") is not None
-        ],
+        )
+    return sorted(
+        scored_rows,
         key=lambda row: row["similarity"],
         reverse=True,
     )
@@ -431,9 +442,11 @@ def transcript_chunk_search_query(
     *,
     limit: int = MAX_TABLE_SCAN_ROWS,
     where_sql: str | None = None,
+    min_similarity: float | None = None,
 ) -> Any:
     """Build the filtered LanceDB transcript chunk query before scoring or column projection."""
-    query = connection.table("video_transcript_chunks").search(query_embedding)
+    query: Any = connection.table("video_transcript_chunks").search(query_embedding)
+    query = query.distance_type("cosine")
     filters: list[str] = []
     if video_ids is not None:
         filters.append(f"video_id IN ({filter_in_values(video_ids)})")
@@ -441,6 +454,13 @@ def transcript_chunk_search_query(
         filters.append(where_sql)
     if filters:
         query = query.where(" AND ".join(f"({filter_sql})" for filter_sql in filters))
+    if min_similarity is not None:
+        query = query.distance_range(
+            upper_bound=math.nextafter(
+                1.0 - min_similarity + COSINE_DISTANCE_EPSILON,
+                math.inf,
+            )
+        )
     return query.limit(limit)
 
 
@@ -450,18 +470,19 @@ def list_video_ids_for_embedding_index(
     require_transcript: bool = True,
 ) -> list[str]:
     """List stored video IDs eligible for embedding jobs, newest first."""
-    rows = [row for row in connection.rows("videos") if not require_transcript or row["transcript"]]
-    return [
-        row["youtube_video_id"]
-        for row in sorted(
-            rows,
-            key=lambda row: (
-                row["upload_date"] or "",
-                row["youtube_video_id"],
-            ),
-            reverse=True,
-        )
-    ]
+    rows = connection.rows(
+        "videos",
+        where_sql="transcript IS NOT NULL AND transcript != ''" if require_transcript else None,
+        columns=[
+            "youtube_video_id",
+            "upload_date",
+        ],
+        order_by=[
+            ("upload_date", False),
+            ("youtube_video_id", False),
+        ],
+    )
+    return [row["youtube_video_id"] for row in rows]
 
 
 def index_video_embedding(
@@ -479,9 +500,10 @@ def index_video_embedding(
     row = video_payload_row(connection, video)
     source_text = embedding_source_text(row)
     content_hash = hashlib.sha256(source_text.encode("utf-8")).hexdigest()
-    existing_row = next(
-        (row for row in connection.rows("video_embeddings") if row["video_id"] == youtube_video_id),
-        None,
+    existing_row = connection.find_row(
+        "video_embeddings",
+        "video_id",
+        youtube_video_id,
     )
     if existing_row is not None and existing_row["embedding_content_hash"] == content_hash and existing_row["embedding"] is not None:
         return {
@@ -524,16 +546,16 @@ def index_video_title_embedding(
     if video is None:
         return None
 
-    row = video_payload_row(connection, video)
-    title = row.get("title")
+    title = video.get("title")
     if not isinstance(title, str) or not title.strip():
         return None
 
     source_text = title.strip()
     content_hash = hashlib.sha256(source_text.encode("utf-8")).hexdigest()
-    existing_row = next(
-        (row for row in connection.rows("video_title_embeddings") if row["video_id"] == youtube_video_id),
-        None,
+    existing_row = connection.find_row(
+        "video_title_embeddings",
+        "video_id",
+        youtube_video_id,
     )
     if existing_row is not None and existing_row["embedding_content_hash"] == content_hash and existing_row["embedding"] is not None:
         if existing_row.get("title") != source_text:
@@ -542,7 +564,6 @@ def index_video_title_embedding(
                 "video_id",
                 [{**existing_row, "title": source_text}],
             )
-            connection.ensure_video_title_text_index(refresh=True)
         return {
             "video_id": youtube_video_id,
             "content_hash": content_hash,
@@ -565,7 +586,6 @@ def index_video_title_embedding(
             }
         ],
     )
-    connection.ensure_video_title_text_index(refresh=True)
     return {
         "video_id": youtube_video_id,
         "content_hash": content_hash,
@@ -581,11 +601,38 @@ def index_video_title_embeddings(
     embedding_config: EmbeddingConfig | None = None,
 ) -> list[EmbeddingIndexResult]:
     """Batch-index stored titles while reusing unchanged embeddings and reporting per-video status."""
-    existing_rows = {row["video_id"]: row for row in connection.rows("video_title_embeddings") if row.get("video_id") is not None}
+    if not youtube_video_ids:
+        return []
+    video_id_filter = filter_in_values(youtube_video_ids)
+    existing_rows = {
+        row["video_id"]: row
+        for row in connection.rows(
+            "video_title_embeddings",
+            where_sql=f"video_id IN ({video_id_filter})",
+            columns=[
+                "video_id",
+                "embedding_content_hash",
+                "embedding",
+            ],
+        )
+        if row.get("video_id") is not None
+    }
+    videos_by_id = {
+        row["youtube_video_id"]: row
+        for row in connection.rows(
+            "videos",
+            where_sql=f"youtube_video_id IN ({video_id_filter})",
+            columns=[
+                "youtube_video_id",
+                "title",
+            ],
+        )
+        if row.get("youtube_video_id") is not None
+    }
     jobs: list[tuple[str, str, str]] = []
     results: list[EmbeddingIndexResult] = []
     for youtube_video_id in youtube_video_ids:
-        video = find_video_row(connection, youtube_video_id)
+        video = videos_by_id.get(youtube_video_id)
         if video is None:
             results.append(
                 {
@@ -595,8 +642,7 @@ def index_video_title_embeddings(
                 }
             )
             continue
-        row = video_payload_row(connection, video)
-        title = row.get("title")
+        title = video.get("title")
         if not isinstance(title, str) or not title.strip():
             results.append(
                 {
@@ -675,7 +721,6 @@ def index_video_title_embeddings(
             "video_id",
             indexed_rows,
         )
-        connection.ensure_video_title_text_index(refresh=True)
     return results
 
 

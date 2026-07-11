@@ -56,12 +56,22 @@ def index_search_candidate_titles(
     candidates = connection.rows(
         "search_candidates",
         where_sql=f"session_id = {filter_literal(session_id)}",
+        columns=[
+            "youtube_video_id",
+            "source_rank",
+            "title",
+        ],
     )
     existing_rows = {
         row["video_id"]: row
         for row in connection.rows(
             "search_candidate_title_embeddings",
             where_sql=f"session_id = {filter_literal(session_id)}",
+            columns=[
+                "video_id",
+                "embedding_content_hash",
+                "embedding",
+            ],
         )
         if row.get("video_id") is not None
     }
@@ -147,7 +157,6 @@ def index_search_candidate_titles(
             ],
             indexed_rows,
         )
-        connection.ensure_search_candidate_title_text_index(refresh=True)
     return results
 
 
@@ -173,13 +182,13 @@ def search_candidate_title_scores(
         )
     )
     connection.ensure_search_candidate_title_text_index()
+    search_query: Any = connection.table("search_candidate_title_embeddings").search(query_type="hybrid")
     rows = (
-        connection.table("search_candidate_title_embeddings")
-        .search(query_type="hybrid")
-        .vector(query_embedding)
+        search_query.vector(query_embedding)
         .text(query)
+        .distance_type("cosine")
         .where(f"session_id = {filter_literal(session_id)}")
-        .rerank(RRFReranker())
+        .rerank(RRFReranker(return_score="all"))
         .limit(limit)
         .to_list()
     )

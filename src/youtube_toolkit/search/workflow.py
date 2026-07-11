@@ -13,12 +13,12 @@ from uuid import uuid4
 
 from ..identity import parse_channel_ref
 from ..schemas import ChannelIdentity, extract_channel_identity
-from ..storage import get_connection, search_stored_videos, store_search_candidates, upsert_video
-from ..storage.search import stored_video_rows, video_row_matches_keyword
+from ..storage import get_connection, list_blacklist_channel_identities, search_stored_videos, store_search_candidates, upsert_video
 from ..youtube.channels import ChannelOptions, fetch_channel_metadata
 from ..youtube.client import YtDlpClient
 from .filters import (
     candidate_id,
+    db_video_filter,
     dedupe_candidates,
     filter_candidates,
     interlace_relevance,
@@ -341,21 +341,16 @@ def db_candidates(
 ) -> list[dict[str, Any]]:
     """Load stored-video candidates using the DB lookup path and search ranking policy."""
     with get_connection() as connection:
-        if sort == "popularity":
-            normalized_query = request.query.strip().casefold()
-            rows = [row for row in stored_video_rows(connection) if video_row_matches_keyword(row, normalized_query)]
-            return [
-                {
-                    **stored_candidate(row),
-                    "source": "db",
-                }
-                for row in rows
-            ]
+        blacklisted_channels = tuple(list_blacklist_channel_identities(connection))
         payloads = search_stored_videos(
             connection,
             request.query,
             limit=limit,
-            sort="upload_date",
+            sort="popularity" if sort == "popularity" else "upload_date",
+            where_sql=db_video_filter(
+                request,
+                blacklisted_channels,
+            ),
         )
     return [
         {

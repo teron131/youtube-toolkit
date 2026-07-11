@@ -1179,11 +1179,17 @@ def test_semantic_search_defaults_to_chunk_results(
         video_ids: list[str],
         *,
         limit: int,
+        columns: list[str],
         min_similarity: float | None = None,
     ) -> list[dict]:
         assert query == "GPU capex"
         assert video_ids == ["aaaaaaaaaaa"]
         assert limit == 2
+        assert columns == [
+            "video_id",
+            "chunk_index",
+            "text",
+        ]
         assert min_similarity == 0.5
         return [
             {

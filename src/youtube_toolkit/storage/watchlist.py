@@ -7,9 +7,9 @@ from typing import Any
 
 from ..schemas import ChannelIdentity, extract_channel_identity, extract_video_record
 from .channels import find_matching_channel_rows, upsert_channel
-from .connection import LanceConnection, filter_in_values
+from .connection import LanceConnection, filter_equal, filter_in_values, filter_literal
 from .payloads import stored_video_payload
-from .videos import upsert_video, video_payload_row
+from .videos import upsert_video
 
 
 def upsert_watchlist_channel(
@@ -40,15 +40,23 @@ def delete_watchlist_channel(
     channel_ids = [row["youtube_channel_id"] for row in matching_rows if row["youtube_channel_id"] is not None]
     if not channel_ids:
         return False
-    existing_ids = {row["channel_id"] for row in connection.rows("channels_watchlist") if row["channel_id"] in set(channel_ids)}
-    if not existing_ids:
+    if (
+        connection.delete_where(
+            "channels_watchlist",
+            f"channel_id IN ({filter_in_values(channel_ids)})",
+        )
+        == 0
+    ):
         return False
 
-    connection.delete_where(
-        "channels_watchlist",
-        f"channel_id IN ({filter_in_values(channel_ids)})",
-    )
-    removed_video_ids = [row["youtube_video_id"] for row in connection.rows("videos") if row["channel_id"] in set(channel_ids)]
+    removed_video_ids = [
+        row["youtube_video_id"]
+        for row in connection.rows(
+            "videos",
+            where_sql=f"channel_id IN ({filter_in_values(channel_ids)})",
+            columns=["youtube_video_id"],
+        )
+    ]
     if removed_video_ids:
         connection.delete_where(
             "watchlist_videos",
@@ -66,7 +74,13 @@ def store_watchlist_channel_listing(
     youtube_channel_id = upsert_channel(connection, channel_identity)
     if youtube_channel_id is None:
         return []
-    if not any(row["channel_id"] == youtube_channel_id for row in connection.rows("channels_watchlist")):
+    if (
+        connection.count_rows(
+            "channels_watchlist",
+            where_sql=filter_equal("channel_id", youtube_channel_id),
+        )
+        == 0
+    ):
         return []
 
     new_video_ids: list[str] = []
@@ -89,9 +103,7 @@ def record_watchlist_video(
     youtube_video_id: str,
 ) -> bool:
     """Record the first watchlist discovery timestamp for a video."""
-    if any(row["video_id"] == youtube_video_id for row in connection.rows("watchlist_videos")):
-        return False
-    connection.upsert_rows(
+    return connection.insert_if_absent(
         "watchlist_videos",
         "video_id",
         [
@@ -101,14 +113,28 @@ def record_watchlist_video(
             }
         ],
     )
-    return True
 
 
 def list_watchlist_channel_refs(connection: LanceConnection) -> list[str]:
     """Display watched channels by handle when available, otherwise by durable channel ID."""
-    watched_ids = {row["channel_id"] for row in connection.rows("channels_watchlist")}
+    watched_ids = {
+        row["channel_id"]
+        for row in connection.rows(
+            "channels_watchlist",
+            columns=["channel_id"],
+        )
+    }
+    if not watched_ids:
+        return []
     rows = sorted(
-        [row for row in connection.rows("channels") if row["youtube_channel_id"] in watched_ids],
+        connection.rows(
+            "channels",
+            where_sql=f"youtube_channel_id IN ({filter_in_values(sorted(watched_ids))})",
+            columns=[
+                "youtube_channel_id",
+                "channel_handle",
+            ],
+        ),
         key=lambda row: row["channel_handle"] or row["youtube_channel_id"] or "",
     )
     return [row["channel_handle"] or row["youtube_channel_id"] for row in rows if row["channel_handle"] or row["youtube_channel_id"]]
@@ -116,37 +142,66 @@ def list_watchlist_channel_refs(connection: LanceConnection) -> list[str]:
 
 def list_missing_watchlist_video_ids(connection: LanceConnection) -> list[str]:
     """Transcript hydration jobs consume watched videos that have not yet persisted transcript text."""
-    watchlist_video_ids = {row["video_id"] for row in connection.rows("watchlist_videos")}
-    videos = [row for row in connection.rows("videos") if row["youtube_video_id"] in watchlist_video_ids and not row["transcript"]]
-    return [
-        row["youtube_video_id"]
-        for row in sorted(
-            videos,
-            key=lambda row: (
-                row["upload_date"] or "",
-                row["youtube_video_id"],
-            ),
-            reverse=True,
+    watchlist_video_ids = {
+        row["video_id"]
+        for row in connection.rows(
+            "watchlist_videos",
+            columns=["video_id"],
         )
-    ]
+    }
+    if not watchlist_video_ids:
+        return []
+    rows = connection.rows(
+        "videos",
+        where_sql=(f"youtube_video_id IN ({filter_in_values(sorted(watchlist_video_ids))}) AND (transcript IS NULL OR transcript = '')"),
+        columns=[
+            "youtube_video_id",
+            "upload_date",
+        ],
+        order_by=[
+            ("upload_date", False),
+            ("youtube_video_id", False),
+        ],
+    )
+    return [row["youtube_video_id"] for row in rows]
 
 
 def list_watchlist_video_ids_missing_embeddings(connection: LanceConnection) -> list[str]:
     """Embedding jobs consume watched videos only after transcript text is already stored."""
-    watchlist_video_ids = {row["video_id"] for row in connection.rows("watchlist_videos")}
-    indexed_video_ids = {row["video_id"] for row in connection.rows("video_embeddings")}
-    videos = [row for row in connection.rows("videos") if row["youtube_video_id"] in watchlist_video_ids and row["transcript"] and row["youtube_video_id"] not in indexed_video_ids]
-    return [
-        row["youtube_video_id"]
-        for row in sorted(
-            videos,
-            key=lambda row: (
-                row["upload_date"] or "",
-                row["youtube_video_id"],
-            ),
-            reverse=True,
+    watchlist_video_ids = {
+        row["video_id"]
+        for row in connection.rows(
+            "watchlist_videos",
+            columns=["video_id"],
         )
-    ]
+    }
+    if not watchlist_video_ids:
+        return []
+    watchlist_filter_values = filter_in_values(sorted(watchlist_video_ids))
+    indexed_video_ids = {
+        row["video_id"]
+        for row in connection.rows(
+            "video_embeddings",
+            where_sql=f"video_id IN ({watchlist_filter_values})",
+            columns=["video_id"],
+        )
+    }
+    exclusion_filter = ""
+    if indexed_video_ids:
+        exclusion_filter = f" AND youtube_video_id NOT IN ({filter_in_values(sorted(indexed_video_ids))})"
+    rows = connection.rows(
+        "videos",
+        where_sql=(f"youtube_video_id IN ({watchlist_filter_values}) AND transcript IS NOT NULL AND transcript != ''{exclusion_filter}"),
+        columns=[
+            "youtube_video_id",
+            "upload_date",
+        ],
+        order_by=[
+            ("upload_date", False),
+            ("youtube_video_id", False),
+        ],
+    )
+    return [row["youtube_video_id"] for row in rows]
 
 
 def list_recent_watchlist_video_payloads(
@@ -156,25 +211,45 @@ def list_recent_watchlist_video_payloads(
     channel_identities: list[ChannelIdentity] | None = None,
 ) -> list[dict[str, Any]]:
     """Recent watchlist reads are projections only; sync and transcript hydration own mutations."""
-    watched_ids = {row["channel_id"] for row in connection.rows("channels_watchlist")}
+    watched_ids = {
+        row["channel_id"]
+        for row in connection.rows(
+            "channels_watchlist",
+            columns=["channel_id"],
+        )
+    }
     allowed_channel_ids = filter_channel_ids(connection, channel_identities)
-    rows = [
-        row
-        for row in connection.rows("videos")
-        if row["channel_id"] in watched_ids
-        and row["upload_date"] is not None
-        and row["upload_date"] >= cutoff_upload_date
-        and (allowed_channel_ids is None or row["channel_id"] in allowed_channel_ids)
-    ]
-    rows = sorted(
-        rows,
-        key=lambda row: (
-            row["upload_date"] or "",
-            row["youtube_video_id"],
-        ),
-        reverse=True,
+    selected_channel_ids = watched_ids if allowed_channel_ids is None else watched_ids & allowed_channel_ids
+    if not selected_channel_ids:
+        return []
+    rows = connection.rows(
+        "videos",
+        where_sql=(f"channel_id IN ({filter_in_values(sorted(selected_channel_ids))}) AND upload_date IS NOT NULL AND upload_date >= {filter_literal(cutoff_upload_date)}"),
+        order_by=[
+            ("upload_date", False),
+            ("youtube_video_id", False),
+        ],
     )
-    return [watchlist_video_payload(video_payload_row(connection, row)) for row in rows]
+    channel_handles = {
+        row["youtube_channel_id"]: row["channel_handle"]
+        for row in connection.rows(
+            "channels",
+            where_sql=f"youtube_channel_id IN ({filter_in_values(sorted(selected_channel_ids))})",
+            columns=[
+                "youtube_channel_id",
+                "channel_handle",
+            ],
+        )
+    }
+    return [
+        watchlist_video_payload(
+            {
+                **row,
+                "channel_handle": channel_handles.get(row["channel_id"]),
+            }
+        )
+        for row in rows
+    ]
 
 
 def filter_channel_ids(
