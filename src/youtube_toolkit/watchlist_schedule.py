@@ -279,7 +279,7 @@ def launch_agent_path(label: str) -> Path:
 
 def project_root() -> Path:
     """Return the repository root used as the scheduled command working directory."""
-    return Path(__file__).resolve().parents[1]
+    return Path(__file__).resolve().parents[2]
 
 
 def launchctl_domain() -> str:
