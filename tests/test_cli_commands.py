@@ -221,7 +221,7 @@ def test_interactive_setup_uses_section_menu(
     monkeypatch.setenv("HOME", str(home))
     for key in MODEL_CONFIG_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setattr(commands, "setup_interactive_terminal", lambda: True)
+    monkeypatch.setattr(commands.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(commands, "read_setup_key", lambda: next(keys))
 
     assert main(["setup", "--no-verify"]) == 0

@@ -250,7 +250,7 @@ def build_watchlist_schedule_plist(
         "StandardErrorPath": str(storage_home / "watchlist-scheduled-sync.err.log"),
         "StandardOutPath": str(storage_home / "watchlist-scheduled-sync.out.log"),
         "StartInterval": options.minutes * 60,
-        "WorkingDirectory": str(project_root()),
+        "WorkingDirectory": str(Path(__file__).resolve().parents[2]),
     }
 
 
@@ -275,11 +275,6 @@ def ensure_launchd_supported() -> None:
 def launch_agent_path(label: str) -> Path:
     """Return the user LaunchAgents plist path for a scheduler label."""
     return Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
-
-
-def project_root() -> Path:
-    """Return the repository root used as the scheduled command working directory."""
-    return Path(__file__).resolve().parents[2]
 
 
 def launchctl_domain() -> str:
