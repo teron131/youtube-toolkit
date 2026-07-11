@@ -5,7 +5,7 @@ from .identity import ChannelRef, ChannelRefInput, VideoRef, VideoRefInput, YouT
 from .model_config import EmbeddingConfig, ModelConfig
 from .schemas import TranscriptDocument, TranscriptSection, VideoMetadata
 from .search import ChannelTarget, SearchRequest, search as run_search
-from .youtube import SearchOptions, TranscriptOptions, fetch_transcript, search_videos
+from .youtube import TranscriptOptions, fetch_transcript
 
 __all__ = [
     "ChannelRef",
@@ -13,7 +13,6 @@ __all__ = [
     "ChannelTarget",
     "EmbeddingConfig",
     "ModelConfig",
-    "SearchOptions",
     "SearchRequest",
     "TranscriptDocument",
     "TranscriptOptions",
@@ -27,5 +26,4 @@ __all__ = [
     "fetch_transcript",
     "normalize_youtube_url",
     "run_search",
-    "search_videos",
 ]

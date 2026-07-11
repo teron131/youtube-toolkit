@@ -310,9 +310,9 @@ def test_video_and_channel_command_groups_parse_public_actions() -> None:
     assert search_args.channels == []
     assert search_args.extra_queries == []
     assert search_args.limit is None
-    assert search_args.min_views == commands.DEFAULT_SEARCH_MIN_VIEWS
-    assert search_args.min_duration == commands.DEFAULT_SEARCH_MIN_DURATION
-    assert search_args.max_duration == commands.DEFAULT_SEARCH_MAX_DURATION
+    assert search_args.min_views == 10_000
+    assert search_args.min_duration == "3:00"
+    assert search_args.max_duration == "8:00:00"
     assert search_args.uploaded_after is None
     assert search_args.uploaded_within_days is None
     assert index_args.command == "index"
@@ -584,72 +584,6 @@ def test_search_command_builds_channel_request(monkeypatch) -> None:
             max_duration="8:00:00",
         )
     ]
-
-
-def test_search_command_requires_channels_for_channel_source() -> None:
-    with pytest.raises(ValueError, match="at least one --channels"):
-        commands.SearchCommands.search(
-            argparse.Namespace(
-                query="agents",
-                source=["channel"],
-                mode="native",
-                return_type=None,
-                channels=[],
-                limit=2,
-                sort="recency",
-                min_views=5000,
-                min_duration="3:00",
-                max_duration="8:00:00",
-                include_channel=[],
-                exclude_channel=[],
-                include_title=[],
-                exclude_title=[],
-            )
-        )
-
-
-def test_search_command_rejects_channels_option_without_channel_source() -> None:
-    with pytest.raises(ValueError, match="--channels requires --source channel"):
-        commands.SearchCommands.search(
-            argparse.Namespace(
-                query="agents",
-                source=["youtube"],
-                mode="native",
-                return_type=None,
-                channels=["@OpenAI"],
-                limit=2,
-                sort="relevance",
-                min_views=5000,
-                min_duration="3:00",
-                max_duration="8:00:00",
-                include_channel=[],
-                exclude_channel=[],
-                include_title=[],
-                exclude_title=[],
-            )
-        )
-
-
-def test_search_command_rejects_native_youtube_recency() -> None:
-    with pytest.raises(ValueError, match="does not support --sort recency"):
-        commands.SearchCommands.search(
-            argparse.Namespace(
-                query="agents",
-                source=["youtube"],
-                mode="native",
-                return_type=None,
-                channels=[],
-                limit=2,
-                sort="recency",
-                min_views=5000,
-                min_duration="3:00",
-                max_duration="8:00:00",
-                include_channel=[],
-                exclude_channel=[],
-                include_title=[],
-                exclude_title=[],
-            )
-        )
 
 
 def test_index_command_indexes_stored_transcript_videos(

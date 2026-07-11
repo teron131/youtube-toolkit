@@ -11,9 +11,6 @@ from ..watchlist_schedule import (
     DEFAULT_WATCHLIST_SCHEDULE_MINUTES,
 )
 from .commands import (
-    DEFAULT_SEARCH_MAX_DURATION,
-    DEFAULT_SEARCH_MIN_DURATION,
-    DEFAULT_SEARCH_MIN_VIEWS,
     BlacklistCommands,
     ChannelCommands,
     IndexCommands,
@@ -23,6 +20,10 @@ from .commands import (
     WatchlistCommands,
     run_doctor,
 )
+
+DEFAULT_SEARCH_MIN_VIEWS = 10_000
+DEFAULT_SEARCH_MIN_DURATION = "3:00"
+DEFAULT_SEARCH_MAX_DURATION = "8:00:00"
 
 
 class YoutubeArgumentParser(argparse.ArgumentParser):
