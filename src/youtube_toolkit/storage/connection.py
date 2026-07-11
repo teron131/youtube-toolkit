@@ -471,7 +471,7 @@ def resolve_storage_dir() -> Path:
     if configured_storage_home:
         return Path(configured_storage_home).expanduser().resolve()
 
-    source_root = Path(__file__).resolve().parents[2]
+    source_root = Path(__file__).resolve().parents[3]
     if (source_root / ".git").exists() or (source_root / "pyproject.toml").exists():
         return source_root / STORAGE_DIRNAME
     return _resolve_user_state_dir()
