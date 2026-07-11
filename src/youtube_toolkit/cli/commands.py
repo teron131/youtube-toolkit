@@ -311,7 +311,7 @@ class SetupCommands:
     @staticmethod
     def models(args: argparse.Namespace) -> ModelSetupResult:
         """Model setup either opens the terminal menu or saves supplied flags directly."""
-        if setup_interactive_terminal() and setup_args_missing(args):
+        if sys.stdin.isatty() and setup_args_missing(args):
             return run_model_setup_menu(args)
 
         draft = prompt_model_setup(args)
@@ -709,11 +709,6 @@ def setup_args_missing(args: argparse.Namespace) -> bool:
             "llm_model",
         )
     )
-
-
-def setup_interactive_terminal() -> bool:
-    """The raw-key setup menu requires an interactive stdin."""
-    return sys.stdin.isatty()
 
 
 def setup_text_value(

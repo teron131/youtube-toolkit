@@ -53,7 +53,18 @@ class SpeechTranscription:
     @classmethod
     def from_elevenlabs_stt(cls, response: dict[str, Any]) -> SpeechTranscription:
         """Translate ElevenLabs STT JSON, including multichannel output, into one transcription result."""
-        text = normalize_text(response.get("text")) or extract_multichannel_text(response)
+        text = normalize_text(response.get("text"))
+        if text is None:
+            transcripts = response.get("transcripts")
+            if isinstance(transcripts, list):
+                transcript_texts: list[str] = []
+                for transcript in transcripts:
+                    if not isinstance(transcript, dict):
+                        continue
+                    transcript_text = normalize_text(transcript.get("text"))
+                    if transcript_text is not None:
+                        transcript_texts.append(transcript_text)
+                text = " ".join(transcript_texts) or None
         if text is None:
             raise ValueError("ElevenLabs STT response did not include transcript text")
 
@@ -80,15 +91,7 @@ def transcribe_audio(
     options: SpeechToTextOptions | None = None,
 ) -> str:
     """Return only transcript text for callers that do not need provider metadata."""
-    options = options or SpeechToTextOptions()
-    response = _request_provider_response(
-        _existing_audio_path(audio_path),
-        options=options,
-    )
-    return _parse_transcription(
-        response,
-        provider=options.provider,
-    ).text
+    return transcribe_audio_details(audio_path, options=options).text
 
 
 def transcribe_audio_details(
@@ -97,21 +100,18 @@ def transcribe_audio_details(
     options: SpeechToTextOptions | None = None,
 ) -> SpeechTranscription:
     """Preserve normalized provider metadata for storage and transcript-document workflows."""
-    options = options or SpeechToTextOptions()
-    response = _request_provider_response(
-        _existing_audio_path(audio_path),
-        options=options,
-    )
-    return _parse_transcription(
-        response,
-        provider=options.provider,
-    )
-
-
-def _existing_audio_path(audio_path: Path) -> Path:
     if not audio_path.is_file():
         raise ValueError(f"audio file does not exist: {audio_path}")
-    return audio_path
+    options = options or SpeechToTextOptions()
+    response = _request_provider_response(
+        audio_path,
+        options=options,
+    )
+    if options.provider == "xai":
+        return SpeechTranscription.from_xai_stt(response)
+    if options.provider == "elevenlabs":
+        return SpeechTranscription.from_elevenlabs_stt(response)
+    raise ValueError(f"Unsupported speech-to-text provider: {options.provider}")
 
 
 def _request_provider_response(
@@ -159,33 +159,6 @@ def _provider_api_key(
     if not api_key:
         raise ValueError(f"{env_var} is required for {provider_name} speech-to-text")
     return api_key
-
-
-def _parse_transcription(
-    response: dict[str, Any],
-    *,
-    provider: SpeechToTextProvider,
-) -> SpeechTranscription:
-    if provider == "xai":
-        return SpeechTranscription.from_xai_stt(response)
-    if provider == "elevenlabs":
-        return SpeechTranscription.from_elevenlabs_stt(response)
-    raise ValueError(f"Unsupported speech-to-text provider: {provider}")
-
-
-def extract_multichannel_text(response: dict[str, Any]) -> str | None:
-    """Join ElevenLabs multichannel transcript text into one storage-ready transcript string."""
-    transcripts = response.get("transcripts")
-    if not isinstance(transcripts, list):
-        return None
-    transcript_texts: list[str] = []
-    for transcript in transcripts:
-        if not isinstance(transcript, dict):
-            continue
-        transcript_text = normalize_text(transcript.get("text"))
-        if transcript_text:
-            transcript_texts.append(transcript_text)
-    return " ".join(transcript_texts) or None
 
 
 def run_json_request(

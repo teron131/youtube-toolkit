@@ -537,11 +537,6 @@ def resolve_storage_dir() -> Path:
     source_root = Path(__file__).resolve().parents[3]
     if (source_root / ".git").exists() or (source_root / "pyproject.toml").exists():
         return source_root / STORAGE_DIRNAME
-    return _resolve_user_state_dir()
-
-
-def _resolve_user_state_dir() -> Path:
-    """Resolve the per-user app state directory for installed CLI usage."""
     return Path.home() / "Library" / "Application Support" / APP_STATE_DIRNAME
 
 

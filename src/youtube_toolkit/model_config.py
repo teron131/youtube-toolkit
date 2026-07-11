@@ -122,10 +122,6 @@ def config_value(name: str) -> str | None:
     """Read one supported model setting from environment first, then app-local config."""
     if name not in MODEL_CONFIG_KEYS:
         raise ValueError(f"Unsupported model config key: {name}")
-    return env_or_app_config_value(name)
-
-
-def env_or_app_config_value(name: str) -> str | None:
     value = os.environ.get(name, "").strip()
     if value:
         return value
@@ -176,7 +172,19 @@ def app_config_path() -> Path:
 
 def app_config_values() -> dict[str, str]:
     """Read persisted app-local model settings without consulting the environment."""
-    return dotenv_values(app_config_path())
+    file_path = app_config_path()
+    if not file_path.exists():
+        return {}
+    values: dict[str, str] = {}
+    for line in file_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, raw_value = stripped.split("=", 1)
+        value = raw_value.strip().strip("'\"")
+        if key.strip():
+            values[key.strip()] = value
+    return values
 
 
 def write_model_config(updates: Mapping[str, str | int | None]) -> Path:
@@ -199,19 +207,3 @@ def write_model_config(updates: Mapping[str, str | int | None]) -> Path:
     file_path.write_text(text, encoding="utf-8")
     file_path.chmod(0o600)
     return file_path
-
-
-def dotenv_values(file_path: Path) -> dict[str, str]:
-    """Only the app config writer's flat KEY=value format is parsed here."""
-    if not file_path.exists():
-        return {}
-    values: dict[str, str] = {}
-    for line in file_path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, raw_value = stripped.split("=", 1)
-        value = raw_value.strip().strip("'\"")
-        if key.strip():
-            values[key.strip()] = value
-    return values
