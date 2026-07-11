@@ -77,10 +77,10 @@ def upsert_video_summary(
     if not clean_summary:
         raise ValueError("Video summary cannot be empty")
 
-    connection.upsert_rows(
+    connection.update_where(
         "videos",
-        "youtube_video_id",
-        [{**row, "summary": clean_summary}],
+        f"youtube_video_id = {filter_literal(youtube_video_id)}",
+        {"summary": clean_summary},
     )
     return youtube_video_id
 
@@ -222,26 +222,11 @@ def refresh_video_transcript_chunk_metadata(
     video: dict[str, Any],
 ) -> None:
     """Refresh derived chunk filter columns without changing chunk embeddings."""
-    rows = connection.rows(
-        "video_transcript_chunks",
-        where_sql=f"video_id = {filter_literal(video['youtube_video_id'])}",
-    )
-    if not rows:
-        return
     metadata = transcript_chunk_metadata(video_payload_row(connection, video))
-    connection.upsert_rows(
+    connection.update_where(
         "video_transcript_chunks",
-        [
-            "video_id",
-            "chunk_index",
-        ],
-        [
-            {
-                **row,
-                **metadata,
-            }
-            for row in rows
-        ],
+        f"video_id = {filter_literal(video['youtube_video_id'])}",
+        metadata,
     )
 
 
@@ -272,13 +257,10 @@ def clear_video_summary(
     youtube_video_id: str,
 ) -> None:
     """Clear cached summary data for a stored video."""
-    row = find_video_row(connection, youtube_video_id)
-    if row is None:
-        return
-    connection.upsert_rows(
+    connection.update_where(
         "videos",
-        "youtube_video_id",
-        [{**row, "summary": None}],
+        f"youtube_video_id = {filter_literal(youtube_video_id)}",
+        {"summary": None},
     )
 
 

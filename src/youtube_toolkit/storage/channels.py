@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..schemas import ChannelIdentity
-from .connection import LanceConnection, filter_in_values
+from .connection import LanceConnection, filter_equal, filter_in_values
 
 
 def upsert_channel(
@@ -40,14 +40,21 @@ def find_matching_channel_rows(
     channel_identity: ChannelIdentity,
 ) -> list[dict[str, Any]]:
     """Find stored channels that match either side of a partial channel identity."""
-    return sorted(
-        [
-            row
-            for row in connection.rows("channels")
-            if (channel_identity.youtube_channel_id is not None and row["youtube_channel_id"] == channel_identity.youtube_channel_id)
-            or (channel_identity.channel_handle is not None and row["channel_handle"] == channel_identity.channel_handle)
+    predicates = []
+    if channel_identity.youtube_channel_id is not None:
+        predicates.append(filter_equal("youtube_channel_id", channel_identity.youtube_channel_id))
+    if channel_identity.channel_handle is not None:
+        predicates.append(filter_equal("channel_handle", channel_identity.channel_handle))
+    if not predicates:
+        return []
+    return connection.rows(
+        "channels",
+        where_sql=" OR ".join(f"({predicate})" for predicate in predicates),
+        columns=[
+            "youtube_channel_id",
+            "channel_handle",
         ],
-        key=lambda row: row["youtube_channel_id"] or "",
+        order_by=[("youtube_channel_id", True)],
     )
 
 
@@ -105,23 +112,18 @@ def merge_duplicate_channel_references(
     duplicate_channel_ids: list[str],
 ) -> None:
     """Retarget videos and channel membership tables from duplicate IDs to the final ID."""
-    duplicate_ids = set(duplicate_channel_ids)
-    videos = [
-        {
-            **row,
-            "channel_id": final_channel_id,
-        }
-        for row in connection.rows("videos")
-        if row["channel_id"] in duplicate_ids
-    ]
-    connection.upsert_rows("videos", "youtube_video_id", videos)
+    duplicate_filter = f"channel_id IN ({filter_in_values(duplicate_channel_ids)})"
+    connection.update_where(
+        "videos",
+        duplicate_filter,
+        {"channel_id": final_channel_id},
+    )
     for table_name in ("channels_watchlist", "channels_blacklist"):
-        existing_ids = {row["channel_id"] for row in connection.rows(table_name)}
-        if existing_ids & duplicate_ids:
+        if connection.count_rows(table_name, where_sql=duplicate_filter):
             connection.upsert_rows(table_name, "channel_id", [{"channel_id": final_channel_id}])
             connection.delete_where(
                 table_name,
-                f"channel_id IN ({filter_in_values(duplicate_channel_ids)})",
+                duplicate_filter,
             )
 
 
@@ -141,7 +143,14 @@ def clear_channel_video_embeddings(
     youtube_channel_id: str,
 ) -> None:
     """Clear video embeddings affected by channel identity changes."""
-    video_ids = [row["youtube_video_id"] for row in connection.rows("videos") if row["channel_id"] == youtube_channel_id]
+    video_ids = [
+        row["youtube_video_id"]
+        for row in connection.rows(
+            "videos",
+            where_sql=filter_equal("channel_id", youtube_channel_id),
+            columns=["youtube_video_id"],
+        )
+    ]
     if not video_ids:
         return
     connection.delete_where(

@@ -36,22 +36,35 @@ def delete_blacklist_channel(
     if not channel_ids:
         return False
 
-    existing_ids = {row["channel_id"] for row in connection.rows("channels_blacklist") if row["channel_id"] in set(channel_ids)}
-    if not existing_ids:
-        return False
-
-    connection.delete_where(
-        "channels_blacklist",
-        f"channel_id IN ({filter_in_values(channel_ids)})",
+    return (
+        connection.delete_where(
+            "channels_blacklist",
+            f"channel_id IN ({filter_in_values(channel_ids)})",
+        )
+        > 0
     )
-    return True
 
 
 def list_blacklist_channel_identities(connection: LanceConnection) -> list[ChannelIdentity]:
     """Return blacklisted channel identities in stable display order."""
-    blacklisted_ids = {row["channel_id"] for row in connection.rows("channels_blacklist")}
+    blacklisted_ids = {
+        row["channel_id"]
+        for row in connection.rows(
+            "channels_blacklist",
+            columns=["channel_id"],
+        )
+    }
+    if not blacklisted_ids:
+        return []
     rows = sorted(
-        [row for row in connection.rows("channels") if row["youtube_channel_id"] in blacklisted_ids],
+        connection.rows(
+            "channels",
+            where_sql=f"youtube_channel_id IN ({filter_in_values(sorted(blacklisted_ids))})",
+            columns=[
+                "youtube_channel_id",
+                "channel_handle",
+            ],
+        ),
         key=lambda row: row["channel_handle"] or row["youtube_channel_id"] or "",
     )
     return [

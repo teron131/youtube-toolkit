@@ -8,6 +8,7 @@ from typing import Any, Literal, NotRequired, TypedDict
 
 import lancedb
 from lancedb.index import FTS, BTree
+from lancedb.query import ColumnOrdering
 from lancedb.table import Table
 import pyarrow as pa
 
@@ -16,7 +17,8 @@ APP_STATE_DIRNAME = "youtube-toolkit"
 DATABASE_FILENAME = "youtube.lancedb"
 DATABASE_SCHEMA_REPAIR = "Run youtube setup database to create a fresh LanceDB store"
 MAX_TABLE_SCAN_ROWS = 100_000
-TRANSCRIPT_CHUNK_TEXT_INDEX = "transcript_chunk_text_idx"
+SMALL_FRAGMENT_OPTIMIZE_THRESHOLD = 20
+UNINDEXED_ROW_OPTIMIZE_THRESHOLD = 100_000
 VIDEO_TITLE_TEXT_INDEX = "video_title_text_idx"
 SEARCH_CANDIDATE_TITLE_TEXT_INDEX = "search_candidate_title_text_idx"
 TRANSCRIPT_CHUNK_METADATA_TYPES = {
@@ -153,6 +155,7 @@ class LanceConnection:
     ) -> None:
         self.path = path
         self.database = lancedb.connect(path)
+        self._mutated_tables: set[str] = set()
         self.ensure_base_tables()
         self.ensure_base_scalar_indexes()
         self.ensure_optional_table_indexes()
@@ -160,8 +163,31 @@ class LanceConnection:
     def __enter__(self) -> LanceConnection:
         return self
 
-    def __exit__(self, *_exc: object) -> None:
-        return None
+    def __exit__(
+        self,
+        exception_type: type[BaseException] | None,
+        _exception: BaseException | None,
+        _traceback: object | None,
+    ) -> None:
+        if exception_type is None:
+            self.optimize_mutated_tables()
+
+    def optimize_mutated_tables(self) -> None:
+        """Compact fragmented tables or refresh indexes only after maintenance thresholds are reached."""
+        for table_name in sorted(self._mutated_tables):
+            table = self.optional_table(table_name)
+            if table is not None and self.table_needs_optimization(table):
+                table.optimize()
+        self._mutated_tables.clear()
+
+    def table_needs_optimization(self, table: Table) -> bool:
+        """Return whether table fragmentation or index lag has crossed a maintenance threshold."""
+        table_stats: Any = table.stats()
+        if table_stats["fragment_stats"]["num_small_fragments"] >= SMALL_FRAGMENT_OPTIMIZE_THRESHOLD:
+            return True
+        return any(
+            index_stats.num_unindexed_rows >= UNINDEXED_ROW_OPTIMIZE_THRESHOLD for index in table.list_indices() if (index_stats := table.index_stats(index.name)) is not None
+        )
 
     def ensure_base_tables(self) -> None:
         """Create the required scalar tables if this is a fresh store."""
@@ -174,7 +200,7 @@ class LanceConnection:
             self.ensure_scalar_indexes(table_name)
 
     def ensure_optional_table_indexes(self) -> None:
-        """Refresh indexes and metadata columns for optional embedding tables when present."""
+        """Ensure indexes and current chunk metadata columns for optional embedding tables."""
         self.ensure_scalar_indexes("video_embeddings")
         self.ensure_scalar_indexes("video_title_embeddings")
         self.ensure_video_title_text_index()
@@ -183,7 +209,6 @@ class LanceConnection:
         if self.ensure_transcript_chunk_metadata_columns():
             self.backfill_transcript_chunk_metadata()
         self.ensure_scalar_indexes("video_transcript_chunks")
-        self.ensure_transcript_chunk_text_index()
 
     def ensure_table(
         self,
@@ -316,8 +341,6 @@ class LanceConnection:
     def ensure_scalar_indexes(
         self,
         table_name: str,
-        *,
-        refresh: bool = False,
     ) -> None:
         """Ensure configured B-tree indexes for a table when it exists."""
         table = self.optional_table(table_name)
@@ -326,7 +349,7 @@ class LanceConnection:
         index_names = {index.name for index in table.list_indices()}
         for column_name in SCALAR_INDEX_COLUMNS.get(table_name, ()):
             index_name = f"{table_name}_{column_name}_idx"
-            if not refresh and index_name in index_names:
+            if index_name in index_names:
                 continue
             table.create_index(
                 column_name,
@@ -335,29 +358,12 @@ class LanceConnection:
                 replace=True,
             )
 
-    def ensure_transcript_chunk_text_index(self) -> None:
-        """Ensure the full-text index over transcript chunk text exists."""
-        table = self.optional_table("video_transcript_chunks")
-        if table is None:
-            return
-        if any(index.name == TRANSCRIPT_CHUNK_TEXT_INDEX for index in table.list_indices()):
-            return
-        table.create_index(
-            "text",
-            config=FTS(base_tokenizer="icu"),
-            name=TRANSCRIPT_CHUNK_TEXT_INDEX,
-        )
-
-    def ensure_video_title_text_index(
-        self,
-        *,
-        refresh: bool = False,
-    ) -> None:
-        """Ensure or refresh the full-text index over stored video titles."""
+    def ensure_video_title_text_index(self) -> None:
+        """Ensure the full-text index over stored video titles exists."""
         table = self.optional_table("video_title_embeddings")
         if table is None:
             return
-        if not refresh and any(index.name == VIDEO_TITLE_TEXT_INDEX for index in table.list_indices()):
+        if any(index.name == VIDEO_TITLE_TEXT_INDEX for index in table.list_indices()):
             return
         table.create_index(
             "title",
@@ -366,16 +372,12 @@ class LanceConnection:
             replace=True,
         )
 
-    def ensure_search_candidate_title_text_index(
-        self,
-        *,
-        refresh: bool = False,
-    ) -> None:
-        """Ensure or refresh the full-text index over staged search candidate titles."""
+    def ensure_search_candidate_title_text_index(self) -> None:
+        """Ensure the full-text index over staged search candidate titles exists."""
         table = self.optional_table("search_candidate_title_embeddings")
         if table is None:
             return
-        if not refresh and any(index.name == SEARCH_CANDIDATE_TITLE_TEXT_INDEX for index in table.list_indices()):
+        if any(index.name == SEARCH_CANDIDATE_TITLE_TEXT_INDEX for index in table.list_indices()):
             return
         table.create_index(
             "title",
@@ -409,16 +411,43 @@ class LanceConnection:
         table_name: str,
         *,
         where_sql: str | None = None,
+        columns: list[str] | None = None,
+        order_by: list[tuple[str, bool]] | None = None,
         limit: int = MAX_TABLE_SCAN_ROWS,
     ) -> list[dict[str, Any]]:
-        """Return table rows with optional SQL filtering and a bounded scan limit."""
+        """Return projected and ordered table rows with optional SQL filtering and a bounded scan limit."""
         table = self.optional_table(table_name)
         if table is None:
             return []
         query = table.search()
         if where_sql is not None:
             query = query.where(where_sql)
+        if columns is not None:
+            query = query.select(columns)
+        if order_by is not None:
+            query = query.order_by(
+                [
+                    ColumnOrdering(
+                        column_name=column_name,
+                        ascending=ascending,
+                        nulls_first=False,
+                    )
+                    for column_name, ascending in order_by
+                ]
+            )
         return query.limit(limit).to_list()
+
+    def count_rows(
+        self,
+        table_name: str,
+        *,
+        where_sql: str | None = None,
+    ) -> int:
+        """Count matching rows without materializing them in Python."""
+        table = self.optional_table(table_name)
+        if table is None:
+            return 0
+        return table.count_rows(where_sql)
 
     def find_row(
         self,
@@ -440,22 +469,56 @@ class LanceConnection:
         key: str | list[str],
         rows: list[dict[str, Any]],
     ) -> None:
-        """Merge rows by key and refresh scalar indexes for the mutated table."""
+        """Merge rows by key and defer table maintenance until connection exit."""
         if not rows:
             return
         self.table(table_name).merge_insert(key).when_matched_update_all().when_not_matched_insert_all().execute(rows)
-        self.ensure_scalar_indexes(table_name, refresh=True)
+        self._mutated_tables.add(table_name)
+
+    def insert_if_absent(
+        self,
+        table_name: str,
+        key: str | list[str],
+        rows: list[dict[str, Any]],
+    ) -> bool:
+        """Insert rows only when their merge keys are absent and report whether any row was inserted."""
+        if not rows:
+            return False
+        result = self.table(table_name).merge_insert(key).when_not_matched_insert_all().execute(rows)
+        if result.num_inserted_rows == 0:
+            return False
+        self._mutated_tables.add(table_name)
+        return True
+
+    def update_where(
+        self,
+        table_name: str,
+        where_sql: str,
+        values: dict[str, Any],
+    ) -> int:
+        """Update matching rows natively and return the number of rows changed."""
+        table = self.optional_table(table_name)
+        if table is None:
+            return 0
+        rows_updated = table.update(where=where_sql, values=values).rows_updated
+        if rows_updated:
+            self._mutated_tables.add(table_name)
+        return rows_updated
 
     def delete_where(
         self,
         table_name: str,
         where_sql: str,
-    ) -> None:
-        """Delete rows from a table when that table exists."""
+    ) -> int:
+        """Delete matching rows and return the number removed when the table exists."""
         table = self.optional_table(table_name)
         if table is None:
-            return
-        table.delete(where_sql)
+            return 0
+        delete_result: Any = table.delete(where_sql)
+        rows_deleted = delete_result.num_deleted_rows
+        if rows_deleted:
+            self._mutated_tables.add(table_name)
+        return rows_deleted
 
 
 def get_connection() -> LanceConnection:
@@ -546,6 +609,14 @@ def filter_equal(
     else:
         literal = filter_literal(str(value))
     return f"{column_name} = {literal}"
+
+
+def filter_contains_case_insensitive(
+    column_name: str,
+    value: str,
+) -> str:
+    """Build a case-insensitive substring predicate for trusted storage columns."""
+    return f"contains(lower(coalesce({column_name}, '')), {filter_literal(value.casefold())})"
 
 
 def filter_in_values(values: list[str]) -> str:

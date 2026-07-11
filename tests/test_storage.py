@@ -34,7 +34,10 @@ from youtube_toolkit.storage import (
     upsert_video,
     upsert_video_summary,
 )
-from youtube_toolkit.storage.connection import SCALAR_INDEX_COLUMNS, TRANSCRIPT_CHUNK_TEXT_INDEX
+from youtube_toolkit.storage.connection import (
+    SCALAR_INDEX_COLUMNS,
+    filter_contains_case_insensitive,
+)
 
 
 def test_default_storage_path_is_repo_cache(monkeypatch, tmp_path) -> None:
@@ -98,6 +101,156 @@ def test_connection_creates_base_scalar_indexes(monkeypatch, tmp_path) -> None:
                 continue
             index_names = {index.name for index in connection.table(table_name).list_indices()}
             assert {f"{table_name}_{column_name}_idx" for column_name in column_names}.issubset(index_names)
+
+
+def test_connection_native_query_and_mutation_helpers(monkeypatch, tmp_path) -> None:
+    """Use native projection, ordering, count, insert-only, update, and delete contracts."""
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        connection.upsert_rows(
+            "watchlist_videos",
+            "video_id",
+            [
+                {
+                    "video_id": "known-video",
+                    "discovered_at": "2026-07-01T00:00:00+00:00",
+                },
+                {
+                    "video_id": "other-video",
+                    "discovered_at": "2026-07-02T00:00:00+00:00",
+                },
+            ],
+        )
+
+        assert connection.count_rows("watchlist_videos") == 2
+        assert (
+            connection.count_rows(
+                "watchlist_videos",
+                where_sql=filter_contains_case_insensitive("video_id", "KNOWN"),
+            )
+            == 1
+        )
+        assert connection.rows(
+            "watchlist_videos",
+            columns=["video_id"],
+            order_by=[("video_id", False)],
+        ) == [
+            {"video_id": "other-video"},
+            {"video_id": "known-video"},
+        ]
+        assert (
+            connection.insert_if_absent(
+                "watchlist_videos",
+                "video_id",
+                [
+                    {
+                        "video_id": "known-video",
+                        "discovered_at": "2026-07-03T00:00:00+00:00",
+                    }
+                ],
+            )
+            is False
+        )
+        known_video = connection.find_row("watchlist_videos", "video_id", "known-video")
+        assert known_video is not None
+        assert known_video["discovered_at"] == "2026-07-01T00:00:00+00:00"
+        assert (
+            connection.insert_if_absent(
+                "watchlist_videos",
+                "video_id",
+                [
+                    {
+                        "video_id": "new-video",
+                        "discovered_at": "2026-07-03T00:00:00+00:00",
+                    }
+                ],
+            )
+            is True
+        )
+        assert (
+            connection.update_where(
+                "watchlist_videos",
+                "video_id = 'other-video'",
+                {"discovered_at": "2026-07-04T00:00:00+00:00"},
+            )
+            == 1
+        )
+        assert connection.delete_where("watchlist_videos", "video_id = 'new-video'") == 1
+        assert connection.delete_where("watchlist_videos", "video_id = 'missing-video'") == 0
+
+
+def test_connection_exit_optimizes_only_clean_mutations_at_threshold(monkeypatch) -> None:
+    """Optimize cleanly closed mutated tables only after a maintenance threshold is reached."""
+    optimized_tables = []
+
+    class FakeIndex:
+        name = "test_idx"
+
+    class FakeIndexStats:
+        def __init__(self, num_unindexed_rows: int) -> None:
+            self.num_unindexed_rows = num_unindexed_rows
+
+    class FakeTable:
+        def __init__(
+            self,
+            name: str,
+            *,
+            num_small_fragments: int,
+            num_unindexed_rows: int,
+        ) -> None:
+            self.name = name
+            self.num_small_fragments = num_small_fragments
+            self.num_unindexed_rows = num_unindexed_rows
+
+        def stats(self) -> dict:
+            return {
+                "fragment_stats": {
+                    "num_small_fragments": self.num_small_fragments,
+                }
+            }
+
+        def list_indices(self) -> list[FakeIndex]:
+            return [FakeIndex()]
+
+        def index_stats(self, _index_name: str) -> FakeIndexStats:
+            return FakeIndexStats(self.num_unindexed_rows)
+
+        def optimize(self) -> None:
+            optimized_tables.append(self.name)
+
+    tables = {
+        "fragmented": FakeTable(
+            "fragmented",
+            num_small_fragments=20,
+            num_unindexed_rows=0,
+        ),
+        "index-lagged": FakeTable(
+            "index-lagged",
+            num_small_fragments=19,
+            num_unindexed_rows=100_000,
+        ),
+        "below-threshold": FakeTable(
+            "below-threshold",
+            num_small_fragments=19,
+            num_unindexed_rows=99_999,
+        ),
+    }
+    connection = object.__new__(storage_connection.LanceConnection)
+    connection._mutated_tables = set(tables)
+    monkeypatch.setattr(connection, "optional_table", tables.get)
+
+    connection.__exit__(RuntimeError, RuntimeError("failed"), None)
+    assert optimized_tables == []
+
+    connection.__exit__(None, None, None)
+    assert sorted(optimized_tables) == ["fragmented", "index-lagged"]
+    assert connection._mutated_tables == set()
+
+
+def test_filter_contains_case_insensitive_quotes_casefolded_value() -> None:
+    """Quote case-folded values while leaving trusted storage column names intact."""
+    assert filter_contains_case_insensitive("title", "GPU's") == "contains(lower(coalesce(title, '')), 'gpu''s')"
 
 
 def test_database_schema_health_warns_on_missing_lance_tables(tmp_path) -> None:
@@ -512,6 +665,40 @@ def test_search_stored_videos_defaults_to_upload_date_sort(
     ]
 
 
+def test_search_stored_videos_preserves_null_aware_popularity_sort(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "Market update",
+                "view_count": 0,
+                "like_count": 1,
+            },
+        )
+        upsert_video(
+            connection,
+            {
+                "id": "dQw4w9WgXcQ",
+                "title": "Market update",
+                "like_count": 100,
+            },
+        )
+        results = search_stored_videos(
+            connection,
+            "Market",
+            limit=1,
+            sort="popularity",
+        )
+
+    assert [result["video_id"] for result in results] == ["dQw4w9WgXcQ"]
+
+
 def test_search_stored_videos_rejects_relevance_sort_without_semantic_search(
     monkeypatch,
     tmp_path,
@@ -823,7 +1010,6 @@ def test_transcript_chunk_index_scores_best_matching_chunk(
             ],
             embed_text=fake_embed,
         )
-        transcript_chunk_indices = connection.table("video_transcript_chunks").list_indices()
         chunk_row = connection.find_row("video_transcript_chunks", "video_id", "JpSHyEIZ_bo")
         upsert_video(
             connection,
@@ -835,7 +1021,6 @@ def test_transcript_chunk_index_scores_best_matching_chunk(
         )
         updated_chunk_row = connection.find_row("video_transcript_chunks", "video_id", "JpSHyEIZ_bo")
 
-    assert any(index.name == TRANSCRIPT_CHUNK_TEXT_INDEX for index in transcript_chunk_indices)
     assert chunk_row is not None
     assert chunk_row["title"] == "GPU topic"
     assert chunk_row["channel_id"] == "UC123"
@@ -860,6 +1045,55 @@ def test_transcript_chunk_index_scores_best_matching_chunk(
     assert blocked_chunks == []
     assert "LanceRead" in explain_plan
     assert "AnalyzeExec" in analyze_plan
+
+
+def test_transcript_chunk_search_uses_cosine_distance_and_native_similarity_threshold(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    def non_unit_embed(text: str) -> list[float]:
+        if text == "query":
+            return [1.0, 0.0]
+        if "aligned" in text:
+            return [10.0, 0.0]
+        return [1.0, 1.0]
+
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "aaaaaaaaaaa",
+                "title": "Aligned vector",
+            },
+            transcript="aligned",
+        )
+        upsert_video(
+            connection,
+            {
+                "id": "bbbbbbbbbbb",
+                "title": "Closer by L2",
+            },
+            transcript="diagonal",
+        )
+        index_transcript_chunks(connection, "aaaaaaaaaaa", embed_text=non_unit_embed)
+        index_transcript_chunks(connection, "bbbbbbbbbbb", embed_text=non_unit_embed)
+        rows = search_transcript_chunks(
+            connection,
+            "query",
+            [
+                "aaaaaaaaaaa",
+                "bbbbbbbbbbb",
+            ],
+            limit=1,
+            min_similarity=1.0,
+            embed_text=non_unit_embed,
+        )
+
+    assert len(rows) == 1
+    assert rows[0]["video_id"] == "aaaaaaaaaaa"
+    assert rows[0]["similarity"] == pytest.approx(1.0)
 
 
 def test_index_video_embedding_persists_after_connection_close(

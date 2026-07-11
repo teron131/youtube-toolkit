@@ -180,9 +180,17 @@ def semantic_ready_ids(
     """Combine newly indexed and already stored chunk IDs that can satisfy semantic search."""
     video_ids = candidate_ids(candidates)
     indexed_ids = {str(result["video_id"]) for result in index_results if result.get("status") == "indexed" and result.get("video_id")}
+    if not video_ids:
+        return indexed_ids
     with get_connection() as connection:
-        requested_ids = set(video_ids)
-        stored_ids = {row["video_id"] for row in connection.rows("video_transcript_chunks") if row.get("video_id") in requested_ids and row.get("embedding") is not None}
+        stored_ids = {
+            row["video_id"]
+            for row in connection.rows(
+                "video_transcript_chunks",
+                where_sql=f"video_id IN ({filter_in_values(video_ids)}) AND embedding IS NOT NULL",
+                columns=["video_id"],
+            )
+        }
     return indexed_ids | stored_ids
 
 
@@ -262,6 +270,7 @@ def search_chunks(
             query,
             video_ids,
             limit=request.limit,
+            columns=["video_id", "chunk_index", "text"],
             min_similarity=request.result_min_similarity,
         )
         videos = chunk_videos(connection, rows)

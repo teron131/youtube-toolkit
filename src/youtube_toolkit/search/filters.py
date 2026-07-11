@@ -9,7 +9,7 @@ from typing import Any
 from ..identity import extract_video_id
 from ..schemas import ChannelIdentity, extract_channel_identity
 from ..storage import get_connection, list_blacklist_channel_identities
-from ..storage.connection import filter_in_values
+from ..storage.connection import filter_contains_case_insensitive, filter_in_values, filter_literal
 from .request import (
     VIDEO_RESULT_KEYS,
     SearchRequest,
@@ -315,6 +315,50 @@ def db_chunk_filter(
     blacklisted_channels: tuple[ChannelIdentity, ...],
 ) -> str | None:
     """Translate DB-applicable search filters into a SQL fragment for chunk search."""
+    clauses = db_metadata_filter_clauses(request)
+
+    blacklisted_channel_ids = [channel.youtube_channel_id for channel in blacklisted_channels if channel.youtube_channel_id is not None]
+    if blacklisted_channel_ids:
+        clauses.append(f"(channel_id IS NULL OR channel_id NOT IN ({filter_in_values(blacklisted_channel_ids)}))")
+
+    blacklisted_handles = [channel.channel_handle for channel in blacklisted_channels if channel.channel_handle is not None]
+    if blacklisted_handles:
+        clauses.append(f"(channel_handle IS NULL OR channel_handle NOT IN ({filter_in_values(blacklisted_handles)}))")
+
+    add_text_filter_clauses(
+        clauses,
+        columns=(
+            "channel_id",
+            "channel_handle",
+        ),
+        include=request.include_channel,
+        exclude=request.exclude_channel,
+        channel_aliases=True,
+    )
+
+    if not clauses:
+        return None
+    return " AND ".join(f"({clause})" for clause in clauses)
+
+
+def db_video_filter(
+    request: SearchRequest,
+    blacklisted_channels: tuple[ChannelIdentity, ...],
+) -> str | None:
+    """Translate filters owned by stored video columns into a native LanceDB predicate."""
+    clauses = db_metadata_filter_clauses(request)
+
+    blacklisted_channel_ids = [channel.youtube_channel_id for channel in blacklisted_channels if channel.youtube_channel_id is not None]
+    if blacklisted_channel_ids:
+        clauses.append(f"(channel_id IS NULL OR channel_id NOT IN ({filter_in_values(blacklisted_channel_ids)}))")
+
+    if not clauses:
+        return None
+    return " AND ".join(f"({clause})" for clause in clauses)
+
+
+def db_metadata_filter_clauses(request: SearchRequest) -> list[str]:
+    """Build native numeric, date, and title clauses shared by stored DB searches."""
     clauses: list[str] = []
     if request.min_views is not None:
         clauses.append(f"view_count >= {request.min_views}")
@@ -328,19 +372,43 @@ def db_chunk_filter(
 
     cutoff = upload_cutoff(request)
     if cutoff is not None:
-        clauses.append(f"upload_date >= '{cutoff}'")
+        clauses.append(f"upload_date >= {filter_literal(cutoff)}")
 
-    blacklisted_channel_ids = [channel.youtube_channel_id for channel in blacklisted_channels if channel.youtube_channel_id is not None]
-    if blacklisted_channel_ids:
-        clauses.append(f"(channel_id IS NULL OR channel_id NOT IN ({filter_in_values(blacklisted_channel_ids)}))")
+    add_text_filter_clauses(
+        clauses,
+        columns=("title",),
+        include=request.include_title,
+        exclude=request.exclude_title,
+    )
+    return clauses
 
-    blacklisted_handles = [channel.channel_handle for channel in blacklisted_channels if channel.channel_handle is not None]
-    if blacklisted_handles:
-        clauses.append(f"(channel_handle IS NULL OR channel_handle NOT IN ({filter_in_values(blacklisted_handles)}))")
 
-    if not clauses:
-        return None
-    return " AND ".join(f"({clause})" for clause in clauses)
+def add_text_filter_clauses(
+    clauses: list[str],
+    *,
+    columns: tuple[str, ...],
+    include: tuple[str, ...],
+    exclude: tuple[str, ...],
+    channel_aliases: bool = False,
+) -> None:
+    """Append native all-include and any-exclude substring rules for trusted columns."""
+    for needle in include:
+        clauses.append(text_filter_clause(columns, needle, channel_aliases=channel_aliases))
+    for needle in exclude:
+        clauses.append(f"NOT ({text_filter_clause(columns, needle, channel_aliases=channel_aliases)})")
+
+
+def text_filter_clause(
+    columns: tuple[str, ...],
+    needle: str,
+    *,
+    channel_aliases: bool,
+) -> str:
+    """Build one case-insensitive substring rule across equivalent stored text columns."""
+    predicates = [filter_contains_case_insensitive(column_name, needle) for column_name in columns]
+    if channel_aliases and needle.startswith("@") and len(needle) > 1:
+        predicates.extend(filter_contains_case_insensitive(column_name, needle[1:]) for column_name in columns)
+    return " OR ".join(f"({predicate})" for predicate in predicates)
 
 
 def upload_cutoff(request: SearchRequest) -> str | None:
