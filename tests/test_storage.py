@@ -55,10 +55,11 @@ def test_default_storage_path_is_repo_cache(monkeypatch, tmp_path) -> None:
 
 def test_installed_storage_path_is_user_app_state(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(storage_connection, "__file__", str(installed_connection_file(tmp_path)))
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    user_data_dir = tmp_path / "platform-data" / "youtube-toolkit"
+    monkeypatch.setattr(storage_connection, "user_data_path", lambda _app_name: user_data_dir)
     monkeypatch.delenv("YOUTUBE_TOOLKIT_STORAGE_HOME", raising=False)
 
-    assert resolve_storage_dir() == tmp_path / "home" / "Library" / "Application Support" / "youtube-toolkit"
+    assert resolve_storage_dir() == user_data_dir
 
 
 def installed_connection_file(tmp_path: Path) -> Path:

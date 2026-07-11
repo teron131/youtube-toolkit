@@ -126,13 +126,13 @@ The toolkit intentionally ships a small working surface:
 
 Search sources are selected with repeated `--source youtube|channel|db` flags. Use `--source channel --channels @OpenAI --channels @Anthropic` for channel-scoped discovery, `--source db` for stored rows, and `--mode semantic` when the answer should come from transcript embeddings rather than title/metadata matching. Semantic mode returns chunks by default; add `--return video` to get ranked videos instead.
 
-Storage lives in this checkout's `.cache/youtube.sqlite3` during source-checkout usage. Installed CLI usage stores the database at `~/Library/Application Support/youtube-toolkit/youtube.sqlite3`. Set `YOUTUBE_TOOLKIT_STORAGE_HOME` to move it.
+Storage lives in this checkout's `.cache/youtube.lancedb` during source-checkout usage. Installed CLI usage follows the platform data directory (`~/Library/Application Support/youtube-toolkit` on macOS, `~/.local/share/youtube-toolkit` on Linux, and Local AppData on Windows). Set `YOUTUBE_TOOLKIT_STORAGE_HOME` to move it.
 
 `doctor` inspects the database schema without creating, migrating, or repairing the file. If the schema is stale or unexpected, it reports a warning and points to the future `youtube setup database` repair flow.
 
 The schema source of truth is `youtube_toolkit/storage/schema.sql`; DB creation and doctor inspection both read that SQL file.
 
-Model configuration lives in `~/Library/Application Support/youtube-toolkit/config.env`. Bare `youtube setup` opens an Up/Down selector for embedding, LLM, settings, verification, and save. Flag-based usage stays scriptable: use `youtube setup --verify` to force a `Hello` check, `youtube setup --no-verify` to skip it, and `youtube setup --no-auto-embeddings` to keep transcript sync from indexing embeddings automatically. Environment variables override the file for one-off runs:
+Model configuration lives alongside installed CLI data in the platform data directory. Bare `youtube setup` opens an Up/Down selector for embedding, LLM, settings, verification, and save. Flag-based usage stays scriptable: use `youtube setup --verify` to force a `Hello` check, `youtube setup --no-verify` to skip it, and `youtube setup --no-auto-embeddings` to keep transcript sync from indexing embeddings automatically. Environment variables override the file for one-off runs:
 
 ```env
 EMBEDDING_API_KEY=
