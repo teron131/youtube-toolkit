@@ -109,6 +109,26 @@ def normalize_filter_date(value: str) -> str:
         raise ValueError("uploaded-after must be YYYY-MM-DD") from error
 
 
+def parse_duration(value: str | None) -> float | None:
+    """Parse seconds, MM:SS, or HH:MM:SS duration filters into seconds."""
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("duration filters must be non-empty")
+    if stripped.isdigit():
+        return float(stripped)
+
+    parts = stripped.split(":")
+    if not 2 <= len(parts) <= 3 or not all(part.isdigit() for part in parts):
+        raise ValueError(f"Invalid duration: {value}")
+
+    total_seconds = 0
+    for part in parts:
+        total_seconds = total_seconds * 60 + int(part)
+    return float(total_seconds)
+
+
 def resolve_return_type(request: SearchRequest) -> SearchReturnType:
     """Choose the default result shape from semantic mode while honoring explicit caller choice."""
     if request.return_type is not None:
@@ -131,6 +151,8 @@ def validate_request(request: SearchRequest) -> None:
     """Validate the public search contract before any network, storage, or embedding work starts."""
     if any(source not in get_args(SearchSource) for source in request.sources):
         raise ValueError("search source must be one of: youtube, channel, db")
+    if len(set(request.sources)) != len(request.sources):
+        raise ValueError("search sources must not contain duplicates")
     if request.mode not in get_args(SearchMode):
         raise ValueError("search mode must be one of: native, semantic")
     if request.return_type is not None and request.return_type not in get_args(SearchReturnType):
@@ -142,6 +164,12 @@ def validate_request(request: SearchRequest) -> None:
         raise ValueError("search query must be non-empty")
     if request.limit <= 0:
         raise ValueError("search limit must be greater than 0")
+    if request.min_views is not None and request.min_views < 0:
+        raise ValueError("--min-views cannot be negative")
+    min_duration_seconds = parse_duration(request.min_duration)
+    max_duration_seconds = parse_duration(request.max_duration)
+    if min_duration_seconds is not None and max_duration_seconds is not None and min_duration_seconds > max_duration_seconds:
+        raise ValueError("--min-duration cannot be greater than --max-duration")
     if request.title_prefilter_factor <= 0:
         raise ValueError("title prefilter factor must be greater than 0")
     if request.title_prefilter_min <= 0:
@@ -168,8 +196,12 @@ def validate_request(request: SearchRequest) -> None:
         raise ValueError("extra queries require youtube source")
     if request.return_type == "chunk" and request.mode != "semantic":
         raise ValueError("chunk return requires semantic mode")
+    if request.channels and "channel" not in request.sources:
+        raise ValueError("--channels requires --source channel")
     if "channel" in request.sources and not request.channels:
         raise ValueError("channel source requires at least one --channels value")
+    if request.mode == "native" and request.sources == ("youtube",) and request.sort == "recency":
+        raise ValueError("native YouTube search does not support --sort recency")
 
 
 def validate_similarity_threshold(

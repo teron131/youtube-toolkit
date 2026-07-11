@@ -7,9 +7,9 @@ import youtube_toolkit.search as search_package
 import youtube_toolkit.search.semantic as search_semantic
 import youtube_toolkit.search.workflow as search_workflow
 from youtube_toolkit.search import ChannelTarget, SearchRequest, search
+from youtube_toolkit.search.request import parse_duration
 from youtube_toolkit.schemas import ChannelIdentity, TranscriptChunk, TranscriptDocument, VideoMetadata
-from youtube_toolkit.storage import get_connection, get_stored_video, upsert_video
-from youtube_toolkit.youtube.search import SearchOptions, filter_entries, parse_duration
+from youtube_toolkit.storage import get_connection, get_stored_video, upsert_blacklist_channel, upsert_video
 
 
 @pytest.fixture(autouse=True)
@@ -115,10 +115,12 @@ def test_search_module_runs_youtube_source(
     def fake_youtube_search(
         query: str,
         *,
-        options: SearchOptions,
+        fetch_limit: int,
+        sort: str,
     ) -> list[dict]:
         calls["query"] = query
-        calls["options"] = options
+        calls["fetch_limit"] = fetch_limit
+        calls["sort"] = sort
         return [
             {"id": "aaaaaaaaaaa", "channel": "OpenAI", "view_count": 6_000, "duration": 600},
             {"id": "bbbbbbbbbbb", "channel": "OpenAI", "view_count": 7_000, "duration": 600},
@@ -174,12 +176,8 @@ def test_search_module_runs_youtube_source(
         },
     ]
     assert calls["query"] == "agent skills"
-    assert calls["options"] == SearchOptions(
-        limit=9,
-        min_views=None,
-        min_duration=None,
-        max_duration=None,
-    )
+    assert calls["fetch_limit"] == 9
+    assert calls["sort"] == "relevance"
     assert search_transcript_side_effects["fetched"] == []
     assert search_transcript_side_effects["indexed"] == []
 
@@ -191,9 +189,11 @@ def test_default_filters_run_before_youtube_date_metadata_fetch(
     def fake_youtube_search(
         query: str,
         *,
-        options: SearchOptions,
+        fetch_limit: int,
+        sort: str,
     ) -> list[dict]:
-        assert options.limit == 60
+        assert fetch_limit == 60
+        assert sort == "relevance"
         return [
             {
                 "id": "aaaaaaaaaaa",
@@ -264,9 +264,10 @@ def test_youtube_relevance_search_interlaces_extra_queries(
     def fake_youtube_search(
         query: str,
         *,
-        options: SearchOptions,
+        fetch_limit: int,
+        sort: str,
     ) -> list[dict]:
-        calls.append((query, options))
+        calls.append((query, fetch_limit, sort))
         return results_by_query[query]
 
     monkeypatch.setattr(search_workflow, "youtube_search", fake_youtube_search)
@@ -296,8 +297,11 @@ def test_youtube_relevance_search_interlaces_extra_queries(
         "A2",
         "B3",
     ]
-    assert [query for query, _options in calls] == ["alpha", "beta", "gamma"]
-    assert all(options == SearchOptions(limit=15, min_views=None, min_duration=None, max_duration=None) for _query, options in calls)
+    assert calls == [
+        ("alpha", 15, "relevance"),
+        ("beta", 15, "relevance"),
+        ("gamma", 15, "relevance"),
+    ]
     assert search_transcript_side_effects["fetched"] == []
 
 
@@ -319,8 +323,11 @@ def test_youtube_popularity_search_dedupes_and_sorts_by_popularity(
     def fake_youtube_search(
         query: str,
         *,
-        options: SearchOptions,
+        fetch_limit: int,
+        sort: str,
     ) -> list[dict]:
+        assert fetch_limit == 9
+        assert sort == "popularity"
         return results_by_query[query]
 
     monkeypatch.setattr(search_workflow, "youtube_search", fake_youtube_search)
@@ -428,9 +435,10 @@ def test_channel_search_resolves_names_before_fetching_listings(monkeypatch, tmp
     def fake_youtube_search(
         query: str,
         *,
-        options: SearchOptions,
+        fetch_limit: int,
+        sort: str,
     ) -> list[dict]:
-        search_queries.append((query, options.limit, options.sort))
+        search_queries.append((query, fetch_limit, sort))
         return [
             {
                 "id": "JpSHyEIZ_bo",
@@ -484,7 +492,8 @@ def test_channel_search_uses_explicit_handles_without_name_lookup(monkeypatch, t
     def fail_youtube_search(
         query: str,
         *,
-        options: SearchOptions,
+        fetch_limit: int,
+        sort: str,
     ) -> list[dict]:
         raise AssertionError("explicit handles should not search channel names")
 
@@ -1287,6 +1296,96 @@ def test_extra_queries_require_youtube_source() -> None:
         )
 
 
+def test_search_request_rejects_duplicate_sources() -> None:
+    with pytest.raises(ValueError, match="search sources must not contain duplicates"):
+        search(
+            SearchRequest(
+                query="agents",
+                limit=10,
+                sources=("youtube", "youtube"),
+            )
+        )
+
+
+def test_channel_source_requires_channel_targets() -> None:
+    with pytest.raises(ValueError, match="channel source requires at least one --channels"):
+        search(
+            SearchRequest(
+                query="",
+                limit=10,
+                sources=("channel",),
+            )
+        )
+
+
+def test_channel_targets_require_channel_source() -> None:
+    with pytest.raises(ValueError, match="--channels requires --source channel"):
+        search(
+            SearchRequest(
+                query="agents",
+                limit=10,
+                channels=(ChannelTarget.from_ref("@OpenAI"),),
+            )
+        )
+
+
+def test_native_youtube_search_rejects_recency() -> None:
+    with pytest.raises(ValueError, match="does not support --sort recency"):
+        search(
+            SearchRequest(
+                query="agents",
+                limit=10,
+                sort="recency",
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("search_request", "message"),
+    [
+        (
+            SearchRequest(
+                query="agents",
+                limit=10,
+                min_views=-1,
+            ),
+            "--min-views cannot be negative",
+        ),
+        (
+            SearchRequest(
+                query="agents",
+                limit=10,
+                min_duration="invalid",
+            ),
+            "Invalid duration",
+        ),
+        (
+            SearchRequest(
+                query="agents",
+                limit=10,
+                max_duration="invalid",
+            ),
+            "Invalid duration",
+        ),
+        (
+            SearchRequest(
+                query="agents",
+                limit=10,
+                min_duration="2:00",
+                max_duration="1:00",
+            ),
+            "--min-duration cannot be greater than --max-duration",
+        ),
+    ],
+)
+def test_search_request_rejects_invalid_metadata_filters(
+    search_request: SearchRequest,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        search(search_request)
+
+
 @pytest.mark.parametrize(
     ("search_request", "message"),
     [
@@ -1305,6 +1404,14 @@ def test_extra_queries_require_youtube_source() -> None:
                 mode=cast(Any, "adjacent"),
             ),
             "search mode must be one of",
+        ),
+        (
+            SearchRequest(
+                query="agents",
+                limit=10,
+                return_type=cast(Any, "document"),
+            ),
+            "search return type must be one of",
         ),
         (
             SearchRequest(
@@ -1380,7 +1487,8 @@ def test_search_sources_can_be_mixed(
     def fake_youtube_search(
         query: str,
         *,
-        options: SearchOptions,
+        fetch_limit: int,
+        sort: str,
     ) -> list[dict]:
         return [
             {
@@ -1799,7 +1907,8 @@ def test_search_result_keeps_raw_metadata_when_transcript_fetch_fails(
     def fake_youtube_search(
         query: str,
         *,
-        options: SearchOptions,
+        fetch_limit: int,
+        sort: str,
     ) -> list[dict]:
         return [
             {
@@ -1843,59 +1952,43 @@ def test_search_result_keeps_raw_metadata_when_transcript_fetch_fails(
     assert search_transcript_side_effects["indexed"] == []
 
 
-def test_filter_entries_applies_metadata_filters() -> None:
-    entries = [
-        {
-            "id": "aaaaaaaaaaa",
-            "ie_key": "Youtube",
-            "url": "https://www.youtube.com/watch?v=aaaaaaaaaaa",
-            "title": "LangGraph tutorial",
-            "channel": "LangChain",
-            "view_count": 25_000,
-            "duration": 600,
-        },
-        {
-            "id": "bbbbbbbbbbb",
-            "ie_key": "Youtube",
-            "url": "https://www.youtube.com/watch?v=bbbbbbbbbbb",
-            "title": "Short",
-            "channel": "Other",
-            "view_count": 500,
-            "duration": 30,
-        },
-    ]
-    assert filter_entries(
-        entries,
-        SearchOptions(
-            limit=5,
-            include_channel=("lang",),
-        ),
-    ) == [entries[0]]
+def test_search_excludes_blacklisted_channels(monkeypatch) -> None:
+    def fake_youtube_search(
+        query: str,
+        *,
+        fetch_limit: int,
+        sort: str,
+    ) -> list[dict]:
+        return [
+            {
+                "id": "aaaaaaaaaaa",
+                "title": "LangGraph tutorial",
+                "channel": "LangChain",
+                "channel_id": "UC123",
+                "view_count": 25_000,
+                "duration": 600,
+            }
+        ]
 
+    monkeypatch.setattr(search_workflow, "youtube_search", fake_youtube_search)
+    with get_connection() as connection:
+        upsert_blacklist_channel(
+            connection,
+            ChannelIdentity(
+                youtube_channel_id="UC123",
+                channel_handle=None,
+            ),
+        )
 
-def test_filter_entries_excludes_blacklisted_channels() -> None:
-    entries = [
-        {
-            "id": "aaaaaaaaaaa",
-            "ie_key": "Youtube",
-            "url": "https://www.youtube.com/watch?v=aaaaaaaaaaa",
-            "title": "LangGraph tutorial",
-            "channel": "LangChain",
-            "channel_id": "UC123",
-            "view_count": 25_000,
-            "duration": 600,
-        },
-    ]
     assert (
-        filter_entries(
-            entries,
-            SearchOptions(limit=5),
-            blacklisted_channels=[
-                ChannelIdentity(
-                    youtube_channel_id="UC123",
-                    channel_handle=None,
-                )
-            ],
+        search(
+            SearchRequest(
+                query="agents",
+                limit=5,
+                min_views=None,
+                min_duration=None,
+                max_duration=None,
+            )
         )
         == []
     )

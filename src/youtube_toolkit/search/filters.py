@@ -7,15 +7,15 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from ..identity import extract_video_id
-from ..schemas import ChannelIdentity
+from ..schemas import ChannelIdentity, extract_channel_identity
 from ..storage import get_connection, list_blacklist_channel_identities
 from ..storage.connection import filter_in_values
-from ..youtube.search import is_blacklisted_channel, parse_duration, text_excluded, text_matches
 from .request import (
     VIDEO_RESULT_KEYS,
     SearchRequest,
     SortableValue,
     normalize_filter_date,
+    parse_duration,
 )
 
 
@@ -87,6 +87,24 @@ def candidate_id(candidate: dict[str, Any]) -> str | None:
             if video_id is not None:
                 return video_id
     return None
+
+
+def is_blacklisted_channel(
+    candidate: dict[str, Any],
+    blacklisted_channels: tuple[ChannelIdentity, ...],
+) -> bool:
+    """Return whether a candidate's channel identity matches the local blacklist."""
+    if not blacklisted_channels:
+        return False
+    candidate_channel = extract_channel_identity(candidate)
+    if not candidate_channel.has_identity():
+        return False
+    for blacklisted_channel in blacklisted_channels:
+        same_channel_id = candidate_channel.youtube_channel_id is not None and candidate_channel.youtube_channel_id == blacklisted_channel.youtube_channel_id
+        same_channel_handle = candidate_channel.channel_handle is not None and candidate_channel.channel_handle == blacklisted_channel.channel_handle
+        if same_channel_id or same_channel_handle:
+            return True
+    return False
 
 
 def chunk_result(
@@ -268,6 +286,28 @@ def channel_text(candidate: dict[str, Any]) -> str:
         else:
             values.append(f"@{text}")
     return " ".join(dict.fromkeys(values))
+
+
+def text_matches(
+    value: Any,
+    needles: tuple[str, ...],
+) -> bool:
+    """Require every configured substring to match case-insensitively."""
+    if not needles:
+        return True
+    haystack = str(value or "").casefold()
+    return all(needle.casefold() in haystack for needle in needles)
+
+
+def text_excluded(
+    value: Any,
+    needles: tuple[str, ...],
+) -> bool:
+    """Reject text when any configured substring matches case-insensitively."""
+    if not needles:
+        return False
+    haystack = str(value or "").casefold()
+    return any(needle.casefold() in haystack for needle in needles)
 
 
 def db_chunk_filter(

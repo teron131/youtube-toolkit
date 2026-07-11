@@ -140,13 +140,8 @@ class IndexCommandResult(TypedDict):
     failed: list[EmbeddingIndexResult]
 
 
-SEARCH_SOURCES = ("youtube", "channel", "db")
-SEARCH_SORTS = ("relevance", "recency", "popularity")
 DEFAULT_YOUTUBE_SEARCH_LIMIT = 10
 DEFAULT_CHANNEL_SEARCH_LIMIT = 30
-DEFAULT_SEARCH_MIN_VIEWS = 10_000
-DEFAULT_SEARCH_MIN_DURATION = "3:00"
-DEFAULT_SEARCH_MAX_DURATION = "8:00:00"
 
 
 class VideoCommands:
@@ -174,22 +169,12 @@ class SearchCommands:
 
     @staticmethod
     def search(args: argparse.Namespace) -> list[dict[str, Any]]:
-        """Validate CLI-only search combinations before handing off to the workflow layer."""
+        """Translate parsed CLI arguments into the public search request contract."""
         raw_sources = tuple(dict.fromkeys(args.source or ["youtube"]))
         limit = args.limit
         if limit is None:
             limit = DEFAULT_CHANNEL_SEARCH_LIMIT if raw_sources == ("channel",) else DEFAULT_YOUTUBE_SEARCH_LIMIT
-        if any(source not in SEARCH_SOURCES for source in raw_sources):
-            raise ValueError("--source must be one of: youtube, channel, db")
         sources = cast(tuple[SearchSource, ...], raw_sources)
-        if "channel" not in sources and args.channels:
-            raise ValueError("--channels requires --source channel")
-        if "channel" in sources and not args.channels:
-            raise ValueError("channel source requires at least one --channels")
-        if args.sort is not None and args.sort not in SEARCH_SORTS:
-            raise ValueError("--sort must be one of: relevance, recency, popularity")
-        if args.mode == "native" and sources == ("youtube",) and args.sort == "recency":
-            raise ValueError("native YouTube search does not support --sort recency")
         return run_search_request(
             SearchRequest(
                 query=args.query,

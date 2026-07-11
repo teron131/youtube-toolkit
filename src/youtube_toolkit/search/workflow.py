@@ -17,7 +17,6 @@ from ..storage import get_connection, search_stored_videos, store_search_candida
 from ..storage.search import stored_video_rows, video_row_matches_keyword
 from ..youtube.channels import ChannelOptions, fetch_channel_metadata
 from ..youtube.client import YtDlpClient
-from ..youtube.search import SearchOptions as YouTubeSearchOptions
 from .filters import (
     candidate_id,
     dedupe_candidates,
@@ -231,17 +230,12 @@ def youtube_candidates(
     sort: SearchSort,
 ) -> list[dict[str, Any]]:
     """Fetch and normalize YouTube search candidates for the requested ranking policy."""
-    options = YouTubeSearchOptions(
-        limit=fetch_limit,
-        sort="popularity" if sort == "popularity" else "relevance",
-        min_views=None,
-        min_duration=None,
-        max_duration=None,
-    )
+    youtube_sort = "popularity" if sort == "popularity" else "relevance"
     candidate_lists = [
         youtube_search(
             query,
-            options=options,
+            fetch_limit=fetch_limit,
+            sort=youtube_sort,
         )
         for query in (request.query, *request.extra_queries)
     ]
@@ -266,14 +260,15 @@ def youtube_candidates(
 def youtube_search(
     query: str,
     *,
-    options: YouTubeSearchOptions,
+    fetch_limit: int,
+    sort: str,
 ) -> list[dict[str, Any]]:
     """Call the yt-dlp search adapter and keep only object entries."""
     client = YtDlpClient()
     payload = client.search(
         query,
-        fetch=options.limit,
-        sort=options.sort,
+        fetch=fetch_limit,
+        sort=sort,
     )
     return [entry for entry in payload.get("entries") or [] if isinstance(entry, dict)]
 
@@ -284,8 +279,6 @@ def channel_candidates(
     limit: int,
 ) -> list[dict[str, Any]]:
     """Fetch candidate videos from explicitly selected channel listings."""
-    if not request.channels:
-        raise ValueError("channel source requires at least one --channels value")
     candidates: list[dict[str, Any]] = []
     for selection in request.channels:
         channel_ref, channel_identity = resolve_channel_listing(selection)
@@ -317,15 +310,12 @@ def resolve_channel_listing(selection: ChannelTarget) -> tuple[str, ChannelIdent
             parse_channel_ref(channel_ref),
         )
     wanted_name = normalized_channel_name(selection.channel_name)
-    search_options = YouTubeSearchOptions(
-        limit=CHANNEL_NAME_SEARCH_LIMIT,
-        sort="relevance",
-        min_views=None,
-        min_duration=None,
-        max_duration=None,
-    )
     for query in (selection.channel_name, f"{selection.channel_name} official YouTube channel"):
-        for match in youtube_search(query, options=search_options):
+        for match in youtube_search(
+            query,
+            fetch_limit=CHANNEL_NAME_SEARCH_LIMIT,
+            sort="relevance",
+        ):
             if not any(normalized_channel_name(value) == wanted_name for value in (match.get("channel"), match.get("uploader")) if isinstance(value, str)):
                 continue
             identity = extract_channel_identity(match)
