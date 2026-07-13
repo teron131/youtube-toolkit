@@ -1,5 +1,8 @@
 // Drive viewer state, rendering, and browser interactions against the read-only JSON API.
 
+const THEME_STORAGE_KEY = "lancedb-viewer-theme";
+const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
+
 const state = {
 	overview: null,
 	table: null,
@@ -26,6 +29,9 @@ const state = {
 const elements = {
 	databasePath: document.getElementById("databasePath"),
 	refreshButton: document.getElementById("refreshButton"),
+	themeToggle: document.getElementById("themeToggle"),
+	lightThemeIcon: document.getElementById("lightThemeIcon"),
+	darkThemeIcon: document.getElementById("darkThemeIcon"),
 	liveRefresh: document.getElementById("liveRefresh"),
 	tableSearch: document.getElementById("tableSearch"),
 	tableList: document.getElementById("tableList"),
@@ -60,6 +66,27 @@ const elements = {
 	copyRow: document.getElementById("copyRow"),
 	closeDialog: document.getElementById("closeDialog"),
 };
+
+function storedTheme() {
+	const theme = window.localStorage.getItem(THEME_STORAGE_KEY);
+	return theme === "dark" || theme === "light" ? theme : null;
+}
+
+function renderTheme(theme) {
+	document.documentElement.dataset.theme = theme;
+	const nextTheme = theme === "dark" ? "light" : "dark";
+	const label = `Use ${nextTheme} theme`;
+	elements.themeToggle.setAttribute("aria-label", label);
+	elements.themeToggle.title = label;
+	elements.lightThemeIcon.hidden = nextTheme !== "light";
+	elements.darkThemeIcon.hidden = nextTheme !== "dark";
+}
+
+function useSystemTheme() {
+	if (!storedTheme()) renderTheme(systemTheme.matches ? "dark" : "light");
+}
+
+renderTheme(storedTheme() || (systemTheme.matches ? "dark" : "light"));
 
 function node(tag, className, text) {
 	const element = document.createElement(tag);
@@ -701,6 +728,13 @@ elements.closeFilter.addEventListener("click", () =>
 	closeFilter({ restoreFocus: true }),
 );
 elements.refreshButton.addEventListener("click", refreshAll);
+elements.themeToggle.addEventListener("click", () => {
+	const theme =
+		document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+	window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+	renderTheme(theme);
+});
+systemTheme.addEventListener("change", useSystemTheme);
 elements.liveRefresh.addEventListener("change", () => {
 	if (state.liveTimer) window.clearInterval(state.liveTimer);
 	state.liveTimer = elements.liveRefresh.checked
