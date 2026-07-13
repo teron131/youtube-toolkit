@@ -257,6 +257,7 @@ def test_viewer_http_server_delivers_live_page_and_get_only_json(viewer_database
         assert "<dialog" not in page
         assert '<link rel="stylesheet" href="/viewer.css">' in page
         assert '<script src="/viewer.js" defer></script>' in page
+        assert 'id="themeToggle"' in page
         assert "'unsafe-inline'" not in page_headers["Content-Security-Policy"]
 
         stylesheet_status, stylesheet_headers, stylesheet_body = request("/viewer.css")
@@ -264,9 +265,11 @@ def test_viewer_http_server_delivers_live_page_and_get_only_json(viewer_database
         assert stylesheet_status == HTTPStatus.OK
         assert stylesheet_headers["Content-Type"] == "text/css; charset=utf-8"
         assert b".app" in stylesheet_body
+        assert b':root[data-theme="light"]' in stylesheet_body
         assert script_status == HTTPStatus.OK
         assert script_headers["Content-Type"] == "text/javascript; charset=utf-8"
         assert b"loadOverview" in script_body
+        assert b"lancedb-viewer-theme" in script_body
 
         overview_status, _, overview_body = request("/api/overview")
         rows_status, _, rows_body = request("/api/tables/records/rows?limit=1&offset=0")
