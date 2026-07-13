@@ -38,6 +38,7 @@ from ..storage import (
     resolve_storage_dir,
 )
 from ..storage.connection import DatabaseSchemaHealthResult
+from ..storage.viewer import serve_database_viewer
 from ..watchlist_schedule import (
     DEFAULT_WATCHLIST_SCHEDULE_LABEL,
     ScheduledSyncResult,
@@ -142,6 +143,19 @@ class IndexCommandResult(TypedDict):
 
 DEFAULT_YOUTUBE_SEARCH_LIMIT = 10
 DEFAULT_CHANNEL_SEARCH_LIMIT = 30
+
+
+class DatabaseCommands:
+    """Read-only LanceDB viewer commands."""
+
+    @staticmethod
+    def view(args: argparse.Namespace) -> None:
+        """Serve the active database until the user stops the viewer."""
+        serve_database_viewer(
+            resolve_storage_dir() / DATABASE_FILENAME,
+            port=args.port,
+            open_browser=not args.no_open,
+        )
 
 
 class VideoCommands:

@@ -13,6 +13,7 @@ from ..watchlist_schedule import (
 from .commands import (
     BlacklistCommands,
     ChannelCommands,
+    DatabaseCommands,
     IndexCommands,
     SearchCommands,
     SetupCommands,
@@ -61,6 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
     ChannelCommandParser.add_to(subparsers)
     WatchlistCommandParser.add_to(subparsers)
     BlacklistCommandParser.add_to(subparsers)
+    DatabaseCommandParser.add_to(subparsers)
     IndexCommandParser.add_to(subparsers)
     SetupCommandParser.add_to(subparsers)
     add_doctor_parser(subparsers)
@@ -210,6 +212,19 @@ class IndexCommandParser:
             help="Include stored videos without transcripts when indexing all videos",
         )
         index_parser.set_defaults(handler=IndexCommands.videos)
+
+
+class DatabaseCommandParser:
+    """Parser group for live read-only database inspection."""
+
+    @staticmethod
+    def add_to(subparsers: argparse._SubParsersAction) -> None:
+        database_parser = subparsers.add_parser("db", help="Inspect the active LanceDB store")
+        database_subparsers = add_command_subparsers(database_parser, dest="database_command", required=True, metavar="{view}")
+        view_parser = database_subparsers.add_parser("view", help="Open the live read-only LanceDB viewer")
+        view_parser.add_argument("--port", type=int, default=0, help="Loopback port; defaults to an available port")
+        view_parser.add_argument("--no-open", action="store_true", help="Start the viewer without opening a browser")
+        view_parser.set_defaults(handler=DatabaseCommands.view)
 
 
 class SetupCommandParser:
