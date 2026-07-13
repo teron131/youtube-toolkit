@@ -290,16 +290,39 @@ def test_removed_or_internal_commands_are_not_public(command: str) -> None:
         build_parser().parse_args([command, "JpSHyEIZ_bo"])
 
 
-def test_video_and_channel_command_groups_parse_public_actions() -> None:
+def test_video_database_and_channel_command_groups_parse_public_actions() -> None:
+    get_args = build_parser().parse_args(["db", "get", "JpSHyEIZ_bo"])
     metadata_args = build_parser().parse_args(["video", "metadata", "JpSHyEIZ_bo"])
+    refresh_args = build_parser().parse_args(["db", "refresh", "JpSHyEIZ_bo"])
     transcript_args = build_parser().parse_args(["video", "transcript", "JpSHyEIZ_bo"])
+    edit_args = build_parser().parse_args(
+        [
+            "db",
+            "edit",
+            "JpSHyEIZ_bo",
+            "--summary",
+            "Corrected summary",
+            "--clear",
+            "transcript",
+            "--dry-run",
+        ]
+    )
+    delete_args = build_parser().parse_args(["db", "delete", "JpSHyEIZ_bo", "--yes"])
     channel_args = build_parser().parse_args(["channel", "videos", "@OpenAI", "--last", "5"])
     search_args = build_parser().parse_args(["search", "langgraph tutorial"])
     index_args = build_parser().parse_args(["index", "JpSHyEIZ_bo"])
     setup_args = build_parser().parse_args(["setup", "--llm-model", "summary-model", "--no-auto-embeddings", "--verify"])
 
+    assert get_args.database_command == "get"
     assert metadata_args.video_command == "metadata"
+    assert refresh_args.database_command == "refresh"
     assert transcript_args.video_command == "transcript"
+    assert edit_args.database_command == "edit"
+    assert edit_args.summary == "Corrected summary"
+    assert edit_args.clear == ["transcript"]
+    assert edit_args.dry_run is True
+    assert delete_args.database_command == "delete"
+    assert delete_args.yes is True
     assert channel_args.channel_command == "videos"
     assert channel_args.channel_ref == "@OpenAI"
     assert channel_args.last == 5
@@ -322,6 +345,178 @@ def test_video_and_channel_command_groups_parse_public_actions() -> None:
     assert setup_args.llm_model == "summary-model"
     assert setup_args.auto_embeddings is False
     assert setup_args.verify is True
+
+
+@pytest.mark.parametrize("action", ["get", "refresh", "edit", "delete"])
+def test_stored_record_actions_are_not_video_commands(action: str) -> None:
+    """Stored-record administration has no legacy path under video retrieval."""
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["video", action, "JpSHyEIZ_bo"])
+
+
+def test_database_update_command_is_removed() -> None:
+    """The renamed database edit action has no update compatibility path."""
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["db", "update", "JpSHyEIZ_bo"])
+
+
+def test_database_edit_parser_rejects_provider_owned_fields() -> None:
+    """Provider-owned facts can only enter storage through source-backed refreshes."""
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["db", "edit", "JpSHyEIZ_bo", "--duration", "186"])
+
+
+def test_database_get_and_edit_commands_round_trip_json(
+    capsys,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Database commands read files, mutate storage, and emit compact JSON proof."""
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+    transcript_path = tmp_path / "transcript.txt"
+    transcript_path.write_text("Corrected transcript", encoding="utf-8")
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "Stored title",
+                "duration": 187,
+                "like_count": 5,
+            },
+            transcript="Old transcript",
+        )
+        connection.update_where(
+            "videos",
+            "youtube_video_id = 'JpSHyEIZ_bo'",
+            {"summary": "Old summary"},
+        )
+
+    exit_code = main(
+        [
+            "db",
+            "edit",
+            "JpSHyEIZ_bo",
+            "--transcript-file",
+            str(transcript_path),
+        ]
+    )
+    edit_payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert edit_payload["video_id"] == "JpSHyEIZ_bo"
+    assert edit_payload["changed"]["transcript"] == {
+        "before_chars": 14,
+        "after_chars": 20,
+    }
+    assert edit_payload["cleared"] == ["summary"]
+    assert edit_payload["invalidated"] == [
+        "video_embedding",
+        "transcript_chunks",
+        "summary",
+    ]
+
+    assert main(["db", "get", "https://www.youtube.com/watch?v=JpSHyEIZ_bo"]) == 0
+    stored_payload = json.loads(capsys.readouterr().out)
+    assert stored_payload["duration"] == 187.0
+    assert stored_payload["like_count"] == 5
+    assert stored_payload["transcript"] == "Corrected transcript"
+    assert stored_payload["summary"] is None
+
+
+def test_database_refresh_command_updates_only_source_backed_metadata(
+    capsys,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Metadata refresh changes provider facts while preserving agent-owned content."""
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "Stored title",
+                "duration": 187,
+                "view_count": 10,
+                "channel_id": "UC123",
+                "channel_handle": "@OpenAI",
+            },
+            transcript="Stored transcript",
+        )
+        connection.update_where(
+            "videos",
+            "youtube_video_id = 'JpSHyEIZ_bo'",
+            {"summary": "Stored summary"},
+        )
+
+    class FakeYtDlpClient:
+        def metadata(self, video_ref: str) -> dict[str, object]:
+            assert video_ref == "JpSHyEIZ_bo"
+            return {
+                "id": "JpSHyEIZ_bo",
+                "title": "YouTube title",
+                "upload_date": "20260713",
+                "duration": 186,
+                "view_count": 12_000,
+                "like_count": 42,
+                "channel_id": "UC123",
+                "channel_handle": "@OpenAI",
+            }
+
+    monkeypatch.setattr(commands, "YtDlpClient", FakeYtDlpClient)
+
+    assert main(["db", "refresh", "JpSHyEIZ_bo"]) == 0
+    refresh_payload = json.loads(capsys.readouterr().out)
+
+    assert refresh_payload["video_id"] == "JpSHyEIZ_bo"
+    assert refresh_payload["metadata"] == {
+        "channel_id": "UC123",
+        "channel_handle": "@OpenAI",
+        "title": "YouTube title",
+        "upload_date": "2026-07-13",
+        "duration": 186.0,
+        "view_count": 12_000,
+        "like_count": 42,
+    }
+    assert refresh_payload["metadata_fetched_at"] is not None
+
+    assert main(["db", "get", "JpSHyEIZ_bo"]) == 0
+    stored_payload = json.loads(capsys.readouterr().out)
+    assert stored_payload["duration"] == 186.0
+    assert stored_payload["transcript"] == "Stored transcript"
+    assert stored_payload["summary"] == "Stored summary"
+
+
+def test_database_delete_command_previews_and_requires_confirmation(
+    capsys,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "Stored title",
+            },
+        )
+
+    assert main(["db", "delete", "JpSHyEIZ_bo", "--dry-run"]) == 0
+    preview_payload = json.loads(capsys.readouterr().out)
+    assert preview_payload["deleted"] is False
+    assert preview_payload["rows"]["videos"] == 1
+
+    assert main(["db", "delete", "JpSHyEIZ_bo"]) == 1
+    assert "requires --yes" in capsys.readouterr().err
+
+    assert main(["db", "delete", "JpSHyEIZ_bo", "--yes"]) == 0
+    deleted_payload = json.loads(capsys.readouterr().out)
+    assert deleted_payload["deleted"] is True
+
+    assert main(["db", "get", "JpSHyEIZ_bo"]) == 1
+    assert "Video is not stored" in capsys.readouterr().err
 
 
 def test_parser_normalizes_string_arguments_before_handlers() -> None:
@@ -379,15 +574,19 @@ def test_parser_normalizes_string_arguments_before_handlers() -> None:
     [
         (["video", "transcript", "--help"], "usage: youtube video transcript [-h] url"),
         (["video", "metadata", "--help"], "usage: youtube video metadata [-h] url"),
+        (["db", "get", "--help"], "usage: youtube db get [-h] url"),
+        (["db", "refresh", "--help"], "usage: youtube db refresh [-h] url"),
+        (["db", "edit", "--help"], "usage: youtube db edit [-h]"),
+        (["db", "delete", "--help"], "usage: youtube db delete [-h]"),
         (["index", "--help"], "usage: youtube index [-h] [--include-without-transcript] [url ...]"),
     ],
 )
-def test_video_reference_help_names_positionals_url(
+def test_reference_help_names_positionals_url(
     args: list[str],
     usage: str,
     capsys,
 ) -> None:
-    """Video reference help shows the shell-facing URL placeholder instead of internal destination names."""
+    """Reference help shows the shell-facing URL placeholder instead of internal destination names."""
     with pytest.raises(SystemExit):
         build_parser().parse_args(args)
 

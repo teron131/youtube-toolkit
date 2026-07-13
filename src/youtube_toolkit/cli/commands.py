@@ -6,6 +6,7 @@ import argparse
 import builtins
 from dataclasses import asdict, dataclass
 import getpass
+from pathlib import Path
 import sys
 from typing import Any, Literal, NotRequired, TypedDict, cast
 
@@ -36,8 +37,10 @@ from ..storage import (
     index_video_embedding,
     list_video_ids_for_embedding_index,
     resolve_storage_dir,
+    upsert_video,
 )
 from ..storage.connection import DatabaseSchemaHealthResult
+from ..storage.videos import delete_video_record, edit_video_content, get_video_record
 from ..storage.viewer import serve_database_viewer
 from ..watchlist_schedule import (
     DEFAULT_WATCHLIST_SCHEDULE_LABEL,
@@ -143,10 +146,19 @@ class IndexCommandResult(TypedDict):
 
 DEFAULT_YOUTUBE_SEARCH_LIMIT = 10
 DEFAULT_CHANNEL_SEARCH_LIMIT = 30
+DATABASE_REFRESH_METADATA_FIELDS = (
+    "channel_id",
+    "channel_handle",
+    "title",
+    "upload_date",
+    "duration",
+    "view_count",
+    "like_count",
+)
 
 
 class DatabaseCommands:
-    """Read-only LanceDB viewer commands."""
+    """Handlers for inspecting and administering the active database."""
 
     @staticmethod
     def view(args: argparse.Namespace) -> None:
@@ -157,9 +169,66 @@ class DatabaseCommands:
             open_browser=not args.no_open,
         )
 
+    @staticmethod
+    def get(args: argparse.Namespace) -> dict[str, Any]:
+        """Return one complete locally stored video record."""
+        video_id = require_video_id(args.video_ref)
+        with get_connection() as connection:
+            return get_video_record(connection, video_id)
+
+    @staticmethod
+    def refresh(args: argparse.Namespace) -> dict[str, Any]:
+        """Refresh provider-owned metadata through yt-dlp and report the stored facts."""
+        requested_video_id = require_video_id(args.video_ref)
+        metadata = YtDlpClient().metadata(args.video_ref)
+        fetched_video_id = require_video_id(str(metadata.get("id") or ""))
+        if fetched_video_id != requested_video_id:
+            raise ValueError(f"yt-dlp returned video {fetched_video_id} for requested video {requested_video_id}")
+        with get_connection() as connection:
+            stored_video = upsert_video(connection, metadata)
+        if stored_video is None:
+            raise RuntimeError(f"Could not store refreshed metadata for video {requested_video_id}")
+        return {
+            "video_id": requested_video_id,
+            "metadata": {field: stored_video[field] for field in DATABASE_REFRESH_METADATA_FIELDS},
+            "metadata_fetched_at": stored_video["metadata_fetched_at"],
+        }
+
+    @staticmethod
+    def edit(args: argparse.Namespace) -> dict[str, Any]:
+        """Translate explicit agent-owned content fields into one validated edit."""
+        video_id = require_video_id(args.video_ref)
+        values = {}
+        if args.summary is not None:
+            values["summary"] = args.summary
+        if args.transcript_file is not None:
+            values["transcript"] = read_text_input(args.transcript_file)
+        clear_fields = [field.replace("-", "_") for field in args.clear]
+        with get_connection() as connection:
+            return edit_video_content(
+                connection,
+                video_id,
+                values,
+                clear_fields=clear_fields,
+                dry_run=args.dry_run,
+            )
+
+    @staticmethod
+    def delete(args: argparse.Namespace) -> dict[str, Any]:
+        """Require explicit confirmation before cascading one stored video deletion."""
+        video_id = require_video_id(args.video_ref)
+        if not args.dry_run and not args.yes:
+            raise ValueError("Video deletion requires --yes; use --dry-run to inspect it first")
+        with get_connection() as connection:
+            return delete_video_record(
+                connection,
+                video_id,
+                dry_run=args.dry_run,
+            )
+
 
 class VideoCommands:
-    """Handlers for commands that operate on one video reference."""
+    """Handlers for retrieving video metadata and transcripts."""
 
     @staticmethod
     def transcript(args: argparse.Namespace) -> dict[str, Any]:
@@ -168,6 +237,16 @@ class VideoCommands:
     @staticmethod
     def metadata(args: argparse.Namespace) -> dict[str, Any]:
         return YtDlpClient().metadata(args.video_ref)
+
+
+def read_text_input(path: str) -> str:
+    """Read UTF-8 command text from a file or standard input while preserving the original failure cause."""
+    try:
+        if path == "-":
+            return sys.stdin.read()
+        return Path(path).expanduser().read_text(encoding="utf-8")
+    except OSError as error:
+        raise RuntimeError(f"Could not read text input {path}: {error}") from error
 
 
 class ChannelCommands:

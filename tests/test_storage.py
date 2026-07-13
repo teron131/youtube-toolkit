@@ -38,6 +38,7 @@ from youtube_toolkit.storage.connection import (
     SCALAR_INDEX_COLUMNS,
     filter_contains_case_insensitive,
 )
+from youtube_toolkit.storage.videos import delete_video_record, edit_video_content, get_video_record
 
 
 def test_default_storage_path_is_repo_cache(monkeypatch, tmp_path) -> None:
@@ -447,6 +448,7 @@ def test_upsert_video_clears_embedding_when_channel_handle_changes(
             transcript="晶片需求和 GPU 投资回升",
         )
         index_video_embedding(connection, "JpSHyEIZ_bo", embed_text=fake_embed)
+        index_transcript_chunks(connection, "JpSHyEIZ_bo", embed_text=fake_embed)
 
         upsert_video(
             connection,
@@ -457,8 +459,11 @@ def test_upsert_video_clears_embedding_when_channel_handle_changes(
             },
         )
         row = connection.find_row("video_embeddings", "video_id", "JpSHyEIZ_bo")
+        chunk = connection.find_row("video_transcript_chunks", "video_id", "JpSHyEIZ_bo")
 
     assert row is None
+    assert chunk is not None
+    assert chunk["channel_handle"] == "@NewChannel"
 
 
 def test_upsert_video_clears_embedding_when_channel_id_changes(
@@ -525,6 +530,34 @@ def test_upsert_video_keeps_embedding_when_upload_date_changes(
     assert row is not None
     assert row["embedding_content_hash"] is not None
     assert row["embedding"] is not None
+
+
+def test_upsert_video_clears_title_embedding_when_title_changes(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "Old title",
+            },
+        )
+        index_video_title_embedding(connection, "JpSHyEIZ_bo", embed_text=fake_embed)
+
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "New title",
+            },
+        )
+        row = connection.find_row("video_title_embeddings", "video_id", "JpSHyEIZ_bo")
+
+    assert row is None
 
 
 def test_get_stored_video_returns_one_payload_by_url(
@@ -1332,6 +1365,202 @@ def test_video_summary_is_removed_when_transcript_changes(
 
     assert summary_row is not None
     assert summary_row["summary"] is None
+
+
+def test_edit_video_content_replaces_transcript_and_preserves_provider_metadata(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "Old title",
+                "duration": 187,
+                "channel_id": "UC123",
+                "channel_handle": "@OpenAI",
+            },
+            transcript="Old transcript",
+        )
+        upsert_video_summary(connection, "JpSHyEIZ_bo", "Old summary")
+        index_video_embedding(connection, "JpSHyEIZ_bo", embed_text=fake_embed)
+        index_video_title_embedding(connection, "JpSHyEIZ_bo", embed_text=fake_embed)
+        index_transcript_chunks(connection, "JpSHyEIZ_bo", embed_text=fake_embed)
+
+        result = edit_video_content(
+            connection,
+            "JpSHyEIZ_bo",
+            {"transcript": "New transcript"},
+        )
+        stored_video = get_video_record(connection, "JpSHyEIZ_bo")
+        video_embedding = connection.find_row("video_embeddings", "video_id", "JpSHyEIZ_bo")
+        title_embedding = connection.find_row("video_title_embeddings", "video_id", "JpSHyEIZ_bo")
+        transcript_chunks = connection.count_rows("video_transcript_chunks", where_sql="video_id = 'JpSHyEIZ_bo'")
+
+    assert result == {
+        "video_id": "JpSHyEIZ_bo",
+        "changed": {
+            "transcript": {
+                "before_chars": 14,
+                "after_chars": 14,
+            },
+            "summary": {
+                "before_chars": 11,
+                "after_chars": 0,
+            },
+        },
+        "cleared": ["summary"],
+        "invalidated": [
+            "video_embedding",
+            "transcript_chunks",
+            "summary",
+        ],
+        "dry_run": False,
+    }
+    assert stored_video["title"] == "Old title"
+    assert stored_video["duration"] == 187.0
+    assert stored_video["transcript"] == "New transcript"
+    assert stored_video["summary"] is None
+    assert video_embedding is None
+    assert title_embedding is not None
+    assert transcript_chunks == 0
+
+
+def test_edit_video_content_dry_run_preserves_rows(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "Stored title",
+            },
+            transcript="Stored transcript",
+        )
+        upsert_video_summary(connection, "JpSHyEIZ_bo", "Stored summary")
+        index_video_embedding(connection, "JpSHyEIZ_bo", embed_text=fake_embed)
+
+        result = edit_video_content(
+            connection,
+            "JpSHyEIZ_bo",
+            {"transcript": "Proposed transcript"},
+            dry_run=True,
+        )
+        stored_video = get_video_record(connection, "JpSHyEIZ_bo")
+        video_embedding = connection.find_row("video_embeddings", "video_id", "JpSHyEIZ_bo")
+
+    assert result["dry_run"] is True
+    assert result["changed"] == {
+        "transcript": {
+            "before_chars": 17,
+            "after_chars": 19,
+        },
+        "summary": {
+            "before_chars": 14,
+            "after_chars": 0,
+        },
+    }
+    assert stored_video["transcript"] == "Stored transcript"
+    assert stored_video["summary"] == "Stored summary"
+    assert video_embedding is not None
+
+
+def test_edit_video_content_rejects_provider_owned_or_conflicting_fields(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "Stored title",
+            },
+        )
+
+        with pytest.raises(ValueError, match="Unsupported agent-owned video fields: duration"):
+            edit_video_content(connection, "JpSHyEIZ_bo", {"duration": 186})
+        with pytest.raises(ValueError, match="Unsupported agent-owned video fields to clear: title"):
+            edit_video_content(connection, "JpSHyEIZ_bo", {}, clear_fields={"title"})
+        with pytest.raises(ValueError, match="Cannot update and clear"):
+            edit_video_content(
+                connection,
+                "JpSHyEIZ_bo",
+                {"summary": "New summary"},
+                clear_fields={"summary"},
+            )
+
+
+def test_delete_video_record_cascades_owned_rows_and_preserves_channel(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "Stored title",
+                "channel_id": "UC123",
+                "channel_handle": "@OpenAI",
+            },
+            transcript="Stored transcript",
+        )
+        connection.upsert_rows(
+            "watchlist_videos",
+            "video_id",
+            [
+                {
+                    "video_id": "JpSHyEIZ_bo",
+                    "discovered_at": "2026-07-13T00:00:00+00:00",
+                }
+            ],
+        )
+        index_video_embedding(connection, "JpSHyEIZ_bo", embed_text=fake_embed)
+        index_video_title_embedding(connection, "JpSHyEIZ_bo", embed_text=fake_embed)
+        index_transcript_chunks(connection, "JpSHyEIZ_bo", embed_text=fake_embed)
+
+        preview = delete_video_record(connection, "JpSHyEIZ_bo", dry_run=True)
+        assert get_video_record(connection, "JpSHyEIZ_bo")["title"] == "Stored title"
+
+        deleted = delete_video_record(connection, "JpSHyEIZ_bo")
+        channel = connection.find_row("channels", "youtube_channel_id", "UC123")
+
+        with pytest.raises(ValueError, match="Video is not stored"):
+            get_video_record(connection, "JpSHyEIZ_bo")
+
+    expected_rows = {
+        "watchlist_videos": 1,
+        "video_embeddings": 1,
+        "video_title_embeddings": 1,
+        "video_transcript_chunks": 1,
+        "videos": 1,
+    }
+    assert preview == {
+        "video_id": "JpSHyEIZ_bo",
+        "deleted": False,
+        "rows": expected_rows,
+        "dry_run": True,
+    }
+    assert deleted == {
+        "video_id": "JpSHyEIZ_bo",
+        "deleted": True,
+        "rows": expected_rows,
+        "dry_run": False,
+    }
+    assert channel is not None
+    assert channel["channel_handle"] == "@OpenAI"
 
 
 def test_search_stored_videos_can_sort_by_relevance_score(
