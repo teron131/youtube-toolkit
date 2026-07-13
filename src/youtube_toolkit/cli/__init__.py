@@ -20,7 +20,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         payload = args.handler(args)
-        if args.command == "db":
+        if args.command == "db" and args.database_command == "view":
             return 0
         if args.command == "doctor":
             print(render_doctor(payload))

@@ -110,10 +110,30 @@ The toolkit intentionally ships a small working surface:
       <td>Embed stored transcript text for semantic search and RAG prep.</td>
     </tr>
     <tr>
-      <td><code>db</code></td>
+      <td rowspan="5"><code>db</code></td>
       <td><code>view</code></td>
       <td><code>[--port N]</code><br><code>[--no-open]</code></td>
-      <td>Open a live, read-only browser for tables, rows, schemas, indexes, statistics, and versions.</td>
+      <td>Open a live, read-only browser for tables, rows, schemas, indexes, and statistics.</td>
+    </tr>
+    <tr>
+      <td><code>get</code></td>
+      <td><code>&lt;url-or-id&gt;</code></td>
+      <td>Return one complete locally stored video record as JSON.</td>
+    </tr>
+    <tr>
+      <td><code>refresh</code></td>
+      <td><code>&lt;url-or-id&gt;</code></td>
+      <td>Refresh provider-owned metadata such as title, duration, upload date, channel identity, and engagement counts from YouTube.</td>
+    </tr>
+    <tr>
+      <td><code>edit</code></td>
+      <td><code>&lt;url-or-id&gt;</code><br><code>[--summary TEXT]</code><br><code>[--transcript-file PATH|-]</code><br><code>[--clear transcript|summary]</code><br><code>[--dry-run]</code></td>
+      <td>Edit agent-owned transcript or summary content and automatically invalidate stale derived data.</td>
+    </tr>
+    <tr>
+      <td><code>delete</code></td>
+      <td><code>&lt;url-or-id&gt;</code><br><code>--yes|--dry-run</code></td>
+      <td>Delete one stored video and its watchlist, transcript-chunk, and embedding rows.</td>
     </tr>
     <tr>
       <td><code>setup</code></td>
@@ -135,6 +155,8 @@ Search sources are selected with repeated `--source youtube|channel|db` flags. U
 Storage lives in this checkout's `.cache/youtube.lancedb` during source-checkout usage. Installed CLI usage follows the platform data directory (`~/Library/Application Support/youtube-toolkit` on macOS, `~/.local/share/youtube-toolkit` on Linux, and Local AppData on Windows). Set `YOUTUBE_TOOLKIT_STORAGE_HOME` to move it.
 
 `youtube db view` serves the active store on a loopback-only URL and opens it in the default browser. The viewer reads the live database directly and exposes no mutation endpoints; it does not create, migrate, repair, or optimize storage. Use `--no-open` to leave browser navigation to another process, choose a fixed loopback port with `--port`, and press Ctrl-C to stop the server.
+
+Stored-video administration stays under `youtube db` rather than the retrieval-focused `youtube video` group or the read-only viewer. Field ownership is explicit: `youtube db refresh` fetches provider-owned facts such as title, upload date, duration, channel identity, view count, and like count from YouTube, while `youtube db edit` can change only agent-owned transcript and summary content. Edits return a compact JSON change report without echoing full text, and transcript changes clear stale summaries and transcript-derived embeddings. Use `--dry-run` before an uncertain content edit or deletion; destructive deletion additionally requires `--yes`.
 
 `doctor` inspects the database schema without creating, migrating, or repairing the file. If the schema is stale or unexpected, it reports a warning and points to the future `youtube setup database` repair flow.
 
@@ -177,6 +199,12 @@ youtube search "reasoning models" --source channel --channels @OpenAI --channels
 youtube search "agent memory" --source db --mode semantic --limit 5
 youtube video transcript JpSHyEIZ_bo
 youtube video metadata https://www.youtube.com/watch?v=JpSHyEIZ_bo
+youtube db get JpSHyEIZ_bo
+youtube db refresh JpSHyEIZ_bo
+youtube db edit JpSHyEIZ_bo --summary "Concise corrected summary"
+youtube db edit JpSHyEIZ_bo --transcript-file transcript.txt --clear summary
+youtube db delete JpSHyEIZ_bo --dry-run
+youtube db delete JpSHyEIZ_bo --yes
 youtube channel videos @OpenAI --last 5
 youtube watchlist add @OpenAI @Anthropic
 youtube watchlist list

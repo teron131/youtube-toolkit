@@ -23,7 +23,7 @@ uv run youtube <command>
 
 ## Recipes
 
-Video:
+Video retrieval:
 
 ```bash
 youtube video transcript <url-or-id>
@@ -32,6 +32,28 @@ youtube video metadata <url-or-id>
 
 - `<url-or-id>` is a YouTube watch URL or bare video ID.
 - Transcript fetch is DB-first, then captions, then STT fallback; it persists the normalized transcript.
+
+Database:
+
+```bash
+youtube db view
+youtube db get <url-or-id>
+youtube db refresh <url-or-id>
+youtube db edit <url-or-id> --summary "Corrected summary"
+youtube db edit <url-or-id> --transcript-file transcript.txt
+youtube db edit <url-or-id> --transcript-file -
+youtube db edit <url-or-id> --clear summary --dry-run
+youtube db delete <url-or-id> --dry-run
+youtube db delete <url-or-id> --yes
+```
+
+- `db get` returns the complete locally stored record, including summary text.
+- `db refresh` makes a network request through `yt-dlp` and is the only direct command that changes provider-owned title, upload date, duration, channel identity, view count, or like count. It preserves the stored transcript and summary.
+- `db edit` changes only local agent-owned content through `--summary`, `--transcript-file`, or `--clear transcript|summary`. It never changes provider-owned metadata.
+- Repeat `--clear FIELD` to clear stored agent content; valid field names are `transcript` and `summary`.
+- Use `--transcript-file -` to read replacement transcript text from stdin.
+- Edits return compact JSON change details and automatically clear stale summaries, transcript chunks, and embeddings.
+- Use `--dry-run` before uncertain edits or deletions. Actual deletion requires `--yes` and preserves the channel record.
 
 Search:
 
@@ -107,6 +129,7 @@ youtube setup --llm-api-key ... --llm-base-url ... --llm-model ... --no-verify
 - Search defaults to YouTube; use repeated `--source youtube|channel|db` flags only when mixing sources is useful.
 - `watchlist sync` discovers watched-channel videos, stores transcripts, and may auto-index embeddings.
 - Use `watchlist schedule install|status|uninstall`; the hidden `scheduled-sync` subcommand is for launchd.
+- Keep browser database inspection read-only; use `db refresh` for provider metadata and `db get|edit|delete` for agent-owned catalog work so storage invariants remain enforced.
 - Summarize only when the user asks for analysis or a summary.
 
 ## Storage Gotcha

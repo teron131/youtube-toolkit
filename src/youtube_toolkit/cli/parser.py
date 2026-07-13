@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 
+from ..storage.videos import VIDEO_AGENT_EDITABLE_FIELDS
 from ..watchlist_schedule import (
     DEFAULT_WATCHLIST_SCHEDULE_DAYS,
     DEFAULT_WATCHLIST_SCHEDULE_LABEL,
@@ -70,12 +71,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 class VideoCommandParser:
-    """Parser group for video metadata and transcript commands."""
+    """Parser group for retrieving video metadata and transcripts."""
 
     @staticmethod
     def add_to(subparsers: argparse._SubParsersAction) -> None:
         video_parser = subparsers.add_parser("video", help="Fetch video metadata or transcripts")
-        video_subparsers = add_command_subparsers(video_parser, dest="video_command", required=True, metavar="{metadata,transcript}")
+        video_subparsers = add_command_subparsers(
+            video_parser,
+            dest="video_command",
+            required=True,
+            metavar="{metadata,transcript}",
+        )
 
         metadata_parser = video_subparsers.add_parser("metadata", help="Fetch video metadata JSON")
         metadata_parser.add_argument("video_ref", metavar="url", help="YouTube video URL or ID")
@@ -215,16 +221,49 @@ class IndexCommandParser:
 
 
 class DatabaseCommandParser:
-    """Parser group for live read-only database inspection."""
+    """Parser group for inspecting and administering stored video records."""
 
     @staticmethod
     def add_to(subparsers: argparse._SubParsersAction) -> None:
-        database_parser = subparsers.add_parser("db", help="Inspect the active LanceDB store")
-        database_subparsers = add_command_subparsers(database_parser, dest="database_command", required=True, metavar="{view}")
+        database_parser = subparsers.add_parser("db", help="Inspect or edit the active LanceDB store")
+        database_subparsers = add_command_subparsers(
+            database_parser,
+            dest="database_command",
+            required=True,
+            metavar="{view,get,refresh,edit,delete}",
+        )
         view_parser = database_subparsers.add_parser("view", help="Open the live read-only LanceDB viewer")
         view_parser.add_argument("--port", type=int, default=0, help="Loopback port; defaults to an available port")
         view_parser.add_argument("--no-open", action="store_true", help="Start the viewer without opening a browser")
         view_parser.set_defaults(handler=DatabaseCommands.view)
+
+        get_parser = database_subparsers.add_parser("get", help="Return one locally stored video record")
+        get_parser.add_argument("video_ref", metavar="url", help="Stored YouTube video URL or ID")
+        get_parser.set_defaults(handler=DatabaseCommands.get)
+
+        refresh_parser = database_subparsers.add_parser("refresh", help="Refresh YouTube-owned metadata in storage")
+        refresh_parser.add_argument("video_ref", metavar="url", help="YouTube video URL or ID")
+        refresh_parser.set_defaults(handler=DatabaseCommands.refresh)
+
+        edit_parser = database_subparsers.add_parser("edit", help="Edit agent-owned content on one stored video")
+        edit_parser.add_argument("video_ref", metavar="url", help="Stored YouTube video URL or ID")
+        edit_parser.add_argument("--summary", help="Replace the stored summary")
+        edit_parser.add_argument("--transcript-file", metavar="PATH", help="Replace the transcript from a UTF-8 file; use - for stdin")
+        edit_parser.add_argument(
+            "--clear",
+            action="append",
+            choices=tuple(field.replace("_", "-") for field in VIDEO_AGENT_EDITABLE_FIELDS),
+            default=[],
+            help="Clear one stored field; repeat for multiple fields",
+        )
+        edit_parser.add_argument("--dry-run", action="store_true", help="Validate and report changes without writing")
+        edit_parser.set_defaults(handler=DatabaseCommands.edit)
+
+        delete_parser = database_subparsers.add_parser("delete", help="Delete one stored video and its derived rows")
+        delete_parser.add_argument("video_ref", metavar="url", help="Stored YouTube video URL or ID")
+        delete_parser.add_argument("--dry-run", action="store_true", help="Report the rows that would be deleted")
+        delete_parser.add_argument("--yes", action="store_true", help="Confirm the deletion")
+        delete_parser.set_defaults(handler=DatabaseCommands.delete)
 
 
 class SetupCommandParser:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -9,6 +10,26 @@ from ..schemas import ChannelIdentity, VideoRecord, extract_channel_identity, ex
 from .channels import upsert_channel
 from .connection import LanceConnection, filter_literal, transcript_chunk_metadata
 from .payloads import stored_video_payload
+
+VIDEO_AGENT_EDITABLE_FIELDS = (
+    "transcript",
+    "summary",
+)
+VIDEO_EMBEDDING_SOURCE_FIELDS = ("channel_id", "title", "transcript")
+VIDEO_CHUNK_METADATA_FIELDS = (
+    "channel_id",
+    "title",
+    "upload_date",
+    "duration",
+    "view_count",
+    "like_count",
+)
+VIDEO_DEPENDENT_TABLE_KEYS = (
+    ("watchlist_videos", "video_id"),
+    ("video_embeddings", "video_id"),
+    ("video_title_embeddings", "video_id"),
+    ("video_transcript_chunks", "video_id"),
+)
 
 
 def upsert_video(
@@ -108,6 +129,115 @@ def find_video_payload(
     return stored_video_payload(video_payload_row(connection, row))
 
 
+def get_video_record(
+    connection: LanceConnection,
+    youtube_video_id: str,
+) -> dict[str, Any]:
+    """Return one complete catalog record, including summary text, or fail for an unknown video."""
+    row = require_video_row(connection, youtube_video_id)
+    payload = stored_video_payload(video_payload_row(connection, row))
+    return {
+        **payload,
+        "summary": row["summary"],
+    }
+
+
+def edit_video_content(
+    connection: LanceConnection,
+    youtube_video_id: str,
+    values: Mapping[str, Any],
+    *,
+    clear_fields: Collection[str] = (),
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Edit agent-owned video content while rejecting provider-owned metadata changes."""
+    existing_row = require_video_row(connection, youtube_video_id)
+    unknown_fields = set(values) - set(VIDEO_AGENT_EDITABLE_FIELDS)
+    if unknown_fields:
+        unknown = ", ".join(sorted(unknown_fields))
+        raise ValueError(f"Unsupported agent-owned video fields: {unknown}")
+    normalized_values: dict[str, str] = {}
+    for field, value in values.items():
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"Video {field} cannot be empty; use --clear {field}")
+        normalized_values[field] = value.strip()
+    normalized_clear_fields = set(clear_fields)
+    unknown_clear_fields = normalized_clear_fields - set(VIDEO_AGENT_EDITABLE_FIELDS)
+    if unknown_clear_fields:
+        unknown = ", ".join(sorted(unknown_clear_fields))
+        raise ValueError(f"Unsupported agent-owned video fields to clear: {unknown}")
+    conflicting_fields = set(normalized_values) & normalized_clear_fields
+    if conflicting_fields:
+        conflicts = ", ".join(sorted(conflicting_fields))
+        raise ValueError(f"Cannot update and clear the same video fields: {conflicts}")
+    if not normalized_values and not normalized_clear_fields:
+        raise ValueError("Video edit requires at least one field change")
+
+    changes = {
+        **normalized_values,
+        **dict.fromkeys(normalized_clear_fields),
+    }
+    proposed_transcript = changes.get("transcript", existing_row["transcript"])
+    if proposed_transcript != existing_row["transcript"] and "summary" not in changes:
+        changes["summary"] = None
+
+    updated_row, invalidated = apply_video_changes(
+        connection,
+        existing_row,
+        changes,
+        dry_run=dry_run,
+    )
+    changed_fields = {
+        field: {
+            "before_chars": len(existing_row[field] or ""),
+            "after_chars": len(updated_row[field] or ""),
+        }
+        for field in VIDEO_AGENT_EDITABLE_FIELDS
+        if updated_row[field] != existing_row[field]
+    }
+    cleared_fields = [field for field in VIDEO_AGENT_EDITABLE_FIELDS if existing_row[field] is not None and updated_row[field] is None]
+    return {
+        "video_id": youtube_video_id,
+        "changed": changed_fields,
+        "cleared": cleared_fields,
+        "invalidated": invalidated,
+        "dry_run": dry_run,
+    }
+
+
+def delete_video_record(
+    connection: LanceConnection,
+    youtube_video_id: str,
+    *,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Delete one catalog video and its owned dependent rows while preserving channel identity."""
+    require_video_row(connection, youtube_video_id)
+    row_counts = {
+        table_name: connection.count_rows(
+            table_name,
+            where_sql=f"{key} = {filter_literal(youtube_video_id)}",
+        )
+        for table_name, key in (*VIDEO_DEPENDENT_TABLE_KEYS, ("videos", "youtube_video_id"))
+    }
+    if not dry_run:
+        for table_name, key in VIDEO_DEPENDENT_TABLE_KEYS:
+            connection.delete_where(
+                table_name,
+                f"{key} = {filter_literal(youtube_video_id)}",
+            )
+        connection.delete_where(
+            "videos",
+            f"youtube_video_id = {filter_literal(youtube_video_id)}",
+        )
+    return {
+        "video_id": youtube_video_id,
+        "deleted": not dry_run,
+        "rows": row_counts,
+        "dry_run": dry_run,
+    }
+
+
 def update_video(
     connection: LanceConnection,
     existing_row: dict[str, Any],
@@ -127,45 +257,86 @@ def update_video(
     next_transcript = keep_existing_if_missing(video_record.transcript, existing_row["transcript"])
     next_metadata_fetched_at = keep_existing_if_missing(metadata_fetched_at, existing_row["metadata_fetched_at"])
     next_transcript_fetched_at = keep_existing_if_missing(transcript_fetched_at, existing_row["transcript_fetched_at"])
+    changes = {
+        "channel_id": next_channel_id,
+        "title": next_title,
+        "upload_date": next_upload_date,
+        "duration": next_duration,
+        "view_count": next_view_count,
+        "like_count": next_like_count,
+        "transcript": next_transcript,
+        "metadata_fetched_at": next_metadata_fetched_at,
+        "transcript_fetched_at": next_transcript_fetched_at,
+    }
+    if next_transcript != existing_row["transcript"]:
+        changes["summary"] = None
+    updated_row, _ = apply_video_changes(connection, existing_row, changes)
+    if next_transcript == existing_row["transcript"] and not any(existing_row[field] != updated_row[field] for field in VIDEO_CHUNK_METADATA_FIELDS):
+        refresh_video_transcript_chunk_metadata(connection, updated_row)
+
+
+def apply_video_changes(
+    connection: LanceConnection,
+    existing_row: dict[str, Any],
+    changes: Mapping[str, Any],
+    *,
+    dry_run: bool = False,
+) -> tuple[dict[str, Any], list[str]]:
+    """Apply one prepared row change and own every derived-data invalidation caused by it."""
+    updated_row = {
+        **existing_row,
+        **changes,
+    }
+    if updated_row == existing_row:
+        return updated_row, []
+
+    invalidated = video_invalidations(existing_row, updated_row)
+    if dry_run:
+        return updated_row, invalidated
+
     connection.upsert_rows(
         "videos",
         "youtube_video_id",
-        [
-            {
-                **existing_row,
-                "channel_id": next_channel_id,
-                "title": next_title,
-                "upload_date": next_upload_date,
-                "duration": next_duration,
-                "view_count": next_view_count,
-                "like_count": next_like_count,
-                "transcript": next_transcript,
-                "metadata_fetched_at": next_metadata_fetched_at,
-                "transcript_fetched_at": next_transcript_fetched_at,
-            }
-        ],
+        [updated_row],
     )
-    if video_embedding_source_changed(
-        existing_row,
-        channel_id=next_channel_id,
-        title=next_title,
-        transcript=next_transcript,
-    ):
-        clear_video_embedding(connection, existing_row["youtube_video_id"])
-    if next_transcript != existing_row["transcript"]:
-        clear_video_summary(connection, existing_row["youtube_video_id"])
-        clear_video_transcript_chunks(connection, existing_row["youtube_video_id"])
-    else:
-        updated_row = {
-            **existing_row,
-            "channel_id": next_channel_id,
-            "title": next_title,
-            "upload_date": next_upload_date,
-            "duration": next_duration,
-            "view_count": next_view_count,
-            "like_count": next_like_count,
-        }
+    youtube_video_id = existing_row["youtube_video_id"]
+    if "video_embedding" in invalidated:
+        clear_video_embedding(connection, youtube_video_id)
+    if "video_title_embedding" in invalidated:
+        clear_video_title_embedding(connection, youtube_video_id)
+    if "transcript_chunks" in invalidated:
+        clear_video_transcript_chunks(connection, youtube_video_id)
+    elif any(existing_row[field] != updated_row[field] for field in VIDEO_CHUNK_METADATA_FIELDS):
         refresh_video_transcript_chunk_metadata(connection, updated_row)
+    return updated_row, invalidated
+
+
+def video_invalidations(
+    existing_row: Mapping[str, Any],
+    updated_row: Mapping[str, Any],
+) -> list[str]:
+    """Describe the derived values made stale by one proposed video row change."""
+    invalidated: list[str] = []
+    if any(existing_row[field] != updated_row[field] for field in VIDEO_EMBEDDING_SOURCE_FIELDS):
+        invalidated.append("video_embedding")
+    if existing_row["title"] != updated_row["title"]:
+        invalidated.append("video_title_embedding")
+    if existing_row["transcript"] != updated_row["transcript"]:
+        invalidated.append("transcript_chunks")
+        if existing_row["summary"] is not None and updated_row["summary"] is None:
+            invalidated.append("summary")
+    return invalidated
+
+
+def require_video_row(
+    connection: LanceConnection,
+    youtube_video_id: str,
+) -> dict[str, Any]:
+    """Return one raw catalog row or raise the agent-facing missing-record error."""
+    row = find_video_row(connection, youtube_video_id)
+    if row is None:
+        raise ValueError(f"Video is not stored: {youtube_video_id}")
+    return row
 
 
 def video_payload_row(
@@ -198,25 +369,6 @@ def keep_existing_if_missing[StoredValue](
     return existing_value if incoming_value is None else incoming_value
 
 
-def video_embedding_source_changed(
-    existing_row: dict[str, Any],
-    *,
-    channel_id: str | None,
-    title: str | None,
-    transcript: str | None,
-) -> bool:
-    """Return whether video fields used for embeddings changed."""
-    return (
-        channel_id,
-        title,
-        transcript,
-    ) != (
-        existing_row["channel_id"],
-        existing_row["title"],
-        existing_row["transcript"],
-    )
-
-
 def refresh_video_transcript_chunk_metadata(
     connection: LanceConnection,
     video: dict[str, Any],
@@ -241,6 +393,17 @@ def clear_video_embedding(
     )
 
 
+def clear_video_title_embedding(
+    connection: LanceConnection,
+    youtube_video_id: str,
+) -> None:
+    """Clear cached title embedding data for a stored video."""
+    connection.delete_where(
+        "video_title_embeddings",
+        f"video_id = {filter_literal(youtube_video_id)}",
+    )
+
+
 def clear_video_transcript_chunks(
     connection: LanceConnection,
     youtube_video_id: str,
@@ -249,18 +412,6 @@ def clear_video_transcript_chunks(
     connection.delete_where(
         "video_transcript_chunks",
         f"video_id = {filter_literal(youtube_video_id)}",
-    )
-
-
-def clear_video_summary(
-    connection: LanceConnection,
-    youtube_video_id: str,
-) -> None:
-    """Clear cached summary data for a stored video."""
-    connection.update_where(
-        "videos",
-        f"youtube_video_id = {filter_literal(youtube_video_id)}",
-        {"summary": None},
     )
 
 
