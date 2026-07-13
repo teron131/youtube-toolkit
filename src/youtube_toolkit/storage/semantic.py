@@ -9,6 +9,7 @@ import math
 from typing import Any
 
 from lancedb.rerankers import RRFReranker
+from lancedb.table import Table
 
 from ..model_config import EmbeddingConfig, embedding_auto_index_enabled, embedding_concurrency
 from ..schemas import EmbeddingIndexResult
@@ -248,8 +249,30 @@ def search_transcript_chunk_scores(
     embedding_config: EmbeddingConfig | None = None,
 ) -> dict[str, float]:
     """Return each video's best semantic transcript-chunk score for a query."""
-    rows = search_transcript_chunks(
-        connection,
+    return search_transcript_chunk_scores_in_table(
+        connection.optional_table("video_transcript_chunks"),
+        query,
+        video_ids,
+        where_sql=where_sql,
+        min_similarity=min_similarity,
+        embed_text=embed_text,
+        embedding_config=embedding_config,
+    )
+
+
+def search_transcript_chunk_scores_in_table(
+    table: Table | None,
+    query: str,
+    video_ids: list[str] | None,
+    *,
+    where_sql: str | None = None,
+    min_similarity: float | None = None,
+    embed_text: EmbedText | None = None,
+    embedding_config: EmbeddingConfig | None = None,
+) -> dict[str, float]:
+    """Score transcript chunks through an already-open table so read-only callers can share command semantics."""
+    rows = search_transcript_chunks_in_table(
+        table,
         query,
         video_ids,
         where_sql=where_sql,
@@ -279,11 +302,37 @@ def search_transcript_chunks(
     embedding_config: EmbeddingConfig | None = None,
 ) -> list[dict[str, Any]]:
     """Search transcript chunk embeddings with optional video and SQL filters."""
-    if video_ids == [] or connection.optional_table("video_transcript_chunks") is None:
+    return search_transcript_chunks_in_table(
+        connection.optional_table("video_transcript_chunks"),
+        query,
+        video_ids,
+        limit=limit,
+        where_sql=where_sql,
+        columns=columns,
+        min_similarity=min_similarity,
+        embed_text=embed_text,
+        embedding_config=embedding_config,
+    )
+
+
+def search_transcript_chunks_in_table(
+    table: Table | None,
+    query: str,
+    video_ids: list[str] | None,
+    *,
+    limit: int = MAX_TABLE_SCAN_ROWS,
+    where_sql: str | None = None,
+    columns: list[str] | None = None,
+    min_similarity: float | None = None,
+    embed_text: EmbedText | None = None,
+    embedding_config: EmbeddingConfig | None = None,
+) -> list[dict[str, Any]]:
+    """Search one optional transcript table without initializing or maintaining its database."""
+    if video_ids == [] or table is None:
         return []
     query_embedding = embed_text(query) if embed_text is not None else embeddings.embed_text(query, config=embedding_config)
     search_query = transcript_chunk_search_query(
-        connection,
+        table,
         video_ids,
         query_embedding,
         limit=limit,
@@ -414,10 +463,11 @@ def explain_transcript_chunk_search(
     embedding_config: EmbeddingConfig | None = None,
 ) -> str:
     """Return LanceDB's plan explanation for a transcript chunk search."""
-    if not video_ids or connection.optional_table("video_transcript_chunks") is None:
+    table = connection.optional_table("video_transcript_chunks")
+    if not video_ids or table is None:
         return ""
     query_embedding = embed_text(query) if embed_text is not None else embeddings.embed_text(query, config=embedding_config)
-    return str(transcript_chunk_search_query(connection, video_ids, query_embedding).explain_plan())
+    return str(transcript_chunk_search_query(table, video_ids, query_embedding).explain_plan())
 
 
 def analyze_transcript_chunk_search(
@@ -429,14 +479,15 @@ def analyze_transcript_chunk_search(
     embedding_config: EmbeddingConfig | None = None,
 ) -> str:
     """Return LanceDB's analyzed execution plan for a transcript chunk search."""
-    if not video_ids or connection.optional_table("video_transcript_chunks") is None:
+    table = connection.optional_table("video_transcript_chunks")
+    if not video_ids or table is None:
         return ""
     query_embedding = embed_text(query) if embed_text is not None else embeddings.embed_text(query, config=embedding_config)
-    return str(transcript_chunk_search_query(connection, video_ids, query_embedding).analyze_plan())
+    return str(transcript_chunk_search_query(table, video_ids, query_embedding).analyze_plan())
 
 
 def transcript_chunk_search_query(
-    connection: LanceConnection,
+    table: Table,
     video_ids: list[str] | None,
     query_embedding: list[float],
     *,
@@ -445,7 +496,7 @@ def transcript_chunk_search_query(
     min_similarity: float | None = None,
 ) -> Any:
     """Build the filtered LanceDB transcript chunk query before scoring or column projection."""
-    query: Any = connection.table("video_transcript_chunks").search(query_embedding)
+    query: Any = table.search(query_embedding)
     query = query.distance_type("cosine")
     filters: list[str] = []
     if video_ids is not None:

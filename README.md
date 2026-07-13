@@ -110,6 +110,12 @@ The toolkit intentionally ships a small working surface:
       <td>Embed stored transcript text for semantic search and RAG prep.</td>
     </tr>
     <tr>
+      <td><code>db</code></td>
+      <td><code>view</code></td>
+      <td><code>[--port N]</code><br><code>[--no-open]</code></td>
+      <td>Open a live, read-only browser for tables, rows, schemas, indexes, statistics, and versions.</td>
+    </tr>
+    <tr>
       <td><code>setup</code></td>
       <td><code>-</code></td>
       <td><code>[--embedding-*]</code><br><code>[--llm-*]</code><br><code>[--auto-embeddings|--no-auto-embeddings]</code><br><code>[--verify|--no-verify]</code></td>
@@ -128,9 +134,11 @@ Search sources are selected with repeated `--source youtube|channel|db` flags. U
 
 Storage lives in this checkout's `.cache/youtube.lancedb` during source-checkout usage. Installed CLI usage follows the platform data directory (`~/Library/Application Support/youtube-toolkit` on macOS, `~/.local/share/youtube-toolkit` on Linux, and Local AppData on Windows). Set `YOUTUBE_TOOLKIT_STORAGE_HOME` to move it.
 
+`youtube db view` serves the active store on a loopback-only URL and opens it in the default browser. The viewer reads the live database directly and exposes no mutation endpoints; it does not create, migrate, repair, or optimize storage. Use `--no-open` to leave browser navigation to another process, choose a fixed loopback port with `--port`, and press Ctrl-C to stop the server.
+
 `doctor` inspects the database schema without creating, migrating, or repairing the file. If the schema is stale or unexpected, it reports a warning and points to the future `youtube setup database` repair flow.
 
-The schema source of truth is `youtube_toolkit/storage/schema.sql`; DB creation and doctor inspection both read that SQL file.
+The schema source of truth is `youtube_toolkit/storage/connection.py`; database creation and health inspection use those Python schema definitions.
 
 Model configuration lives alongside installed CLI data in the platform data directory. Bare `youtube setup` opens an Up/Down selector for embedding, LLM, settings, verification, and save. Flag-based usage stays scriptable: use `youtube setup --verify` to force a `Hello` check, `youtube setup --no-verify` to skip it, and `youtube setup --no-auto-embeddings` to keep transcript sync from indexing embeddings automatically. Environment variables override the file for one-off runs:
 
@@ -178,6 +186,7 @@ youtube watchlist recent @OpenAI @Anthropic --days 3
 youtube watchlist remove @OpenAI @Anthropic
 youtube blacklist add @SpamChannel UC123
 youtube index
+youtube db view
 youtube setup
 ```
 
