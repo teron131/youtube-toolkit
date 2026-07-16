@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import math
 from typing import Any
@@ -11,10 +10,11 @@ from typing import Any
 from lancedb.rerankers import RRFReranker
 from lancedb.table import Table
 
+from ..execution import collect_concurrently
 from ..model_config import EmbeddingConfig, embedding_auto_index_enabled, embedding_concurrency
 from ..schemas import EmbeddingIndexResult
 from . import embeddings
-from .connection import MAX_TABLE_SCAN_ROWS, LanceConnection, filter_in_values, filter_literal, transcript_chunk_metadata
+from .connection import MAX_TABLE_SCAN_ROWS, LanceConnection, filter_in_values, filter_literal, is_database_write_permission_error, transcript_chunk_metadata
 from .embeddings import EmbeddingSearchError
 from .videos import find_video_row, video_payload_row
 
@@ -120,6 +120,8 @@ def auto_index_transcript_chunks(
             embed_text=embed_text,
         )
     except Exception as error:
+        if is_database_write_permission_error(error):
+            raise
         return {
             "status": "failed",
             "video_id": youtube_video_id,
@@ -740,30 +742,29 @@ def index_video_title_embeddings(
             "dimensions": len(embedding),
         }
 
-    indexed_rows: list[dict[str, Any]] = []
-    with ThreadPoolExecutor(max_workers=embedding_concurrency(len(jobs))) as executor:
-        futures = {executor.submit(embed_job, job): job for job in jobs}
-        for future in as_completed(futures):
-            job = futures[future]
-            try:
-                result = future.result()
-            except Exception as error:
-                results.append(
-                    {
-                        "status": "failed",
-                        "video_id": job[0],
-                        "error": str(error),
-                    }
-                )
-                continue
-            indexed_rows.append({key: value for key, value in result.items() if key != "dimensions"})
-            results.append(
-                {
-                    "status": "indexed",
-                    "video_id": job[0],
-                    "dimensions": result["dimensions"],
-                }
-            )
+    jobs_by_index = dict(enumerate(jobs))
+    completed, failures = collect_concurrently(
+        jobs_by_index,
+        embed_job,
+        max_workers=embedding_concurrency(len(jobs)),
+    )
+    indexed_rows = [{key: value for key, value in result.items() if key != "dimensions"} for result in completed.values()]
+    results.extend(
+        {
+            "status": "failed",
+            "video_id": jobs_by_index[job_index][0],
+            "error": str(error),
+        }
+        for job_index, error in failures.items()
+    )
+    results.extend(
+        {
+            "status": "indexed",
+            "video_id": result["video_id"],
+            "dimensions": result["dimensions"],
+        }
+        for result in completed.values()
+    )
 
     if indexed_rows:
         connection.ensure_video_title_embedding_table(len(indexed_rows[0]["embedding"]))

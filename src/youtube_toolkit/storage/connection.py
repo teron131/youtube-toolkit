@@ -82,6 +82,20 @@ class DatabaseWritePermissionError(RuntimeError):
     """Raised when the active LanceDB store cannot be created because writes are denied."""
 
 
+DATABASE_PERMISSION_MARKERS = (
+    "operation not permitted",
+    "permission denied",
+)
+
+
+def is_database_write_permission_error(error: BaseException) -> bool:
+    """Recognize direct filesystem denial and LanceDB's wrapped permission failures."""
+    if isinstance(error, PermissionError | DatabaseWritePermissionError):
+        return True
+    detail = str(error).lower()
+    return "lance" in detail and any(marker in detail for marker in DATABASE_PERMISSION_MARKERS)
+
+
 BASE_TABLE_SCHEMAS: dict[str, pa.Schema] = {
     "channels": pa.schema(
         [
@@ -531,7 +545,9 @@ def get_connection() -> LanceConnection:
     try:
         storage_dir.mkdir(parents=True, exist_ok=True)
         return LanceConnection(storage_dir / DATABASE_FILENAME)
-    except PermissionError as error:
+    except Exception as error:
+        if not is_database_write_permission_error(error):
+            raise
         raise DatabaseWritePermissionError(str(error)) from error
 
 

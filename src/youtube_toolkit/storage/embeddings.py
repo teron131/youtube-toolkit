@@ -4,10 +4,15 @@ from __future__ import annotations
 
 from typing import Any
 import json
+import time
 import urllib.error
 import urllib.request
 
 from ..model_config import EmbeddingConfig, embedding_config_from_env
+from ..execution import retry_transient
+
+EMBEDDING_REQUEST_ATTEMPTS = 3
+EMBEDDING_RETRY_BACKOFF_SECONDS = 0.25
 
 
 class EmbeddingSearchError(RuntimeError):
@@ -49,7 +54,7 @@ def post_embedding_json(
     config: EmbeddingConfig,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    """POST one embedding request after enforcing the configured base URL boundary."""
+    """POST one embedding request with bounded retries for transient provider failures."""
     if not url.startswith(f"{config.base_url}/"):
         raise EmbeddingSearchError("Unsupported embedding URL")
     request = urllib.request.Request(  # noqa: S310
@@ -61,9 +66,22 @@ def post_embedding_json(
         },
         method="POST",
     )
-    try:
+
+    def request_payload() -> dict[str, Any]:
         with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310
-            return json.loads(response.read().decode("utf-8"))
+            response_payload = json.loads(response.read().decode("utf-8"))
+        if not isinstance(response_payload, dict):
+            raise json.JSONDecodeError("Embedding response was not a JSON object", "", 0)
+        return response_payload
+
+    try:
+        return retry_transient(
+            request_payload,
+            attempts=EMBEDDING_REQUEST_ATTEMPTS,
+            backoff_seconds=EMBEDDING_RETRY_BACKOFF_SECONDS,
+            retryable_errors=(OSError, json.JSONDecodeError),
+            sleep=time.sleep,
+        )
     except urllib.error.HTTPError as error:
         message = compact_embedding_error(error.read().decode("utf-8", errors="replace"))
         raise EmbeddingSearchError(message or f"Embedding request HTTP {error.code}") from error

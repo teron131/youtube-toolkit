@@ -2,7 +2,7 @@
 
 Sources discover candidate videos from YouTube, channel listings, stored rows, or any combination of those.
 Native mode stays metadata-first and returns video objects after local filters, ranking, and limits.
-Semantic mode hydrates transcript text only when chunk search needs it, then returns chunks by default.
+Semantic mode runs title, transcript, chunk-index, and scoring stages, then returns chunks by default.
 Full transcript output remains an explicit transcript command rather than a search side effect.
 """
 
@@ -13,19 +13,18 @@ from uuid import uuid4
 
 from ..identity import parse_channel_ref
 from ..schemas import ChannelIdentity, extract_channel_identity
-from ..storage import get_connection, list_blacklist_channel_identities, search_stored_videos, store_search_candidates, upsert_video
+from ..storage import get_connection, store_search_candidates, upsert_video
+from ..storage.connection import DatabaseWritePermissionError
 from ..youtube.channels import ChannelOptions, fetch_channel_metadata
 from ..youtube.client import YtDlpClient
 from .filters import (
     candidate_id,
-    db_video_filter,
     dedupe_candidates,
     filter_candidates,
     interlace_relevance,
     normalized_upload_date,
     popularity,
     rank_by_value,
-    stored_candidate,
     upload_cutoff,
     video_result,
 )
@@ -40,17 +39,15 @@ from .request import (
     resolve_sort,
     validate_request,
 )
+from .database import db_candidates, db_semantic_candidates, search_db_chunks, search_db_videos
 from .semantic import (
-    db_semantic_candidates,
-    ensure_semantic_ready,
-    index_transcripts,
-    index_warnings,
+    SemanticSearchState,
+    ensure_semantic_index,
+    fetch_semantic_transcripts,
     prefilter_by_title_semantics,
-    rank_by_transcript,
-    search_chunks,
-    search_db_chunks,
-    search_db_videos,
-    semantic_ready_ids,
+    prepare_semantic_index,
+    project_semantic_results,
+    score_semantic_index,
 )
 
 
@@ -60,7 +57,6 @@ def search(request: SearchRequest) -> list[dict[str, Any]]:
     limit = request.limit
     return_type = resolve_return_type(request)
     sort = resolve_sort(request)
-    session_id = uuid4().hex
     if request.sources == ("db",) and return_type == "chunk":
         return search_db_chunks(
             request,
@@ -71,6 +67,7 @@ def search(request: SearchRequest) -> list[dict[str, Any]]:
             request,
             limit=limit,
         )
+    semantic_state = SemanticSearchState() if request.mode == "semantic" else None
 
     candidates = dedupe_candidates(
         collect_sources(
@@ -78,17 +75,68 @@ def search(request: SearchRequest) -> list[dict[str, Any]]:
             limit,
         )
     )
+    storage_warnings: list[str] = []
     if upload_cutoff(request) is not None:
-        candidates = filter_candidates(
+        candidates, warnings = filter_search_candidates(
             candidates,
             request,
+            semantic_state=semantic_state,
             include_upload_date=False,
         )
+        storage_warnings.extend(warning for warning in warnings if warning not in storage_warnings)
         candidates = fetch_metadata_for_date_filters(candidates, request)
-    candidates = filter_candidates(
+    candidates, warnings = filter_search_candidates(
         candidates,
         request,
+        semantic_state=semantic_state,
     )
+    storage_warnings.extend(warning for warning in warnings if warning not in storage_warnings)
+    if semantic_state is not None:
+        semantic_state.warnings.extend(warning for warning in storage_warnings if warning not in semantic_state.warnings)
+        candidates = [
+            {
+                **candidate,
+                "upload_date": normalized_upload_date(candidate.get("upload_date")),
+            }
+            for candidate in candidates
+        ]
+        session_id = uuid4().hex
+        candidates = prefilter_by_title_semantics(
+            request,
+            candidates,
+            semantic_state,
+            session_id=session_id,
+        )
+        documents, transcript_failures = fetch_semantic_transcripts(
+            candidates,
+            semantic_state,
+        )
+        semantic_index = prepare_semantic_index(
+            candidates,
+            documents,
+            semantic_state,
+        )
+        ensure_semantic_index(
+            semantic_index,
+            transcript_failures,
+        )
+        scores = score_semantic_index(
+            request,
+            candidates,
+            semantic_index,
+            semantic_state,
+            return_type=return_type,
+        )
+        return project_semantic_results(
+            request,
+            candidates,
+            semantic_index,
+            scores,
+            semantic_state,
+            transcript_failures,
+            return_type=return_type,
+        )
+    session_id = uuid4().hex
     stage_search_candidates(
         request,
         session_id,
@@ -105,47 +153,53 @@ def search(request: SearchRequest) -> list[dict[str, Any]]:
             value=popularity,
         )
 
-    if return_type == "chunk" or request.mode == "semantic":
-        if request.mode == "semantic":
-            candidates = prefilter_by_title_semantics(
-                request,
-                request.query,
-                candidates,
-                session_id=session_id,
-            )
-        persist_metadata(candidates)
-        index_results = index_transcripts(candidates)
-        ready_ids = semantic_ready_ids(
-            candidates,
-            index_results,
-        )
-        warnings_by_video_id = index_warnings(
-            index_results,
-            ready_ids,
-        )
-        ensure_semantic_ready(
-            candidates,
-            index_results,
-            ready_ids,
-        )
-        if return_type == "chunk":
-            return search_chunks(
-                request,
-                request.query,
-                candidates,
-                warnings_by_video_id=warnings_by_video_id,
-            )
-
-        candidates = rank_by_transcript(
-            request,
-            request.query,
-            candidates,
-        )
-    else:
-        candidates = candidates[:limit]
-        persist_metadata(candidates)
-        warnings_by_video_id = {}
+    candidates = candidates[:limit]
+    persist_metadata(candidates)
+    warnings_by_video_id = {}
     return [video_result(candidate, warnings_by_video_id=warnings_by_video_id) for candidate in candidates[:limit]]
+
+
+def filter_search_candidates(
+    candidates: list[dict[str, Any]],
+    request: SearchRequest,
+    *,
+    semantic_state: SemanticSearchState | None = None,
+    include_upload_date: bool = True,
+) -> tuple[list[dict[str, Any]], tuple[str, ...]]:
+    """Let fresh semantic search continue without stored blacklist state when DB access is denied."""
+    if semantic_state is not None and not semantic_state.database_available:
+        return (
+            filter_candidates(
+                candidates,
+                request,
+                blacklisted_channels=(),
+                include_upload_date=include_upload_date,
+            ),
+            (),
+        )
+    try:
+        return (
+            filter_candidates(
+                candidates,
+                request,
+                include_upload_date=include_upload_date,
+            ),
+            (),
+        )
+    except DatabaseWritePermissionError:
+        if request.mode != "semantic" or "db" in request.sources:
+            raise
+        if semantic_state is not None:
+            semantic_state.database_available = False
+        return (
+            filter_candidates(
+                candidates,
+                request,
+                blacklisted_channels=(),
+                include_upload_date=include_upload_date,
+            ),
+            ("Database unavailable; stored blacklist was not applied",),
+        )
 
 
 def collect_sources(
@@ -331,34 +385,6 @@ def resolve_channel_listing(selection: ChannelTarget) -> tuple[str, ChannelIdent
 def normalized_channel_name(value: str) -> str:
     """Normalize channel names for fuzzy YouTube-search confirmation."""
     return " ".join(value.casefold().split())
-
-
-def db_candidates(
-    request: SearchRequest,
-    *,
-    limit: int,
-    sort: SearchSort,
-) -> list[dict[str, Any]]:
-    """Load stored-video candidates using the DB lookup path and search ranking policy."""
-    with get_connection() as connection:
-        blacklisted_channels = tuple(list_blacklist_channel_identities(connection))
-        payloads = search_stored_videos(
-            connection,
-            request.query,
-            limit=limit,
-            sort="popularity" if sort == "popularity" else "upload_date",
-            where_sql=db_video_filter(
-                request,
-                blacklisted_channels,
-            ),
-        )
-    return [
-        {
-            **stored_candidate(payload),
-            "source": "db",
-        }
-        for payload in payloads
-    ]
 
 
 def channel_entries(

@@ -1,4 +1,4 @@
-"""DB-first transcript retrieval falls back from YouTube captions to stored STT-backed transcript documents."""
+"""Stored and stateless transcript retrieval share caption selection, STT fallback, and cleanup policy."""
 
 from __future__ import annotations
 
@@ -6,18 +6,23 @@ from dataclasses import dataclass
 import html
 import json
 from pathlib import Path
+import time
 from typing import Any, Protocol, cast
 import urllib.error
 import urllib.request
 
-from ..audio_transcription import store_audio_transcript
+from ..convert_zh import convert_zh
 from ..identity import ALLOWED_CAPTION_HOST_SUFFIXES, VideoRef, validate_url
+from ..execution import retry_transient
 from ..schemas import TranscriptChunk, TranscriptDocument, TranscriptSection, VideoMetadata
 from ..storage import auto_index_video_embedding, get_connection, get_stored_video, upsert_video
+from ..stt import transcribe_audio_details
 from .client import YtDlpClient
 
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 DEFAULT_TRANSCRIPT_LANGUAGES = ("en-orig", "en", "zh-Hant", "zh-HK", "yue-HK", "yue", "zh-TW", "zh-Hans", "zh-CN", "zh")
+CAPTION_REQUEST_ATTEMPTS = 3
+CAPTION_RETRY_BACKOFF_SECONDS = 0.25
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,19 +71,11 @@ def fetch_transcript(
 
     client = client or YtDlpClient()
     metadata_payload = client.metadata(video_ref)
-    try:
-        document = fetch_caption_transcript(
-            metadata_payload,
-            options=options,
-        )
-    except CaptionTranscriptUnavailable:
-        document = fetch_stt_transcript(
-            metadata_payload,
-            client=cast(SttAudioClient, client),
-        )
-        if auto_index:
-            index_stored_transcript(document.metadata.video_id)
-        return document
+    document = fetch_transcript_from_metadata(
+        metadata_payload,
+        options=options,
+        client=cast(SttAudioClient, client),
+    )
 
     with get_connection() as connection:
         upsert_video(
@@ -89,6 +86,42 @@ def fetch_transcript(
     if auto_index:
         index_stored_transcript(document.metadata.video_id)
     return document
+
+
+def fetch_live_transcript(
+    video_ref: VideoRef,
+    *,
+    options: TranscriptOptions | None = None,
+    client: CaptionMetadataClient | None = None,
+) -> TranscriptDocument:
+    """Fetch captions or STT without reading or writing persistent toolkit storage."""
+    options = options or TranscriptOptions()
+    client = client or YtDlpClient()
+    metadata_payload = client.metadata(video_ref)
+    return fetch_transcript_from_metadata(
+        metadata_payload,
+        options=options,
+        client=cast(SttAudioClient, client),
+    )
+
+
+def fetch_transcript_from_metadata(
+    metadata_payload: dict[str, Any],
+    *,
+    options: TranscriptOptions,
+    client: SttAudioClient,
+) -> TranscriptDocument:
+    """Choose caption retrieval before STT fallback for one already-fetched metadata payload."""
+    try:
+        return fetch_caption_transcript(
+            metadata_payload,
+            options=options,
+        )
+    except CaptionTranscriptUnavailable:
+        return fetch_stt_transcript(
+            metadata_payload,
+            client=client,
+        )
 
 
 def index_stored_transcript(youtube_video_id: str) -> None:
@@ -132,18 +165,20 @@ def fetch_stt_transcript(
     *,
     client: SttAudioClient,
 ) -> TranscriptDocument:
-    """Download audio, run STT, persist the transcript, and return the stored document shape."""
+    """Download temporary audio, run STT, and return a transcript document without storage."""
     metadata = VideoMetadata.from_yt_dlp(metadata_payload)
     audio_path = client.download_transcription_audio(metadata.video_id)
-    stored_video = store_audio_transcript(
-        audio_path,
-        metadata=metadata_payload,
-    )
-    return stored_transcript_document(
-        stored_video,
-        language="speech-to-text",
-        source="speech-to-text",
-    )
+    try:
+        transcription = transcribe_audio_details(audio_path)
+        transcript = convert_zh(transcription.text, "s2hk")
+        return transcript_document_from_text(
+            metadata,
+            transcript,
+            language="speech-to-text",
+            source="speech-to-text",
+        )
+    finally:
+        audio_path.unlink(missing_ok=True)
 
 
 def fetch_stored_transcript(video_ref: VideoRef) -> TranscriptDocument | None:
@@ -254,19 +289,28 @@ def fetch_caption_payload(url: str) -> dict:
         url,
         headers={"User-Agent": USER_AGENT},
     )
-    try:
+
+    def request_payload() -> dict:
         with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
             data = response.read().decode("utf-8")
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"Failed to download caption track: {exc}") from exc
+        payload = json.loads(data)
+        if not isinstance(payload, dict):
+            raise RuntimeError("Caption track returned a non-object JSON payload")
+        return payload
 
     try:
-        payload = json.loads(data)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("Caption track was not valid JSON") from exc
-    if not isinstance(payload, dict):
-        raise RuntimeError("Caption track returned a non-object JSON payload")
-    return payload
+        return retry_transient(
+            request_payload,
+            attempts=CAPTION_REQUEST_ATTEMPTS,
+            backoff_seconds=CAPTION_RETRY_BACKOFF_SECONDS,
+            retryable_errors=(urllib.error.URLError, json.JSONDecodeError),
+            sleep=time.sleep,
+        )
+    except urllib.error.HTTPError as error:
+        raise RuntimeError(f"Failed to download caption track ({error.code}): {error.reason}") from error
+    except (urllib.error.URLError, json.JSONDecodeError) as error:
+        detail = "Caption track was not valid JSON" if isinstance(error, json.JSONDecodeError) else f"Failed to download caption track: {error}"
+        raise RuntimeError(detail) from error
 
 
 def extract_timed_chunks(caption_payload: dict) -> list[TranscriptChunk]:
