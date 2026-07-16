@@ -261,10 +261,6 @@ class ReadOnlyLanceViewer:
             manifest_enabled=False,
         )
 
-    def _open_table(self, table_name: str) -> Table:
-        """Open the latest table object after validating it against the live table list."""
-        return open_database_table(self._connect(), table_name)
-
 
 def open_database_table(database: DBConnection, table_name: str) -> Table:
     """Validate a live table name before pinning the request to its latest version."""

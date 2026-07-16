@@ -301,11 +301,20 @@ def apply_video_changes(
     )
     youtube_video_id = existing_row["youtube_video_id"]
     if "video_embedding" in invalidated:
-        clear_video_embedding(connection, youtube_video_id)
+        connection.delete_where(
+            "video_embeddings",
+            f"video_id = {filter_literal(youtube_video_id)}",
+        )
     if "video_title_embedding" in invalidated:
-        clear_video_title_embedding(connection, youtube_video_id)
+        connection.delete_where(
+            "video_title_embeddings",
+            f"video_id = {filter_literal(youtube_video_id)}",
+        )
     if "transcript_chunks" in invalidated:
-        clear_video_transcript_chunks(connection, youtube_video_id)
+        connection.delete_where(
+            "video_transcript_chunks",
+            f"video_id = {filter_literal(youtube_video_id)}",
+        )
     elif any(existing_row[field] != updated_row[field] for field in VIDEO_CHUNK_METADATA_FIELDS):
         refresh_video_transcript_chunk_metadata(connection, updated_row)
     return updated_row, invalidated
@@ -379,39 +388,6 @@ def refresh_video_transcript_chunk_metadata(
         "video_transcript_chunks",
         f"video_id = {filter_literal(video['youtube_video_id'])}",
         metadata,
-    )
-
-
-def clear_video_embedding(
-    connection: LanceConnection,
-    youtube_video_id: str,
-) -> None:
-    """Clear cached embedding data for a stored video."""
-    connection.delete_where(
-        "video_embeddings",
-        f"video_id = {filter_literal(youtube_video_id)}",
-    )
-
-
-def clear_video_title_embedding(
-    connection: LanceConnection,
-    youtube_video_id: str,
-) -> None:
-    """Clear cached title embedding data for a stored video."""
-    connection.delete_where(
-        "video_title_embeddings",
-        f"video_id = {filter_literal(youtube_video_id)}",
-    )
-
-
-def clear_video_transcript_chunks(
-    connection: LanceConnection,
-    youtube_video_id: str,
-) -> None:
-    """Clear transcript chunk embeddings for a stored video."""
-    connection.delete_where(
-        "video_transcript_chunks",
-        f"video_id = {filter_literal(youtube_video_id)}",
     )
 
 

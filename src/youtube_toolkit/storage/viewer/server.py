@@ -175,11 +175,6 @@ def query_int(
         raise ViewerQueryError(f"query parameter must be an integer: {name}") from error
 
 
-def load_viewer_assets() -> dict[str, tuple[str, bytes]]:
-    """Load the exact packaged browser assets accepted by the loopback server."""
-    return {route: (content_type, (UI_DIRECTORY / filename).read_bytes()) for route, (filename, content_type) in ASSET_SPECS.items()}
-
-
 def create_database_viewer_server(
     database_path: Path,
     *,
@@ -189,7 +184,13 @@ def create_database_viewer_server(
     if not 0 <= port <= 65_535:
         raise ValueError("port must be between 0 and 65535")
     viewer = ReadOnlyLanceViewer(database_path)
-    assets = load_viewer_assets()
+    assets = {
+        route: (
+            content_type,
+            (UI_DIRECTORY / filename).read_bytes(),
+        )
+        for route, (filename, content_type) in ASSET_SPECS.items()
+    }
     try:
         return LanceViewerHTTPServer(viewer, assets, port)
     except OSError as error:

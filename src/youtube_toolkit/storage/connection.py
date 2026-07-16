@@ -174,8 +174,10 @@ class LanceConnection:
         self.path = path
         self.database = lancedb.connect(path)
         self._mutated_tables: set[str] = set()
-        self.ensure_base_tables()
-        self.ensure_base_scalar_indexes()
+        for table_name, schema in BASE_TABLE_SCHEMAS.items():
+            self.ensure_table(table_name, schema)
+        for table_name in BASE_TABLE_SCHEMAS:
+            self.ensure_scalar_indexes(table_name)
         self.ensure_optional_table_indexes()
 
     def __enter__(self) -> LanceConnection:
@@ -206,16 +208,6 @@ class LanceConnection:
         return any(
             index_stats.num_unindexed_rows >= UNINDEXED_ROW_OPTIMIZE_THRESHOLD for index in table.list_indices() if (index_stats := table.index_stats(index.name)) is not None
         )
-
-    def ensure_base_tables(self) -> None:
-        """Create the required scalar tables if this is a fresh store."""
-        for table_name, schema in BASE_TABLE_SCHEMAS.items():
-            self.ensure_table(table_name, schema)
-
-    def ensure_base_scalar_indexes(self) -> None:
-        """Ensure indexes for required scalar tables."""
-        for table_name in BASE_TABLE_SCHEMAS:
-            self.ensure_scalar_indexes(table_name)
 
     def ensure_optional_table_indexes(self) -> None:
         """Ensure indexes and current chunk metadata columns for optional embedding tables."""
