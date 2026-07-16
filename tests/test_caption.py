@@ -45,6 +45,9 @@ def test_fetch_transcript_returns_stored_transcript_without_client(
                 "id": "JpSHyEIZ_bo",
                 "title": "Stored title",
                 "upload_date": "20260621",
+                "duration": 125.5,
+                "view_count": 42_000,
+                "like_count": 1_200,
             },
             transcript="Stored transcript.",
         )
@@ -61,6 +64,9 @@ def test_fetch_transcript_returns_stored_transcript_without_client(
 
     assert document.metadata.video_id == "JpSHyEIZ_bo"
     assert document.metadata.title == "Stored title"
+    assert document.metadata.duration_seconds == 125.5
+    assert document.metadata.view_count == 42_000
+    assert document.metadata.like_count == 1_200
     assert document.language == "stored"
     assert document.source == "database"
     assert document.text == "Stored transcript."

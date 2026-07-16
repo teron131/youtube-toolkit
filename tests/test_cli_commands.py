@@ -359,6 +359,7 @@ def test_video_database_and_channel_command_groups_parse_public_actions() -> Non
     refresh_args = build_parser().parse_args(["db", "refresh", "JpSHyEIZ_bo"])
     transcript_args = build_parser().parse_args(["video", "transcript", "JpSHyEIZ_bo"])
     timestamped_transcript_args = build_parser().parse_args(["video", "transcript", "JpSHyEIZ_bo", "--timestamps"])
+    export_transcript_args = build_parser().parse_args(["video", "transcript", "JpSHyEIZ_bo", "--export", "--force"])
     edit_args = build_parser().parse_args(
         [
             "db",
@@ -382,7 +383,11 @@ def test_video_database_and_channel_command_groups_parse_public_actions() -> Non
     assert refresh_args.database_command == "refresh"
     assert transcript_args.video_command == "transcript"
     assert transcript_args.timestamps is False
+    assert transcript_args.export is False
+    assert transcript_args.force is False
     assert timestamped_transcript_args.timestamps is True
+    assert export_transcript_args.export is True
+    assert export_transcript_args.force is True
     assert edit_args.database_command == "edit"
     assert edit_args.summary == "Corrected summary"
     assert edit_args.clear == ["transcript"]
@@ -689,8 +694,8 @@ def test_video_transcript_command_selects_plain_or_timestamped_output(monkeypatc
     )
     monkeypatch.setattr(commands, "fetch_transcript", lambda _video_ref: document)
 
-    assert commands.VideoCommands.transcript(argparse.Namespace(video_ref="JpSHyEIZ_bo", timestamps=False)) == "First sentence. Second sentence."
-    assert commands.VideoCommands.transcript(argparse.Namespace(video_ref="JpSHyEIZ_bo", timestamps=True)) == [
+    assert commands.VideoCommands.transcript(argparse.Namespace(video_ref="JpSHyEIZ_bo", timestamps=False, export=False, force=False)) == "First sentence. Second sentence."
+    assert commands.VideoCommands.transcript(argparse.Namespace(video_ref="JpSHyEIZ_bo", timestamps=True, export=False, force=False)) == [
         {
             "start_seconds": 0.0,
             "end_seconds": 2.5,
@@ -704,10 +709,98 @@ def test_video_transcript_command_selects_plain_or_timestamped_output(monkeypatc
     ]
 
 
+def test_video_transcript_export_writes_metadata_and_plain_transcript(
+    capsys,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Export follows the resolved transcript document and writes one deterministic text file."""
+    document = TranscriptDocument(
+        metadata=VideoMetadata(
+            video_id="JpSHyEIZ_bo",
+            url="https://www.youtube.com/watch?v=JpSHyEIZ_bo",
+            title="What is DARKMATTER ?",
+            channel="Example Channel",
+            channel_id="UC123",
+            channel_handle="@example",
+            upload_date="2026-07-16",
+            duration_seconds=5025,
+            view_count=120_000,
+            like_count=4_500,
+        ),
+        language="en",
+        source="subtitles",
+        chunks=[
+            TranscriptChunk(start_seconds=0.0, end_seconds=2.5, text="First sentence."),
+            TranscriptChunk(start_seconds=62.0, end_seconds=65.0, text="Second sentence."),
+        ],
+        sections=[],
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(commands, "fetch_transcript", lambda _video_ref: document)
+
+    assert main(["video", "transcript", "JpSHyEIZ_bo", "--export"]) == 0
+
+    export_path = tmp_path / "What_is_DARKMATTER_Example_Channel.txt"
+    assert json.loads(capsys.readouterr().out) == {
+        "video_id": "JpSHyEIZ_bo",
+        "path": str(export_path),
+    }
+    assert export_path.read_text(encoding="utf-8") == (
+        "Title: What is DARKMATTER ?\n"
+        "Author: Example Channel\n"
+        "Channel: @example\n"
+        "Published: 2026-07-16\n"
+        "Duration: 01:23:45\n"
+        "Views: 120,000\n"
+        "Likes: 4,500\n"
+        "URL: https://www.youtube.com/watch?v=JpSHyEIZ_bo\n"
+        "Language: English\n"
+        "Transcript source: manual captions\n"
+        "\n"
+        "First sentence. Second sentence.\n"
+    )
+
+    with pytest.raises(ValueError, match="use --force to replace it"):
+        commands.VideoCommands.transcript(
+            argparse.Namespace(
+                video_ref="JpSHyEIZ_bo",
+                timestamps=True,
+                export=True,
+                force=False,
+            )
+        )
+
+    commands.VideoCommands.transcript(
+        argparse.Namespace(
+            video_ref="JpSHyEIZ_bo",
+            timestamps=True,
+            export=True,
+            force=True,
+        )
+    )
+    assert export_path.read_text(encoding="utf-8").endswith("\n[00:00:00] First sentence.\n[00:01:02] Second sentence.\n")
+
+
+def test_video_transcript_force_requires_export(monkeypatch) -> None:
+    """Overwrite permission is invalid when no file export was requested."""
+    monkeypatch.setattr(commands, "fetch_transcript", lambda _video_ref: pytest.fail("transcript should not be fetched"))
+
+    with pytest.raises(ValueError, match="--force requires --export"):
+        commands.VideoCommands.transcript(
+            argparse.Namespace(
+                video_ref="JpSHyEIZ_bo",
+                timestamps=False,
+                export=False,
+                force=True,
+            )
+        )
+
+
 @pytest.mark.parametrize(
     ("args", "usage"),
     [
-        (["video", "transcript", "--help"], "usage: youtube video transcript [-h] [--timestamps] url"),
+        (["video", "transcript", "--help"], "usage: youtube video transcript [-h] [--timestamps] [--export] [--force] url"),
         (["video", "metadata", "--help"], "usage: youtube video metadata [-h] url"),
         (["db", "get", "--help"], "usage: youtube db get [-h] url"),
         (["db", "refresh", "--help"], "usage: youtube db refresh [-h] url"),

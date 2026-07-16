@@ -210,6 +210,9 @@ def stored_transcript_document(
         channel_id=stored_video["channel_id"],
         channel_handle=stored_video["channel_handle"],
         upload_date=stored_video["upload_date"],
+        duration_seconds=stored_video["duration"],
+        view_count=stored_video["view_count"],
+        like_count=stored_video["like_count"],
     )
     return transcript_document_from_text(
         metadata,
