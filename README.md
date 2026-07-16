@@ -216,6 +216,7 @@ youtube search "reasoning models" --source channel --channels @OpenAI --channels
 youtube search "agent memory" --source db --mode semantic --limit 5
 youtube video transcript JpSHyEIZ_bo
 youtube video transcript JpSHyEIZ_bo --timestamps
+youtube video transcript JpSHyEIZ_bo --export
 youtube video metadata https://www.youtube.com/watch?v=JpSHyEIZ_bo
 youtube db get JpSHyEIZ_bo
 youtube db refresh JpSHyEIZ_bo
@@ -235,6 +236,8 @@ youtube index
 youtube db view
 youtube setup
 ```
+
+Transcript exports use `<normalized-title>_<normalized-channel>.txt` in the working directory, omitting the channel suffix when unavailable. Add `--force` to replace an existing export.
 
 ## Agent Skill
 

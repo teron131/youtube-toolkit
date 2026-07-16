@@ -94,6 +94,16 @@ class VideoCommandParser:
             action="store_true",
             help="Return timed transcript chunks instead of one text string",
         )
+        transcript_parser.add_argument(
+            "--export",
+            action="store_true",
+            help="Write metadata and transcript to <video-id>.txt in the working directory",
+        )
+        transcript_parser.add_argument(
+            "--force",
+            action="store_true",
+            help="Replace an existing transcript export; requires --export",
+        )
         transcript_parser.set_defaults(handler=VideoCommands.transcript)
 
 
