@@ -17,11 +17,11 @@ from .commands import (
     DatabaseCommands,
     IndexCommands,
     SearchCommands,
-    SetupCommands,
     VideoCommands,
     WatchlistCommands,
-    run_doctor,
 )
+from .health import run_doctor
+from .setup import SetupCommands
 
 DEFAULT_SEARCH_MIN_VIEWS = 10_000
 DEFAULT_SEARCH_MIN_DURATION = "3:00"
