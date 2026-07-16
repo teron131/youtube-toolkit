@@ -15,7 +15,6 @@ from .blacklist import (
 from .candidates import index_search_candidate_titles, search_candidate_title_scores, store_search_candidates
 from .connection import (
     DATABASE_FILENAME,
-    STORAGE_DIRNAME,
     database_schema_health,
     get_connection,
     resolve_storage_dir,
@@ -57,7 +56,6 @@ __all__ = [
     "DEFAULT_EMBEDDING_DIMENSIONALITY",
     "DEFAULT_EMBEDDING_MODEL",
     "EMBEDDING_BASE_URL",
-    "STORAGE_DIRNAME",
     "TRANSCRIPT_CHUNK_CHARS",
     "TRANSCRIPT_CHUNK_OVERLAP_CHARS",
     "EmbeddingSearchError",

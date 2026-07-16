@@ -13,7 +13,6 @@ from lancedb.table import Table
 from platformdirs import user_data_path
 import pyarrow as pa
 
-STORAGE_DIRNAME = ".cache"
 APP_STATE_DIRNAME = "youtube-toolkit"
 DATABASE_FILENAME = "youtube.lancedb"
 DATABASE_SCHEMA_REPAIR = "Run youtube setup database to create a fresh LanceDB store"
@@ -77,6 +76,10 @@ class DatabaseSchemaHealthResult(TypedDict):
     status: Literal["ready", "missing", "invalid", "unreadable"]
     detail: str
     repair: NotRequired[str]
+
+
+class DatabaseWritePermissionError(RuntimeError):
+    """Raised when the active LanceDB store cannot be created because writes are denied."""
 
 
 BASE_TABLE_SCHEMAS: dict[str, pa.Schema] = {
@@ -525,19 +528,18 @@ class LanceConnection:
 def get_connection() -> LanceConnection:
     """Open the toolkit LanceDB store and ensure base tables exist."""
     storage_dir = resolve_storage_dir()
-    storage_dir.mkdir(parents=True, exist_ok=True)
-    return LanceConnection(storage_dir / DATABASE_FILENAME)
+    try:
+        storage_dir.mkdir(parents=True, exist_ok=True)
+        return LanceConnection(storage_dir / DATABASE_FILENAME)
+    except PermissionError as error:
+        raise DatabaseWritePermissionError(str(error)) from error
 
 
 def resolve_storage_dir() -> Path:
-    """Resolve the directory that owns the toolkit LanceDB store."""
+    """Use one platform data directory unless the caller explicitly requests isolation."""
     configured_storage_home = os.environ.get("YOUTUBE_TOOLKIT_STORAGE_HOME")
     if configured_storage_home:
         return Path(configured_storage_home).expanduser().resolve()
-
-    source_root = Path(__file__).resolve().parents[3]
-    if (source_root / ".git").exists() or (source_root / "pyproject.toml").exists():
-        return source_root / STORAGE_DIRNAME
     return user_data_path(APP_STATE_DIRNAME)
 
 

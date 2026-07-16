@@ -12,6 +12,7 @@ from typing import Any, Literal, NotRequired, TypedDict, cast
 
 from pydantic import SecretStr
 
+from ..codex_config import CodexSetupResult, configure_codex_permissions
 from ..identity import require_video_id
 from ..model_config import (
     DEFAULT_EMBEDDING_DIMENSIONALITY,
@@ -399,7 +400,7 @@ class IndexCommands:
 
 
 class SetupCommands:
-    """Handlers for persistent model API setup."""
+    """Handlers for persistent model API and host integration setup."""
 
     @staticmethod
     def models(args: argparse.Namespace) -> ModelSetupResult:
@@ -412,6 +413,11 @@ class SetupCommands:
             draft,
             verify=args.verify if args.verify is not None else False,
         )
+
+    @staticmethod
+    def codex(args: argparse.Namespace) -> CodexSetupResult:
+        """Preview or apply the active storage writable root in Codex config."""
+        return configure_codex_permissions(apply=args.yes)
 
 
 def index_one_video(

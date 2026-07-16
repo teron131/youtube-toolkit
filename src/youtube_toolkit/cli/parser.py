@@ -267,7 +267,7 @@ class DatabaseCommandParser:
 
 
 class SetupCommandParser:
-    """Parser group for persistent model API configuration."""
+    """Parser group for model configuration and optional host integrations."""
 
     @staticmethod
     def add_to(subparsers: argparse._SubParsersAction) -> None:
@@ -291,7 +291,11 @@ class SetupCommandParser:
             default=None,
             help="Send 'Hello' to the configured model APIs after saving",
         )
-        setup_parser.set_defaults(handler=SetupCommands.models)
+        setup_parser.set_defaults(setup_command=None, handler=SetupCommands.models)
+        setup_subparsers = add_command_subparsers(setup_parser, dest="setup_command")
+        codex_parser = setup_subparsers.add_parser("codex", help="Authorize the active storage directory in Codex workspace-write sandboxes")
+        codex_parser.add_argument("--yes", action="store_true", help="Write the Codex sandbox configuration instead of previewing it")
+        codex_parser.set_defaults(handler=SetupCommands.codex)
 
 
 def add_doctor_parser(subparsers: argparse._SubParsersAction) -> None:
