@@ -7,7 +7,7 @@ import stat
 import pytest
 
 from youtube_toolkit import cli
-from youtube_toolkit.cli import commands, main
+from youtube_toolkit.cli import commands, health, main, setup
 from youtube_toolkit.cli.parser import build_parser
 from youtube_toolkit.schemas import ChannelIdentity, TranscriptChunk, TranscriptDocument, VideoMetadata
 from youtube_toolkit.search import ChannelTarget, SearchRequest
@@ -34,7 +34,7 @@ def test_doctor_returns_runtime_and_database_path(
     storage_home = tmp_path / "state"
     monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(storage_home))
     monkeypatch.setattr(
-        commands,
+        health,
         "watchlist_schedule_health",
         lambda: {
             "label": "com.teron.youtube-toolkit.watchlist",
@@ -45,7 +45,7 @@ def test_doctor_returns_runtime_and_database_path(
         },
     )
     monkeypatch.setattr(
-        commands,
+        health,
         "model_api_health",
         lambda: {
             "embedding": {
@@ -63,7 +63,7 @@ def test_doctor_returns_runtime_and_database_path(
         },
     )
 
-    payload = commands.run_doctor(argparse.Namespace())
+    payload = health.run_doctor(argparse.Namespace())
 
     assert isinstance(payload, dict)
     assert str(payload["yt_dlp_version"])
@@ -93,9 +93,9 @@ def test_doctor_schedule_health_handles_unsupported_launchd(monkeypatch) -> None
     def fail_status(*, label: str):
         raise RuntimeError(f"unsupported for {label}")
 
-    monkeypatch.setattr(commands, "watchlist_schedule_status", fail_status)
+    monkeypatch.setattr(health, "watchlist_schedule_status", fail_status)
 
-    assert commands.watchlist_schedule_health(label="com.example.watch") == {
+    assert health.watchlist_schedule_health(label="com.example.watch") == {
         "label": "com.example.watch",
         "ok": False,
         "status": "unsupported",
@@ -142,7 +142,7 @@ def test_main_emits_doctor_as_human_report(
     storage_home = tmp_path / "state"
     monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(storage_home))
     monkeypatch.setattr(
-        commands,
+        health,
         "watchlist_schedule_health",
         lambda: {
             "label": "com.teron.youtube-toolkit.watchlist",
@@ -153,7 +153,7 @@ def test_main_emits_doctor_as_human_report(
         },
     )
     monkeypatch.setattr(
-        commands,
+        health,
         "model_api_health",
         lambda: {
             "embedding": {
@@ -284,8 +284,8 @@ def test_interactive_setup_uses_section_menu(
     monkeypatch.setenv("HOME", str(home))
     for key in MODEL_CONFIG_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setattr(commands.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(commands, "read_setup_key", lambda: next(keys))
+    monkeypatch.setattr(setup.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(setup, "read_setup_key", lambda: next(keys))
 
     assert main(["setup", "--no-verify"]) == 0
 
@@ -316,7 +316,7 @@ def test_model_api_health_reports_key_presence(monkeypatch, tmp_path) -> None:
     }.items():
         monkeypatch.setenv(key, value)
 
-    assert commands.model_api_health() == {
+    assert health.model_api_health() == {
         "embedding": {
             "ok": True,
             "model": "embedding-model",
@@ -338,7 +338,7 @@ def test_model_api_health_reports_missing_llm_config(monkeypatch, tmp_path) -> N
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("LLM_API_KEY", "llm-key")
 
-    assert commands.llm_api_health() == {
+    assert health.llm_api_health() == {
         "ok": False,
         "model": "not configured",
         "status": "missing",
@@ -1119,8 +1119,8 @@ def test_setup_can_verify_saved_config(monkeypatch, tmp_path) -> None:
         calls["config"] = config
         return "Hello back"
 
-    monkeypatch.setattr(commands, "embed_text", lambda text: [0.1, 0.2, 0.3])
-    monkeypatch.setattr(commands, "call_llm_hello", fake_call_llm_hello)
+    monkeypatch.setattr(health, "embed_text", lambda text: [0.1, 0.2, 0.3])
+    monkeypatch.setattr(health, "call_llm_hello", fake_call_llm_hello)
 
     args = build_parser().parse_args(
         [
