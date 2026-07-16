@@ -27,11 +27,13 @@ Video retrieval:
 
 ```bash
 youtube video transcript <url-or-id>
+youtube video transcript <url-or-id> --timestamps
 youtube video metadata <url-or-id>
 ```
 
 - `<url-or-id>` is a YouTube watch URL or bare video ID.
-- Transcript fetch is DB-first, then captions, then STT fallback; it persists the normalized transcript.
+- Metadata output contains normalized video facts instead of the raw yt-dlp payload.
+- Transcript fetch is DB-first, then captions, then STT fallback; it persists the normalized transcript and returns one text string unless `--timestamps` is requested.
 
 Database:
 

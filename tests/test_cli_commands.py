@@ -9,7 +9,7 @@ import pytest
 from youtube_toolkit import cli
 from youtube_toolkit.cli import commands, main
 from youtube_toolkit.cli.parser import build_parser
-from youtube_toolkit.schemas import ChannelIdentity
+from youtube_toolkit.schemas import ChannelIdentity, TranscriptChunk, TranscriptDocument, VideoMetadata
 from youtube_toolkit.search import ChannelTarget, SearchRequest
 from youtube_toolkit.storage import get_connection, upsert_video, upsert_watchlist_channel
 from youtube_toolkit.storage.connection import DatabaseWritePermissionError
@@ -358,6 +358,7 @@ def test_video_database_and_channel_command_groups_parse_public_actions() -> Non
     metadata_args = build_parser().parse_args(["video", "metadata", "JpSHyEIZ_bo"])
     refresh_args = build_parser().parse_args(["db", "refresh", "JpSHyEIZ_bo"])
     transcript_args = build_parser().parse_args(["video", "transcript", "JpSHyEIZ_bo"])
+    timestamped_transcript_args = build_parser().parse_args(["video", "transcript", "JpSHyEIZ_bo", "--timestamps"])
     edit_args = build_parser().parse_args(
         [
             "db",
@@ -380,6 +381,8 @@ def test_video_database_and_channel_command_groups_parse_public_actions() -> Non
     assert metadata_args.video_command == "metadata"
     assert refresh_args.database_command == "refresh"
     assert transcript_args.video_command == "transcript"
+    assert transcript_args.timestamps is False
+    assert timestamped_transcript_args.timestamps is True
     assert edit_args.database_command == "edit"
     assert edit_args.summary == "Corrected summary"
     assert edit_args.clear == ["transcript"]
@@ -632,10 +635,79 @@ def test_parser_normalizes_string_arguments_before_handlers() -> None:
     assert unmatched_quote_args.query == "'earnings"
 
 
+def test_video_metadata_command_returns_normalized_video_facts(monkeypatch) -> None:
+    """The public metadata command excludes yt-dlp extraction internals."""
+
+    class FakeClient:
+        def metadata(self, video_ref: str) -> dict[str, object]:
+            assert video_ref == "JpSHyEIZ_bo"
+            return {
+                "id": "JpSHyEIZ_bo",
+                "title": "Example",
+                "uploader": "Example Channel",
+                "channel_id": "UC123",
+                "channel_handle": "@example",
+                "upload_date": "20260716",
+                "duration": 125.5,
+                "view_count": 42_000,
+                "like_count": 1_200,
+                "description": "Excluded long description",
+                "thumbnail": "https://example.com/thumbnail.jpg",
+                "formats": [{"format_id": "provider-internal"}],
+            }
+
+    monkeypatch.setattr(commands, "YtDlpClient", FakeClient)
+
+    assert commands.VideoCommands.metadata(argparse.Namespace(video_ref="JpSHyEIZ_bo")) == {
+        "video_id": "JpSHyEIZ_bo",
+        "url": "https://www.youtube.com/watch?v=JpSHyEIZ_bo",
+        "title": "Example",
+        "channel": "Example Channel",
+        "channel_id": "UC123",
+        "channel_handle": "@example",
+        "upload_date": "2026-07-16",
+        "duration_seconds": 125.5,
+        "view_count": 42_000,
+        "like_count": 1_200,
+    }
+
+
+def test_video_transcript_command_selects_plain_or_timestamped_output(monkeypatch) -> None:
+    """Transcript output is one text string unless timed chunks are requested."""
+    document = TranscriptDocument(
+        metadata=VideoMetadata(
+            video_id="JpSHyEIZ_bo",
+            url="https://www.youtube.com/watch?v=JpSHyEIZ_bo",
+        ),
+        language="en",
+        source="manual",
+        chunks=[
+            TranscriptChunk(start_seconds=0.0, end_seconds=2.5, text="First sentence."),
+            TranscriptChunk(start_seconds=2.5, end_seconds=5.0, text="Second sentence."),
+        ],
+        sections=[],
+    )
+    monkeypatch.setattr(commands, "fetch_transcript", lambda _video_ref: document)
+
+    assert commands.VideoCommands.transcript(argparse.Namespace(video_ref="JpSHyEIZ_bo", timestamps=False)) == "First sentence. Second sentence."
+    assert commands.VideoCommands.transcript(argparse.Namespace(video_ref="JpSHyEIZ_bo", timestamps=True)) == [
+        {
+            "start_seconds": 0.0,
+            "end_seconds": 2.5,
+            "text": "First sentence.",
+        },
+        {
+            "start_seconds": 2.5,
+            "end_seconds": 5.0,
+            "text": "Second sentence.",
+        },
+    ]
+
+
 @pytest.mark.parametrize(
     ("args", "usage"),
     [
-        (["video", "transcript", "--help"], "usage: youtube video transcript [-h] url"),
+        (["video", "transcript", "--help"], "usage: youtube video transcript [-h] [--timestamps] url"),
         (["video", "metadata", "--help"], "usage: youtube video metadata [-h] url"),
         (["db", "get", "--help"], "usage: youtube db get [-h] url"),
         (["db", "refresh", "--help"], "usage: youtube db refresh [-h] url"),
@@ -1161,6 +1233,10 @@ def test_emit_json_truncates_long_text_fields(capsys, monkeypatch) -> None:
         "title": "y" * 100,
         "transcript": "x" * 20,
     }
+
+    cli.emit_json("z" * 100)
+
+    assert json.loads(capsys.readouterr().out) == "z" * 20
 
 
 def test_watchlist_recent_accepts_optional_channel_filters() -> None:

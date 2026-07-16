@@ -215,6 +215,7 @@ youtube search "langgraph tutorial" --limit 5 --max-duration 20:00
 youtube search "reasoning models" --source channel --channels @OpenAI --channels @Anthropic --uploaded-within-days 30 --sort recency
 youtube search "agent memory" --source db --mode semantic --limit 5
 youtube video transcript JpSHyEIZ_bo
+youtube video transcript JpSHyEIZ_bo --timestamps
 youtube video metadata https://www.youtube.com/watch?v=JpSHyEIZ_bo
 youtube db get JpSHyEIZ_bo
 youtube db refresh JpSHyEIZ_bo

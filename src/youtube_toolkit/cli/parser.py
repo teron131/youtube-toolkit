@@ -89,6 +89,11 @@ class VideoCommandParser:
 
         transcript_parser = video_subparsers.add_parser("transcript", help="Fetch a normalized transcript")
         transcript_parser.add_argument("video_ref", metavar="url", help="YouTube video URL or ID")
+        transcript_parser.add_argument(
+            "--timestamps",
+            action="store_true",
+            help="Return timed transcript chunks instead of one text string",
+        )
         transcript_parser.set_defaults(handler=VideoCommands.transcript)
 
 
