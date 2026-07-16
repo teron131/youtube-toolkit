@@ -6,12 +6,21 @@ import json
 import sys
 from typing import cast
 
+from ..storage.connection import DatabaseWritePermissionError
 from .parser import build_parser
 
 __all__ = ["main"]
 
 MAX_STDOUT_TEXT_FIELD_CHARS = 400_000
 LONG_STDOUT_TEXT_FIELDS = frozenset({"description", "overview", "summary", "text", "transcript"})
+DATABASE_PERMISSION_ERROR = (
+    "Database write access was denied. Grant this process write access to the active database and retry; run `youtube doctor` to see its path. "
+    "Set YOUTUBE_TOOLKIT_STORAGE_HOME only when you intentionally want a different database."
+)
+PERMISSION_ERROR_MARKERS = (
+    "operation not permitted",
+    "permission denied",
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -24,6 +33,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "doctor":
             print(render_doctor(payload))
+        elif args.command == "setup" and getattr(args, "setup_command", None) == "codex":
+            print(render_codex_setup(payload))
         elif args.command == "setup":
             print(render_model_setup(payload))
         elif args.command == "index":
@@ -32,8 +43,18 @@ def main(argv: list[str] | None = None) -> int:
             emit_json(payload)
         return 0
     except (RuntimeError, ValueError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {user_facing_error(exc)}", file=sys.stderr)
         return 1
+
+
+def user_facing_error(error: RuntimeError | ValueError) -> str:
+    """Translate opaque LanceDB permission failures without hiding other command errors."""
+    detail = str(error)
+    normalized_detail = detail.lower()
+    is_lance_permission_error = "lance error" in normalized_detail and any(marker in normalized_detail for marker in PERMISSION_ERROR_MARKERS)
+    if isinstance(error, DatabaseWritePermissionError) or is_lance_permission_error:
+        return DATABASE_PERMISSION_ERROR
+    return detail
 
 
 def emit_json(payload: object) -> None:
@@ -107,6 +128,21 @@ def render_model_setup(payload: object) -> str:
             f"  llm        {llm_verification_text}",
         ]
     )
+
+
+def render_codex_setup(payload: object) -> str:
+    """Render the Codex sandbox integration without hiding its selected paths."""
+    if not isinstance(payload, dict):
+        return str(payload)
+    lines = [
+        "Codex Setup",
+        f"  config      {payload.get('config', 'unknown')}",
+        f"  write root  {payload.get('writable_root', 'unknown')}",
+        f"  status      {payload.get('status', 'unknown')}",
+    ]
+    if payload.get("status") in {"configured", "already_configured"}:
+        lines.extend(("", "Start a new Codex task if this task does not already have write access."))
+    return "\n".join(lines)
 
 
 def render_index(payload: object) -> str:

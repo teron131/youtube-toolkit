@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import lancedb
 import pytest
 
@@ -8,7 +6,6 @@ from youtube_toolkit import EmbeddingConfig
 from youtube_toolkit.schemas import ChannelIdentity
 from youtube_toolkit.storage import (
     DATABASE_FILENAME,
-    STORAGE_DIRNAME,
     analyze_transcript_chunk_search,
     auto_index_transcript_chunks,
     auto_index_video_embedding,
@@ -35,36 +32,40 @@ from youtube_toolkit.storage import (
     upsert_video_summary,
 )
 from youtube_toolkit.storage.connection import (
+    DatabaseWritePermissionError,
     SCALAR_INDEX_COLUMNS,
     filter_contains_case_insensitive,
 )
 from youtube_toolkit.storage.videos import delete_video_record, edit_video_content, get_video_record
 
 
-def test_default_storage_path_is_repo_cache(monkeypatch, tmp_path) -> None:
-    toolkit_root = Path(__file__).resolve().parents[1]
-    outside_repo = tmp_path / "other"
-    outside_repo.mkdir()
-    (outside_repo / ".git").mkdir()
-    monkeypatch.chdir(outside_repo)
-    monkeypatch.delenv("YOUTUBE_TOOLKIT_STORAGE_HOME", raising=False)
-
-    assert STORAGE_DIRNAME == ".cache"
-    assert DATABASE_FILENAME == "youtube.lancedb"
-    assert resolve_storage_dir() == toolkit_root / ".cache"
-
-
-def test_installed_storage_path_is_user_app_state(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr(storage_connection, "__file__", str(installed_connection_file(tmp_path)))
+def test_default_storage_path_is_user_app_state(monkeypatch, tmp_path) -> None:
     user_data_dir = tmp_path / "platform-data" / "youtube-toolkit"
     monkeypatch.setattr(storage_connection, "user_data_path", lambda _app_name: user_data_dir)
     monkeypatch.delenv("YOUTUBE_TOOLKIT_STORAGE_HOME", raising=False)
 
+    assert DATABASE_FILENAME == "youtube.lancedb"
     assert resolve_storage_dir() == user_data_dir
 
 
-def installed_connection_file(tmp_path: Path) -> Path:
-    return tmp_path / "tool" / "site-packages" / "youtube_toolkit" / "storage" / "connection.py"
+def test_explicit_storage_home_selects_isolated_database(monkeypatch, tmp_path) -> None:
+    storage_home = tmp_path / "isolated-youtube-state"
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(storage_home))
+
+    assert resolve_storage_dir() == storage_home
+
+
+def test_connection_translates_storage_directory_permission_errors(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    def deny_mkdir(_path, *, parents=False, exist_ok=False) -> None:
+        del parents, exist_ok
+        raise PermissionError("Operation not permitted")
+
+    monkeypatch.setattr(storage_connection.Path, "mkdir", deny_mkdir)
+
+    with pytest.raises(DatabaseWritePermissionError, match="Operation not permitted"):
+        get_connection()
 
 
 def test_database_schema_health_reports_missing_db(tmp_path) -> None:

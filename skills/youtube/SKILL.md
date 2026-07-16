@@ -114,6 +114,8 @@ youtube setup
 youtube setup --no-auto-embeddings --verify
 youtube setup --embedding-api-key ... --embedding-base-url ... --embedding-model ... --embedding-dimensions 768
 youtube setup --llm-api-key ... --llm-base-url ... --llm-model ... --no-verify
+youtube setup codex
+youtube setup codex --yes
 ```
 
 - `index` with no videos indexes all stored videos that already have transcripts.
@@ -123,6 +125,8 @@ youtube setup --llm-api-key ... --llm-base-url ... --llm-model ... --no-verify
 - `--embedding-*` configures embedding API key, base URL, model, and dimensions.
 - `--llm-*` configures LLM API key, base URL, and model.
 - `--verify` sends a small live check to configured model APIs after saving; `--no-verify` skips it.
+- `setup codex` previews the active Codex config and writable root without writing.
+- `setup codex --yes` creates that storage root, preserves existing TOML, and adds the path only when an equivalent writable root is not already configured.
 
 ## Rules
 
@@ -134,4 +138,8 @@ youtube setup --llm-api-key ... --llm-base-url ... --llm-model ... --no-verify
 
 ## Storage Gotcha
 
-Installed CLI data follows the operating system's standard user data directory. `uv run youtube` from the checkout uses this repo's `.cache` unless `YOUTUBE_TOOLKIT_STORAGE_HOME` is set. Run `youtube doctor` when storage behavior matters.
+All CLI and source-checkout invocations use the operating system's standard user data directory unless `YOUTUBE_TOOLKIT_STORAGE_HOME` explicitly selects isolated storage. Run `youtube doctor` when storage behavior matters.
+
+If a sandbox denies a write to the installed data directory, run `youtube setup codex --yes` from a normal terminal and start a new Codex task. Do not set `YOUTUBE_TOOLKIT_STORAGE_HOME` as a permission workaround because that silently selects a separate database; use the override only when the user intentionally wants isolated storage.
+
+The repository install flow is `uv run python scripts/install.py`; it replaces an existing tool environment rather than creating another install and idempotently configures the Codex writable root when Codex is available.

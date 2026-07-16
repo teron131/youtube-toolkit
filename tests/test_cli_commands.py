@@ -12,6 +12,7 @@ from youtube_toolkit.cli.parser import build_parser
 from youtube_toolkit.schemas import ChannelIdentity
 from youtube_toolkit.search import ChannelTarget, SearchRequest
 from youtube_toolkit.storage import get_connection, upsert_video, upsert_watchlist_channel
+from youtube_toolkit.storage.connection import DatabaseWritePermissionError
 
 MODEL_CONFIG_ENV_KEYS = (
     "EMBEDDING_API_KEY",
@@ -100,6 +101,37 @@ def test_doctor_schedule_health_handles_unsupported_launchd(monkeypatch) -> None
         "status": "unsupported",
         "detail": "unsupported for com.example.watch",
     }
+
+
+@pytest.mark.parametrize(
+    "permission_error",
+    [
+        DatabaseWritePermissionError("Operation not permitted"),
+        RuntimeError('lance error: LanceError(IO): Operation not permitted (os error 1) at path "state/youtube.lancedb/videos.lance/data/.tmp123"'),
+    ],
+)
+def test_main_explains_database_write_permission_errors(
+    capsys,
+    monkeypatch,
+    permission_error: RuntimeError,
+) -> None:
+    """Tell sandboxed callers to authorize the active DB instead of silently switching stores."""
+
+    def deny_database_write(_args: argparse.Namespace) -> None:
+        raise permission_error
+
+    parser = argparse.ArgumentParser()
+    parser.set_defaults(
+        command="channel",
+        handler=deny_database_write,
+    )
+    monkeypatch.setattr(cli, "build_parser", lambda: parser)
+
+    assert main([]) == 1
+    assert capsys.readouterr().err == (
+        "error: Database write access was denied. Grant this process write access to the active database and retry; run `youtube doctor` to see its path. "
+        "Set YOUTUBE_TOOLKIT_STORAGE_HOME only when you intentionally want a different database.\n"
+    )
 
 
 def test_main_emits_doctor_as_human_report(
@@ -197,6 +229,37 @@ def test_main_emits_model_setup_as_human_report(
     assert "  embedding  skipped" in output
     assert "  llm        skipped" in output
     assert config_path.exists()
+
+
+def test_main_previews_and_configures_codex_permissions(
+    capsys,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    codex_home = tmp_path / ".codex"
+    storage_home = tmp_path / "youtube-state"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(storage_home))
+
+    assert main(["setup", "codex"]) == 0
+    preview_output = capsys.readouterr().out
+    assert "Codex Setup" in preview_output
+    assert f"  config      {codex_home / 'config.toml'}" in preview_output
+    assert f"  write root  {storage_home}" in preview_output
+    assert "  status      would_configure" in preview_output
+    assert codex_home.exists() is False
+    assert storage_home.exists() is False
+
+    assert main(["setup", "codex", "--yes"]) == 0
+    configured_output = capsys.readouterr().out
+    assert "  status      configured" in configured_output
+    assert "Start a new Codex task" in configured_output
+    assert storage_home.is_dir()
+
+    assert main(["setup", "codex", "--yes"]) == 0
+    repeated_output = capsys.readouterr().out
+    assert "  status      already_configured" in repeated_output
+    assert "Start a new Codex task" in repeated_output
 
 
 def test_interactive_setup_uses_section_menu(

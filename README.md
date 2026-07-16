@@ -136,10 +136,15 @@ The toolkit intentionally ships a small working surface:
       <td>Delete one stored video and its watchlist, transcript-chunk, and embedding rows.</td>
     </tr>
     <tr>
-      <td><code>setup</code></td>
+      <td rowspan="2"><code>setup</code></td>
       <td><code>-</code></td>
       <td><code>[--embedding-*]</code><br><code>[--llm-*]</code><br><code>[--auto-embeddings|--no-auto-embeddings]</code><br><code>[--verify|--no-verify]</code></td>
       <td>Configure app-local embedding and LLM API settings.</td>
+    </tr>
+    <tr>
+      <td><code>codex</code></td>
+      <td><code>--yes</code></td>
+      <td>Preview or idempotently grant the active storage directory to Codex workspace-write sandboxes.</td>
     </tr>
     <tr>
       <td><code>doctor</code></td>
@@ -152,7 +157,11 @@ The toolkit intentionally ships a small working surface:
 
 Search sources are selected with repeated `--source youtube|channel|db` flags. Use `--source channel --channels @OpenAI --channels @Anthropic` for channel-scoped discovery, `--source db` for stored rows, and `--mode semantic` when the answer should come from transcript embeddings rather than title/metadata matching. Semantic mode returns chunks by default; add `--return video` to get ranked videos instead.
 
-Storage lives in this checkout's `.cache/youtube.lancedb` during source-checkout usage. Installed CLI usage follows the platform data directory (`~/Library/Application Support/youtube-toolkit` on macOS, `~/.local/share/youtube-toolkit` on Linux, and Local AppData on Windows). Set `YOUTUBE_TOOLKIT_STORAGE_HOME` to move it.
+Every invocation uses the platform data directory (`~/Library/Application Support/youtube-toolkit` on macOS, `~/.local/share/youtube-toolkit` on Linux, and Local AppData on Windows). Set `YOUTUBE_TOOLKIT_STORAGE_HOME` only when intentionally selecting an isolated database.
+
+Sandboxed callers must authorize write access to that active installed-data directory before running commands that persist metadata, transcripts, watchlist state, or indexes. Do not redirect `YOUTUBE_TOOLKIT_STORAGE_HOME` merely to bypass a permission error: that selects a separate database. Run `youtube doctor` to confirm the active path, then grant access and retry the original command.
+
+`youtube setup codex` previews the exact Codex config and writable-root paths. `youtube setup codex --yes` creates the active storage root, appends it to `sandbox_workspace_write.writable_roots` only when an equivalent path is not already present, preserves the rest of the TOML file, and requires a new Codex task before the permission takes effect.
 
 `youtube db view` serves the active store on a loopback-only URL and opens it in the default browser. The viewer reads the live database directly and exposes no mutation endpoints; it does not create, migrate, repair, or optimize storage. Use `--no-open` to leave browser navigation to another process, choose a fixed loopback port with `--port`, and press Ctrl-C to stop the server.
 
@@ -179,14 +188,22 @@ The default watchlist schedule runs every 12 hours, scans uploads from the last 
 
 ## Setup
 
+Install or refresh the system command and configure Codex in one idempotent step:
+
+```bash
+uv run python scripts/install.py
+```
+
+The installer builds a wheel, replaces the existing `uv tool` environment instead of creating a duplicate, runs `youtube setup codex --yes` when Codex is installed, and finishes with `youtube doctor`.
+
+For checkout-only development:
+
 ```bash
 uv sync
-uv tool install .
 youtube setup
 youtube doctor
 ```
 
-Use `uv tool install --force .` when refreshing an existing install.
 Use `uv run youtube ...` only when intentionally testing the checkout without reinstalling. Normal usage below assumes the installed `youtube` command.
 
 For `<channel...>` positional arguments, pass separate shell words: `@OpenAI @Anthropic UC123`. Do not use commas or `[a,b,c]` list syntax. For repeated options, write the option each time: `--channels @OpenAI --channels @Anthropic` or `--include-channels OpenAI --include-channels Anthropic`.
