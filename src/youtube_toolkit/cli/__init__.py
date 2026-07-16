@@ -52,7 +52,8 @@ def user_facing_error(error: RuntimeError | ValueError) -> str:
 
 def emit_json(payload: object) -> None:
     """Agent-readable command payloads go through stdout text caps before JSON emission."""
-    json.dump(stdout_payload(payload), sys.stdout, indent=2, ensure_ascii=False)
+    root_key = "text" if isinstance(payload, str) else None
+    json.dump(stdout_payload(payload, key=root_key), sys.stdout, indent=2, ensure_ascii=False)
     print()
 
 

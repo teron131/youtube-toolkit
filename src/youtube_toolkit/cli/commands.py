@@ -27,7 +27,7 @@ from ..model_config import (
     llm_config_from_env,
     write_model_config,
 )
-from ..schemas import ChannelRemovalResult, EmbeddingIndexResult, WatchlistSyncResult
+from ..schemas import ChannelRemovalResult, EmbeddingIndexResult, VideoMetadata, WatchlistSyncResult
 from ..search import ChannelTarget, SearchRequest, search as run_search_request
 from ..search.request import SearchSource
 from ..storage import (
@@ -157,6 +157,19 @@ DATABASE_REFRESH_METADATA_FIELDS = (
     "like_count",
 )
 
+VIDEO_METADATA_OUTPUT_FIELDS = (
+    "video_id",
+    "url",
+    "title",
+    "channel",
+    "channel_id",
+    "channel_handle",
+    "upload_date",
+    "duration_seconds",
+    "view_count",
+    "like_count",
+)
+
 
 class DatabaseCommands:
     """Handlers for inspecting and administering the active database."""
@@ -232,12 +245,18 @@ class VideoCommands:
     """Handlers for retrieving video metadata and transcripts."""
 
     @staticmethod
-    def transcript(args: argparse.Namespace) -> dict[str, Any]:
-        return asdict(fetch_transcript(args.video_ref))
+    def transcript(args: argparse.Namespace) -> str | list[dict[str, Any]]:
+        """Return transcript text by default or timed chunks when explicitly requested."""
+        document = fetch_transcript(args.video_ref)
+        if args.timestamps:
+            return [asdict(chunk) for chunk in document.chunks]
+        return document.text
 
     @staticmethod
     def metadata(args: argparse.Namespace) -> dict[str, Any]:
-        return YtDlpClient().metadata(args.video_ref)
+        """Return normalized video facts without exposing the raw yt-dlp payload."""
+        metadata = asdict(VideoMetadata.from_yt_dlp(YtDlpClient().metadata(args.video_ref)))
+        return {field: metadata[field] for field in VIDEO_METADATA_OUTPUT_FIELDS}
 
 
 def read_text_input(path: str) -> str:
