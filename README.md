@@ -6,14 +6,14 @@ The toolkit turns YouTube into local agent memory:
 
 - `yt-dlp` owns the live YouTube edge: search, metadata, captions, recent channel uploads, watchlists, blacklists, and SponsorBlock-aware transcript cleanup
 - local storage owns durable state, so agents can reuse transcripts, summaries, search metadata, channel rows, and embedding indexes across runs
-- LanceDB powers semantic title/transcript retrieval for agent workflows that need chunk search, ranked videos, or RAG prep
+- fresh YouTube/channel semantic search uses DB-first title, transcript, index, and scoring stages with independent in-memory fallbacks
 
 ## Positioning
 
 This repo is not a generic YouTube wrapper and not only a summarizer. The core object is an agent-readable video document:
 
 ```text
-YouTube URL -> yt-dlp metadata + transcript document -> local catalog + LanceDB indexes -> agent output
+YouTube URL -> yt-dlp metadata -> staged title, transcript, index, and scoring options -> agent output
 ```
 
 The toolkit intentionally ships a small working surface:
@@ -43,7 +43,7 @@ The toolkit intentionally ships a small working surface:
       <td><code>search</code></td>
       <td><code>-</code></td>
       <td><code>"&lt;query&gt;"</code><br><code>[--source youtube|channel|db]</code><br><code>[--mode native|semantic]</code></td>
-      <td>Search YouTube by default, or mix YouTube/channel/DB sources with local filters and semantic transcript lookup.</td>
+      <td>Search YouTube by default, use DB-first semantic stages with in-memory fallback, or include DB sources for stored retrieval.</td>
     </tr>
     <tr>
       <td><code>channel</code></td>
@@ -155,11 +155,11 @@ The toolkit intentionally ships a small working surface:
   </tbody>
 </table>
 
-Search sources are selected with repeated `--source youtube|channel|db` flags. Use `--source channel --channels @OpenAI --channels @Anthropic` for channel-scoped discovery, `--source db` for stored rows, and `--mode semantic` when the answer should come from transcript embeddings rather than title/metadata matching. Semantic mode returns chunks by default; add `--return video` to get ranked videos instead.
+Search sources are selected with repeated `--source youtube|channel|db` flags. Use `--source channel --channels @OpenAI --channels @Anthropic` for channel-scoped discovery, `--source db` for stored rows, and `--mode semantic` when the answer should come from transcript embeddings rather than title/metadata matching. Semantic mode returns chunks by default; add `--return video` to get ranked videos instead. Fresh YouTube/channel semantic search advances through independent title, transcript, chunk-index, scoring, and result stages. Each storage-capable stage prefers LanceDB when available and falls back to its in-memory option without switching the whole workflow.
 
-Every invocation uses the platform data directory (`~/Library/Application Support/youtube-toolkit` on macOS, `~/.local/share/youtube-toolkit` on Linux, and Local AppData on Windows). Set `YOUTUBE_TOOLKIT_STORAGE_HOME` only when intentionally selecting an isolated database.
+Stateful invocations use the platform data directory (`~/Library/Application Support/youtube-toolkit` on macOS, `~/.local/share/youtube-toolkit` on Linux, and Local AppData on Windows). Set `YOUTUBE_TOOLKIT_STORAGE_HOME` only when intentionally selecting an isolated database.
 
-Sandboxed callers must authorize write access to that active installed-data directory before running commands that persist metadata, transcripts, watchlist state, or indexes. Do not redirect `YOUTUBE_TOOLKIT_STORAGE_HOME` merely to bypass a permission error: that selects a separate database. Run `youtube doctor` to confirm the active path, then grant access and retry the original command.
+Sandboxed callers must authorize write access to that active installed-data directory before running commands that persist metadata, transcripts, watchlist state, or indexes. Fresh YouTube/channel semantic search remembers a DB permission failure and sends later stages directly to their in-memory options; results label any skipped stored blacklist or degraded semantic stage. DB sources and other stateful commands still fail clearly. Do not redirect `YOUTUBE_TOOLKIT_STORAGE_HOME` merely to bypass a permission error: that selects a separate database. Run `youtube doctor` to confirm the active path, then grant access and retry the original stateful command.
 
 `youtube setup codex` previews the exact Codex config and writable-root paths. `youtube setup codex --yes` creates the active storage root, appends it to `sandbox_workspace_write.writable_roots` only when an equivalent path is not already present, preserves the rest of the TOML file, and requires a new Codex task before the permission takes effect.
 

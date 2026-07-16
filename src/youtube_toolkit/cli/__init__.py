@@ -6,7 +6,7 @@ import json
 import sys
 from typing import cast
 
-from ..storage.connection import DatabaseWritePermissionError
+from ..storage.connection import is_database_write_permission_error
 from .parser import build_parser
 
 __all__ = ["main"]
@@ -16,10 +16,6 @@ LONG_STDOUT_TEXT_FIELDS = frozenset({"description", "overview", "summary", "text
 DATABASE_PERMISSION_ERROR = (
     "Database write access was denied. Grant this process write access to the active database and retry; run `youtube doctor` to see its path. "
     "Set YOUTUBE_TOOLKIT_STORAGE_HOME only when you intentionally want a different database."
-)
-PERMISSION_ERROR_MARKERS = (
-    "operation not permitted",
-    "permission denied",
 )
 
 
@@ -49,12 +45,9 @@ def main(argv: list[str] | None = None) -> int:
 
 def user_facing_error(error: RuntimeError | ValueError) -> str:
     """Translate opaque LanceDB permission failures without hiding other command errors."""
-    detail = str(error)
-    normalized_detail = detail.lower()
-    is_lance_permission_error = "lance error" in normalized_detail and any(marker in normalized_detail for marker in PERMISSION_ERROR_MARKERS)
-    if isinstance(error, DatabaseWritePermissionError) or is_lance_permission_error:
+    if is_database_write_permission_error(error):
         return DATABASE_PERMISSION_ERROR
-    return detail
+    return str(error)
 
 
 def emit_json(payload: object) -> None:

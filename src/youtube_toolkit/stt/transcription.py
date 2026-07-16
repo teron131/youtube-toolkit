@@ -6,16 +6,20 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import time
 from typing import Any, Literal
 import urllib.error
 import urllib.request
 from uuid import uuid4
 
+from ..execution import retry_transient
 from ..schemas import normalize_text
 
 DEFAULT_STT_LANGUAGE = "en"
 DEFAULT_STT_PROVIDER = "xai"
 DEFAULT_ELEVENLABS_STT_MODEL = "scribe_v2"
+STT_REQUEST_ATTEMPTS = 3
+STT_RETRY_BACKOFF_SECONDS = 0.5
 AUDIO_CONTENT_TYPES = {
     ".aac": "audio/aac",
     ".flac": "audio/flac",
@@ -167,23 +171,31 @@ def run_json_request(
     timeout_seconds: float,
     provider_name: str,
 ) -> dict[str, Any]:
-    """Run one provider request while preserving HTTP and JSON failure context."""
-    try:
+    """Run one provider request with bounded retries for transient and malformed responses."""
+
+    def request_payload() -> dict[str, Any]:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310 - fixed HTTPS API endpoint.
             raw_response = response.read()
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace").strip()
-        raise RuntimeError(f"{provider_name} STT request failed ({exc.code}): {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"{provider_name} STT request failed: {exc.reason}") from exc
+        response_data = json.loads(raw_response)
+        if not isinstance(response_data, dict):
+            raise json.JSONDecodeError("STT response was not a JSON object", "", 0)
+        return response_data
 
     try:
-        response_data = json.loads(raw_response)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"{provider_name} STT response was not valid JSON") from exc
-    if not isinstance(response_data, dict):
-        raise RuntimeError(f"{provider_name} STT response was not a JSON object")
-    return response_data
+        return retry_transient(
+            request_payload,
+            attempts=STT_REQUEST_ATTEMPTS,
+            backoff_seconds=STT_RETRY_BACKOFF_SECONDS,
+            retryable_errors=(urllib.error.URLError, json.JSONDecodeError),
+            sleep=time.sleep,
+        )
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"{provider_name} STT request failed ({error.code}): {detail}") from error
+    except urllib.error.URLError as error:
+        raise RuntimeError(f"{provider_name} STT request failed: {error.reason}") from error
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"{provider_name} STT response was not valid JSON") from error
 
 
 def encode_multipart_form(

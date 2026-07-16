@@ -1,5 +1,6 @@
 import lancedb
 import pytest
+import urllib.error
 
 import youtube_toolkit.storage.connection as storage_connection
 from youtube_toolkit import EmbeddingConfig
@@ -36,6 +37,7 @@ from youtube_toolkit.storage.connection import (
     SCALAR_INDEX_COLUMNS,
     filter_contains_case_insensitive,
 )
+from youtube_toolkit.storage.embeddings import post_embedding_json
 from youtube_toolkit.storage.videos import delete_video_record, edit_video_content, get_video_record
 
 
@@ -65,6 +67,19 @@ def test_connection_translates_storage_directory_permission_errors(monkeypatch, 
     monkeypatch.setattr(storage_connection.Path, "mkdir", deny_mkdir)
 
     with pytest.raises(DatabaseWritePermissionError, match="Operation not permitted"):
+        get_connection()
+
+
+def test_connection_translates_lancedb_permission_errors(monkeypatch, tmp_path) -> None:
+    """Wrapped LanceDB write denial should reach callers through the typed storage boundary."""
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+
+    def deny_lancedb(_path):
+        raise RuntimeError("LanceError(IO): Permission denied while creating table")
+
+    monkeypatch.setattr(storage_connection, "LanceConnection", deny_lancedb)
+
+    with pytest.raises(DatabaseWritePermissionError, match="Permission denied"):
         get_connection()
 
 
@@ -1206,6 +1221,34 @@ def test_auto_index_transcript_chunks_respects_config_toggle(
         }
 
 
+def test_auto_index_transcript_chunks_preserves_database_permission_failures(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """The semantic workflow needs typed permission denial to choose its memory stage option."""
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("EMBEDDING_AUTO_INDEX", "true")
+
+    def deny_database_write(_text: str) -> list[float]:
+        raise DatabaseWritePermissionError("Operation not permitted")
+
+    with get_connection() as connection:
+        upsert_video(
+            connection,
+            {
+                "id": "JpSHyEIZ_bo",
+                "title": "GPU topic",
+            },
+            transcript="GPU earnings",
+        )
+        with pytest.raises(DatabaseWritePermissionError):
+            auto_index_transcript_chunks(
+                connection,
+                "JpSHyEIZ_bo",
+                embed_text=deny_database_write,
+            )
+
+
 def test_auto_index_video_embedding_reports_failures(
     monkeypatch,
     tmp_path,
@@ -1275,6 +1318,51 @@ def test_embed_text_uses_embedding_config(monkeypatch) -> None:
             "dimensions": 512,
         },
     }
+
+
+def test_embedding_request_retries_transient_network_failures(monkeypatch) -> None:
+    """Embedding requests should isolate transient failures behind three total attempts."""
+    attempts = 0
+    delays: list[float] = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self) -> bytes:
+            return b'{"data": [{"embedding": [1.0, 0.0]}]}'
+
+    def fake_urlopen(_request, *, timeout: int):
+        nonlocal attempts
+        assert timeout == 60
+        attempts += 1
+        if attempts < 3:
+            raise urllib.error.URLError("temporary outage")
+        return FakeResponse()
+
+    config = EmbeddingConfig(
+        model="text-embedding-test",
+        api_key="embedding-key",
+        base_url="https://embedding.example/v1/",
+        output_dimensionality=2,
+    )
+    monkeypatch.setattr("youtube_toolkit.storage.embeddings.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("youtube_toolkit.storage.embeddings.time.sleep", delays.append)
+
+    assert post_embedding_json(
+        "https://embedding.example/v1/embeddings",
+        config,
+        {
+            "model": config.model,
+            "input": "hello",
+            "dimensions": 2,
+        },
+    ) == {"data": [{"embedding": [1.0, 0.0]}]}
+    assert attempts == 3
+    assert delays == [0.25, 0.5]
 
 
 def test_upsert_video_summary_stores_summary(

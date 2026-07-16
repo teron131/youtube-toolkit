@@ -1,13 +1,22 @@
 """Caption selection, transcript cache, and STT fallback tests."""
 
 from pathlib import Path
+import urllib.error
 
 import pytest
 
 from youtube_toolkit.schemas import TranscriptChunk
 from youtube_toolkit.storage import get_connection, get_stored_video, upsert_video
 from youtube_toolkit.stt import SpeechTranscription
-from youtube_toolkit.youtube.caption import DEFAULT_TRANSCRIPT_LANGUAGES, TranscriptOptions, fetch_transcript, remove_sponsorblock_chunks, select_caption_track
+from youtube_toolkit.youtube.caption import (
+    DEFAULT_TRANSCRIPT_LANGUAGES,
+    TranscriptOptions,
+    fetch_caption_payload,
+    fetch_live_transcript,
+    fetch_transcript,
+    remove_sponsorblock_chunks,
+    select_caption_track,
+)
 
 
 def test_remove_sponsorblock_chunks_drops_overlapping_chunks() -> None:
@@ -117,7 +126,7 @@ def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
         )
 
     monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
-    monkeypatch.setattr("youtube_toolkit.audio_transcription.transcribe_audio_details", fake_transcribe_audio_details)
+    monkeypatch.setattr("youtube_toolkit.youtube.caption.transcribe_audio_details", fake_transcribe_audio_details)
 
     document = fetch_transcript(
         "JpSHyEIZ_bo",
@@ -137,6 +146,111 @@ def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
     assert stored_video is not None
     assert stored_video["title"] == "No captions"
     assert stored_video["transcript"] == "數據庫"
+
+
+def test_fetch_live_transcript_does_not_open_storage(monkeypatch) -> None:
+    """Stateless caption retrieval should complete even when every storage access would fail."""
+
+    class FakeClient:
+        def metadata(self, video_ref: str) -> dict:
+            return {
+                "id": video_ref,
+                "title": "Frontier model discussion",
+                "automatic_captions": {
+                    "en": [
+                        {
+                            "ext": "json3",
+                            "url": "https://www.youtube.com/api/timedtext?v=example",
+                        }
+                    ]
+                },
+            }
+
+    def deny_connection():
+        raise AssertionError("storage should not be opened")
+
+    monkeypatch.setattr("youtube_toolkit.youtube.caption.get_connection", deny_connection)
+    monkeypatch.setattr(
+        "youtube_toolkit.youtube.caption.fetch_caption_payload",
+        lambda _url: {
+            "events": [
+                {
+                    "tStartMs": 0,
+                    "dDurationMs": 1000,
+                    "segs": [{"utf8": "GPT-5.6 model analysis"}],
+                }
+            ]
+        },
+    )
+
+    document = fetch_live_transcript("JpSHyEIZ_bo", client=FakeClient())
+
+    assert document.metadata.video_id == "JpSHyEIZ_bo"
+    assert document.text == "GPT-5.6 model analysis"
+
+
+def test_stt_fallback_removes_downloaded_audio_after_failure(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """A failed stateless STT fallback must not leave downloaded audio behind."""
+    audio_path = tmp_path / "JpSHyEIZ_bo.m4a"
+    audio_path.write_bytes(b"audio")
+
+    class FakeClient:
+        def metadata(self, video_ref: str) -> dict:
+            return {
+                "id": video_ref,
+                "automatic_captions": {},
+                "subtitles": {},
+            }
+
+        def download_transcription_audio(self, _video_id: str) -> Path:
+            return audio_path
+
+    def fail_transcription(_path: Path) -> SpeechTranscription:
+        raise RuntimeError("STT unavailable")
+
+    monkeypatch.setattr(
+        "youtube_toolkit.youtube.caption.transcribe_audio_details",
+        fail_transcription,
+    )
+
+    with pytest.raises(RuntimeError, match="STT unavailable"):
+        fetch_live_transcript("JpSHyEIZ_bo", client=FakeClient())
+
+    assert not audio_path.exists()
+
+
+def test_fetch_caption_payload_retries_transient_network_failures(monkeypatch) -> None:
+    """Caption downloads should retry transient failures and preserve bounded backoff."""
+    attempts = 0
+    delays: list[float] = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self) -> bytes:
+            return b'{"events": []}'
+
+    def fake_urlopen(_request, *, timeout: int):
+        nonlocal attempts
+        assert timeout == 30
+        attempts += 1
+        if attempts < 3:
+            raise urllib.error.URLError("temporary outage")
+        return FakeResponse()
+
+    monkeypatch.setattr("youtube_toolkit.youtube.caption.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("youtube_toolkit.youtube.caption.time.sleep", delays.append)
+
+    assert fetch_caption_payload("https://www.youtube.com/api/timedtext?v=example") == {"events": []}
+    assert attempts == 3
+    assert delays == [0.25, 0.5]
 
 
 def test_any_caption_source_falls_back_to_manual_subtitles() -> None:

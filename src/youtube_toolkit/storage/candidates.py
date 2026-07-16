@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 import hashlib
 from typing import Any
 
 from lancedb.rerankers import RRFReranker
 
+from ..execution import collect_concurrently
 from ..model_config import EmbeddingConfig, embedding_concurrency
 from ..schemas import EmbeddingIndexResult
 from . import embeddings
@@ -122,30 +122,29 @@ def index_search_candidate_titles(
             "dimensions": len(embedding),
         }
 
-    indexed_rows: list[dict[str, Any]] = []
-    with ThreadPoolExecutor(max_workers=embedding_concurrency(len(jobs))) as executor:
-        futures = {executor.submit(embed_job, job): job for job in jobs}
-        for future in as_completed(futures):
-            job = futures[future]
-            try:
-                result = future.result()
-            except Exception as error:
-                results.append(
-                    {
-                        "status": "failed",
-                        "video_id": job[0],
-                        "error": str(error),
-                    }
-                )
-                continue
-            indexed_rows.append({key: value for key, value in result.items() if key != "dimensions"})
-            results.append(
-                {
-                    "status": "indexed",
-                    "video_id": job[0],
-                    "dimensions": result["dimensions"],
-                }
-            )
+    jobs_by_index = dict(enumerate(jobs))
+    completed, failures = collect_concurrently(
+        jobs_by_index,
+        embed_job,
+        max_workers=embedding_concurrency(len(jobs)),
+    )
+    indexed_rows = [{key: value for key, value in result.items() if key != "dimensions"} for result in completed.values()]
+    results.extend(
+        {
+            "status": "failed",
+            "video_id": jobs_by_index[job_index][0],
+            "error": str(error),
+        }
+        for job_index, error in failures.items()
+    )
+    results.extend(
+        {
+            "status": "indexed",
+            "video_id": result["video_id"],
+            "dimensions": result["dimensions"],
+        }
+        for result in completed.values()
+    )
 
     if indexed_rows:
         connection.ensure_search_candidate_title_embedding_table(len(indexed_rows[0]["embedding"]))

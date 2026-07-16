@@ -1,15 +1,19 @@
 from typing import Any, cast
+from threading import Barrier
 
 import pytest
 
 import youtube_toolkit
 import youtube_toolkit.search as search_package
+import youtube_toolkit.search.database as search_database
+import youtube_toolkit.search.filters as search_filters
 import youtube_toolkit.search.semantic as search_semantic
 import youtube_toolkit.search.workflow as search_workflow
 from youtube_toolkit.search import ChannelTarget, SearchRequest, search
 from youtube_toolkit.search.request import parse_duration
 from youtube_toolkit.schemas import ChannelIdentity, TranscriptChunk, TranscriptDocument, VideoMetadata
 from youtube_toolkit.storage import get_connection, get_stored_video, upsert_blacklist_channel, upsert_video
+from youtube_toolkit.storage.connection import DatabaseWritePermissionError
 
 
 @pytest.fixture(autouse=True)
@@ -18,12 +22,9 @@ def search_transcript_side_effects(monkeypatch, tmp_path) -> dict[str, list[str]
     fetched_video_ids: list[str] = []
     indexed_video_ids: list[str] = []
 
-    def fake_fetch_transcript(
+    def fake_fetch_live_transcript(
         video_id: str,
-        *,
-        auto_index: bool,
     ) -> TranscriptDocument:
-        assert auto_index is False
         fetched_video_ids.append(video_id)
         return TranscriptDocument(
             metadata=VideoMetadata(
@@ -41,6 +42,14 @@ def search_transcript_side_effects(monkeypatch, tmp_path) -> dict[str, list[str]
             ],
             sections=[],
         )
+
+    def fake_fetch_transcript(
+        video_id: str,
+        *,
+        auto_index: bool,
+    ) -> TranscriptDocument:
+        assert auto_index is False
+        return fake_fetch_live_transcript(video_id)
 
     def fake_auto_index_transcript_chunks(connection, video_id: str) -> dict:
         indexed_video_ids.append(video_id)
@@ -84,6 +93,8 @@ def search_transcript_side_effects(monkeypatch, tmp_path) -> dict[str, list[str]
         return {}
 
     monkeypatch.setattr(search_semantic, "fetch_transcript", fake_fetch_transcript)
+    monkeypatch.setattr(search_semantic, "fetch_live_transcript", fake_fetch_live_transcript)
+    monkeypatch.setattr(search_semantic, "embed_text", lambda _text: [1.0, 0.0])
     monkeypatch.setattr(search_semantic, "auto_index_transcript_chunks", fake_auto_index_transcript_chunks)
     monkeypatch.setattr(search_semantic, "index_search_candidate_titles", fake_index_search_candidate_titles)
     monkeypatch.setattr(search_semantic, "index_video_title_embeddings", fake_index_video_title_embeddings)
@@ -759,28 +770,17 @@ def test_channel_search_can_sort_by_semantic_relevance(
             ],
         }
 
-    def fake_search_transcript_chunk_scores(
-        connection,
-        query: str,
-        video_ids: list[str],
-        *,
-        min_similarity: float | None = None,
-    ) -> dict[str, float]:
-        assert min_similarity == 0.5
-        assert query == "GPU capex"
-        assert video_ids == [
-            "aaaaaaaaaaa",
-            "bbbbbbbbbbb",
-            "ccccccccccc",
-        ]
-        return {
-            "aaaaaaaaaaa": 0.2,
-            "bbbbbbbbbbb": 0.9,
-            "ccccccccccc": 0.8,
+    def fake_embed_text(text: str) -> list[float]:
+        scores = {
+            "Transcript for aaaaaaaaaaa": 0.2,
+            "Transcript for bbbbbbbbbbb": 0.9,
+            "Transcript for ccccccccccc": 0.8,
         }
+        score = scores.get(text, 1.0)
+        return [score, (1 - score**2) ** 0.5]
 
     monkeypatch.setattr(search_workflow, "fetch_channel_metadata", fake_fetch_channel_metadata)
-    monkeypatch.setattr(search_semantic, "search_transcript_chunk_scores", fake_search_transcript_chunk_scores)
+    monkeypatch.setattr(search_semantic, "embed_text", fake_embed_text)
 
     results = search(
         SearchRequest(
@@ -801,7 +801,7 @@ def test_channel_search_can_sort_by_semantic_relevance(
         0.9,
         0.8,
     ]
-    assert search_transcript_side_effects["fetched"] == [
+    assert sorted(search_transcript_side_effects["fetched"]) == [
         "aaaaaaaaaaa",
         "bbbbbbbbbbb",
         "ccccccccccc",
@@ -819,7 +819,6 @@ def test_semantic_channel_search_prefilters_by_title_embeddings(
     search_transcript_side_effects,
 ) -> None:
     monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
-    title_indexed_ids: list[str] = []
 
     def fake_fetch_channel_metadata(
         channel_ref: str,
@@ -869,51 +868,23 @@ def test_semantic_channel_search_prefilters_by_title_embeddings(
             ],
         }
 
-    def fake_index_search_candidate_titles(connection, session_id: str) -> list[dict]:
-        title_indexed_ids.append(session_id)
-        return [{"status": "indexed", "video_id": "staged", "dimensions": 3}]
-
-    def fake_search_candidate_title_scores(
-        connection,
-        session_id: str,
-        query: str,
-        *,
-        limit: int,
-        min_similarity: float | None = None,
-    ) -> dict[str, float]:
-        assert session_id
-        assert query == "product announcements"
-        assert limit == 6
-        assert min_similarity == 0.3
-        return {
-            "bbbbbbbbbbb": 0.95,
-            "ddddddddddd": 0.9,
-            "ffffffffff0": 0.8,
+    def fake_embed_text(text: str) -> list[float]:
+        scores = {
+            "AI interview with a founder": 0.1,
+            "Introducing Claude Fable 5": 0.95,
+            "Research update": 0.1,
+            "Launch day for a new product": 0.9,
+            "Office hours": 0.1,
+            "Meet the new assistant": 0.8,
+            "Transcript for bbbbbbbbbbb": 0.8,
+            "Transcript for ddddddddddd": 0.9,
+            "Transcript for ffffffffff0": 0.7,
         }
-
-    def fake_search_transcript_chunk_scores(
-        connection,
-        query: str,
-        video_ids: list[str],
-        *,
-        min_similarity: float | None = None,
-    ) -> dict[str, float]:
-        assert min_similarity == 0.5
-        assert video_ids == [
-            "bbbbbbbbbbb",
-            "ddddddddddd",
-            "ffffffffff0",
-        ]
-        return {
-            "bbbbbbbbbbb": 0.8,
-            "ddddddddddd": 0.9,
-            "ffffffffff0": 0.7,
-        }
+        score = scores.get(text, 1.0)
+        return [score, (1 - score**2) ** 0.5]
 
     monkeypatch.setattr(search_workflow, "fetch_channel_metadata", fake_fetch_channel_metadata)
-    monkeypatch.setattr(search_semantic, "index_search_candidate_titles", fake_index_search_candidate_titles)
-    monkeypatch.setattr(search_semantic, "search_candidate_title_scores", fake_search_candidate_title_scores)
-    monkeypatch.setattr(search_semantic, "search_transcript_chunk_scores", fake_search_transcript_chunk_scores)
+    monkeypatch.setattr(search_semantic, "embed_text", fake_embed_text)
 
     results = search(
         SearchRequest(
@@ -926,8 +897,7 @@ def test_semantic_channel_search_prefilters_by_title_embeddings(
         )
     )
 
-    assert len(title_indexed_ids) == 1
-    assert search_transcript_side_effects["fetched"] == [
+    assert sorted(search_transcript_side_effects["fetched"]) == [
         "bbbbbbbbbbb",
         "ddddddddddd",
         "ffffffffff0",
@@ -938,7 +908,7 @@ def test_semantic_channel_search_prefilters_by_title_embeddings(
     ]
     with get_connection() as connection:
         assert get_stored_video(connection, "aaaaaaaaaaa") is None
-        assert get_stored_video(connection, "bbbbbbbbbbb") is not None
+        assert get_stored_video(connection, "bbbbbbbbbbb") is None
 
 
 def test_semantic_video_search_returns_only_scored_videos(
@@ -974,22 +944,16 @@ def test_semantic_video_search_returns_only_scored_videos(
             ],
         }
 
-    def fake_search_transcript_chunk_scores(
-        connection,
-        query: str,
-        video_ids: list[str] | None,
-        *,
-        min_similarity: float | None = None,
-    ) -> dict[str, float]:
-        assert min_similarity == 0.5
-        assert video_ids == [
-            "aaaaaaaaaaa",
-            "bbbbbbbbbbb",
-        ]
-        return {"aaaaaaaaaaa": 0.8}
+    def fake_embed_text(text: str) -> list[float]:
+        scores = {
+            "Transcript for aaaaaaaaaaa": 0.8,
+            "Transcript for bbbbbbbbbbb": 0.4,
+        }
+        score = scores.get(text, 1.0)
+        return [score, (1 - score**2) ** 0.5]
 
     monkeypatch.setattr(search_workflow, "fetch_channel_metadata", fake_fetch_channel_metadata)
-    monkeypatch.setattr(search_semantic, "search_transcript_chunk_scores", fake_search_transcript_chunk_scores)
+    monkeypatch.setattr(search_semantic, "embed_text", fake_embed_text)
 
     results = search(
         SearchRequest(
@@ -1038,19 +1002,7 @@ def test_date_filter_runs_before_transcript_fetch(
             ],
         }
 
-    def fake_search_transcript_chunk_scores(
-        connection,
-        query: str,
-        video_ids: list[str] | None,
-        *,
-        min_similarity: float | None = None,
-    ) -> dict[str, float]:
-        assert min_similarity == 0.5
-        assert video_ids == ["bbbbbbbbbbb"]
-        return {"bbbbbbbbbbb": 0.8}
-
     monkeypatch.setattr(search_workflow, "fetch_channel_metadata", fake_fetch_channel_metadata)
-    monkeypatch.setattr(search_semantic, "search_transcript_chunk_scores", fake_search_transcript_chunk_scores)
 
     results = search(
         SearchRequest(
@@ -1069,7 +1021,7 @@ def test_date_filter_runs_before_transcript_fetch(
     assert search_transcript_side_effects["indexed"] == ["bbbbbbbbbbb"]
 
 
-def test_semantic_video_results_include_partial_index_warnings(
+def test_semantic_video_results_include_partial_transcript_warnings(
     monkeypatch,
     tmp_path,
     search_transcript_side_effects,
@@ -1102,35 +1054,31 @@ def test_semantic_video_results_include_partial_index_warnings(
             ],
         }
 
-    def fake_auto_index_transcript_chunks(connection, video_id: str) -> dict:
+    def fake_fetch_live_transcript(video_id: str) -> TranscriptDocument:
         if video_id == "bbbbbbbbbbb":
-            return {
-                "status": "skipped",
-                "video_id": video_id,
-                "detail": "Auto embedding is disabled",
-            }
-        return {
-            "status": "indexed",
-            "video_id": video_id,
-            "dimensions": 768,
-        }
+            raise RuntimeError("captions unavailable")
+        return TranscriptDocument(
+            metadata=VideoMetadata(
+                video_id=video_id,
+                url=f"https://www.youtube.com/watch?v={video_id}",
+            ),
+            language="en",
+            source="automatic_captions",
+            chunks=[TranscriptChunk(start_seconds=0, end_seconds=1, text="GPU capex")],
+            sections=[],
+        )
 
-    def fake_search_transcript_chunk_scores(
-        connection,
-        query: str,
-        video_ids: list[str] | None,
+    def fake_fetch_transcript(
+        video_id: str,
         *,
-        min_similarity: float | None = None,
-    ) -> dict[str, float]:
-        assert min_similarity == 0.5
-        return {
-            "aaaaaaaaaaa": 0.8,
-            "bbbbbbbbbbb": 0.7,
-        }
+        auto_index: bool,
+    ) -> TranscriptDocument:
+        assert auto_index is False
+        return fake_fetch_live_transcript(video_id)
 
     monkeypatch.setattr(search_workflow, "fetch_channel_metadata", fake_fetch_channel_metadata)
-    monkeypatch.setattr(search_semantic, "auto_index_transcript_chunks", fake_auto_index_transcript_chunks)
-    monkeypatch.setattr(search_semantic, "search_transcript_chunk_scores", fake_search_transcript_chunk_scores)
+    monkeypatch.setattr(search_semantic, "fetch_transcript", fake_fetch_transcript)
+    monkeypatch.setattr(search_semantic, "fetch_live_transcript", fake_fetch_live_transcript)
 
     results = search(
         SearchRequest(
@@ -1143,8 +1091,8 @@ def test_semantic_video_results_include_partial_index_warnings(
         )
     )
 
-    assert "warnings" not in results[0]
-    assert results[1]["warnings"] == ["bbbbbbbbbbb: Auto embedding is disabled"]
+    assert [result["video_id"] for result in results] == ["aaaaaaaaaaa"]
+    assert results[0]["warnings"] == ["transcript preparation skipped 1 item(s): bbbbbbbbbbb: captions unavailable"]
 
 
 def test_semantic_search_defaults_to_chunk_results(
@@ -1173,35 +1121,41 @@ def test_semantic_search_defaults_to_chunk_results(
             ],
         }
 
-    def fake_search_transcript_chunks(
-        connection,
-        query: str,
-        video_ids: list[str],
+    def fake_fetch_live_transcript(video_id: str) -> TranscriptDocument:
+        search_transcript_side_effects["fetched"].append(video_id)
+        return TranscriptDocument(
+            metadata=VideoMetadata(
+                video_id=video_id,
+                url=f"https://www.youtube.com/watch?v={video_id}",
+            ),
+            language="en",
+            source="automatic_captions",
+            chunks=[
+                TranscriptChunk(
+                    start_seconds=0,
+                    end_seconds=1,
+                    text="The GPU capex cycle is accelerating.",
+                )
+            ],
+            sections=[],
+        )
+
+    def fake_embed_text(text: str) -> list[float]:
+        score = 0.92 if text == "The GPU capex cycle is accelerating." else 1.0
+        return [score, (1 - score**2) ** 0.5]
+
+    def fake_fetch_transcript(
+        video_id: str,
         *,
-        limit: int,
-        columns: list[str],
-        min_similarity: float | None = None,
-    ) -> list[dict]:
-        assert query == "GPU capex"
-        assert video_ids == ["aaaaaaaaaaa"]
-        assert limit == 2
-        assert columns == [
-            "video_id",
-            "chunk_index",
-            "text",
-        ]
-        assert min_similarity == 0.5
-        return [
-            {
-                "video_id": "aaaaaaaaaaa",
-                "chunk_index": 0,
-                "text": "The GPU capex cycle is accelerating.",
-                "similarity": 0.92,
-            }
-        ]
+        auto_index: bool,
+    ) -> TranscriptDocument:
+        assert auto_index is False
+        return fake_fetch_live_transcript(video_id)
 
     monkeypatch.setattr(search_workflow, "fetch_channel_metadata", fake_fetch_channel_metadata)
-    monkeypatch.setattr(search_semantic, "search_transcript_chunks", fake_search_transcript_chunks)
+    monkeypatch.setattr(search_semantic, "fetch_transcript", fake_fetch_transcript)
+    monkeypatch.setattr(search_semantic, "fetch_live_transcript", fake_fetch_live_transcript)
+    monkeypatch.setattr(search_semantic, "embed_text", fake_embed_text)
 
     results = search(
         SearchRequest(
@@ -1233,6 +1187,213 @@ def test_semantic_search_defaults_to_chunk_results(
     ]
     assert search_transcript_side_effects["fetched"] == ["aaaaaaaaaaa"]
     assert search_transcript_side_effects["indexed"] == ["aaaaaaaaaaa"]
+
+
+def test_live_semantic_search_survives_database_permission_denial(
+    monkeypatch,
+    search_transcript_side_effects,
+) -> None:
+    """Fresh semantic search should degrade only stored blacklist behavior when DB access fails."""
+    connection_attempts = 0
+
+    def deny_connection():
+        nonlocal connection_attempts
+        connection_attempts += 1
+        raise DatabaseWritePermissionError("Operation not permitted")
+
+    def fake_youtube_search(
+        query: str,
+        *,
+        fetch_limit: int,
+        sort: str,
+    ) -> list[dict]:
+        assert query == "GPT-5.6 Fable 5 Grok 4.5"
+        assert fetch_limit == 12
+        assert sort == "relevance"
+        return [
+            {
+                "id": "aaaaaaaaaaa",
+                "title": "Frontier model comparison",
+                "upload_date": "2026-07-15",
+            }
+        ]
+
+    monkeypatch.setattr(search_filters, "get_connection", deny_connection)
+    monkeypatch.setattr(search_workflow, "youtube_search", fake_youtube_search)
+    monkeypatch.setattr(
+        search_semantic,
+        "fetch_transcript",
+        lambda *_args, **_kwargs: pytest.fail("known DB denial should skip the DB transcript option"),
+    )
+
+    results = search(
+        SearchRequest(
+            query="GPT-5.6 Fable 5 Grok 4.5",
+            sources=("youtube",),
+            mode="semantic",
+            limit=1,
+            min_views=None,
+            min_duration=None,
+            max_duration=None,
+            uploaded_after="2026-07-01",
+        )
+    )
+
+    assert connection_attempts == 1
+    assert results[0]["video_id"] == "aaaaaaaaaaa"
+    assert results[0]["warnings"] == ["Database unavailable; stored blacklist was not applied"]
+    assert search_transcript_side_effects["fetched"] == ["aaaaaaaaaaa"]
+    assert search_transcript_side_effects["indexed"] == []
+
+
+def test_semantic_stages_fall_back_independently_after_transcript_db_denial(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """A successful DB title stage must not prevent the transcript and later stages from using memory."""
+    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
+    stage_calls: list[str] = []
+
+    def fake_fetch_channel_metadata(
+        channel_ref: str,
+        *,
+        options,
+    ) -> dict:
+        return {
+            "channel_id": "UC123",
+            "channel_handle": channel_ref,
+            "entries": [
+                {
+                    "id": "aaaaaaaaaaa",
+                    "title": "GPT-5.6 analysis",
+                }
+            ],
+        }
+
+    def fake_search_candidate_title_scores(
+        connection,
+        session_id: str,
+        query: str,
+        *,
+        limit: int,
+        min_similarity: float | None,
+    ) -> dict[str, float]:
+        stage_calls.append("database title")
+        return {"aaaaaaaaaaa": 0.9}
+
+    def deny_database_transcript(
+        video_id: str,
+        *,
+        auto_index: bool,
+    ) -> TranscriptDocument:
+        stage_calls.append("database transcript")
+        raise DatabaseWritePermissionError("Operation not permitted")
+
+    def fake_fetch_live_transcript(video_id: str) -> TranscriptDocument:
+        stage_calls.append("live transcript")
+        return TranscriptDocument(
+            metadata=VideoMetadata(
+                video_id=video_id,
+                url=f"https://www.youtube.com/watch?v={video_id}",
+            ),
+            language="en",
+            source="automatic_captions",
+            chunks=[TranscriptChunk(start_seconds=0, end_seconds=1, text="GPT-5.6 benchmark")],
+            sections=[],
+        )
+
+    monkeypatch.setattr(search_workflow, "fetch_channel_metadata", fake_fetch_channel_metadata)
+    monkeypatch.setattr(search_semantic, "search_candidate_title_scores", fake_search_candidate_title_scores)
+    monkeypatch.setattr(search_semantic, "fetch_transcript", deny_database_transcript)
+    monkeypatch.setattr(search_semantic, "fetch_live_transcript", fake_fetch_live_transcript)
+    monkeypatch.setattr(
+        search_semantic,
+        "auto_index_transcript_chunks",
+        lambda *_args, **_kwargs: pytest.fail("later stages should skip a DB already known to be denied"),
+    )
+    monkeypatch.setattr(search_semantic, "embed_text", lambda _text: [1.0, 0.0])
+
+    results = search(
+        SearchRequest(
+            query="frontier models",
+            sources=("channel",),
+            mode="semantic",
+            return_type="video",
+            channels=(ChannelTarget.from_ref("@OpenAI"),),
+            limit=1,
+            min_views=None,
+            min_duration=None,
+            max_duration=None,
+        )
+    )
+
+    assert stage_calls == [
+        "database title",
+        "database transcript",
+        "live transcript",
+    ]
+    assert results[0]["video_id"] == "aaaaaaaaaaa"
+    assert results[0]["warnings"] == ["Database unavailable; semantic stages continued in memory"]
+
+
+def test_live_semantic_search_fetches_transcripts_concurrently(
+    monkeypatch,
+) -> None:
+    """Independent caption work should overlap instead of serializing the semantic pipeline."""
+    all_fetches_started = Barrier(4)
+
+    def fake_fetch_channel_metadata(
+        channel_ref: str,
+        *,
+        options,
+    ) -> dict:
+        return {
+            "channel_id": "UC123",
+            "channel_handle": channel_ref,
+            "entries": [
+                {"id": "aaaaaaaaaaa", "title": "GPT-5.6 analysis"},
+                {"id": "bbbbbbbbbbb", "title": "Grok 4.5 analysis"},
+                {"id": "ccccccccccc", "title": "Fable 5 analysis"},
+                {"id": "ddddddddddd", "title": "Gemini analysis"},
+            ],
+        }
+
+    def fake_fetch_live_transcript(video_id: str) -> TranscriptDocument:
+        all_fetches_started.wait(timeout=1)
+        return TranscriptDocument(
+            metadata=VideoMetadata(
+                video_id=video_id,
+                url=f"https://www.youtube.com/watch?v={video_id}",
+            ),
+            language="en",
+            source="automatic_captions",
+            chunks=[TranscriptChunk(start_seconds=0, end_seconds=1, text=video_id)],
+            sections=[],
+        )
+
+    monkeypatch.setattr(search_workflow, "fetch_channel_metadata", fake_fetch_channel_metadata)
+    monkeypatch.setattr(search_semantic, "fetch_live_transcript", fake_fetch_live_transcript)
+
+    results = search(
+        SearchRequest(
+            query="frontier model analysis",
+            sources=("channel",),
+            mode="semantic",
+            return_type="video",
+            channels=(ChannelTarget.from_ref("@OpenAI"),),
+            limit=4,
+            min_views=None,
+            min_duration=None,
+            max_duration=None,
+        )
+    )
+
+    assert {result["video_id"] for result in results} == {
+        "aaaaaaaaaaa",
+        "bbbbbbbbbbb",
+        "ccccccccccc",
+        "ddddddddddd",
+    }
 
 
 def test_chunk_results_require_semantic_mode() -> None:
@@ -1437,7 +1598,7 @@ def test_search_request_rejects_invalid_literal_values(
         search(search_request)
 
 
-def test_semantic_search_reports_when_no_transcripts_can_be_indexed(
+def test_semantic_search_reports_when_no_transcripts_can_be_prepared(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -1465,12 +1626,13 @@ def test_semantic_search_reports_when_no_transcripts_can_be_indexed(
     def fail_fetch_transcript(
         video_id: str,
         *,
-        auto_index: bool,
+        auto_index: bool = False,
     ) -> TranscriptDocument:
         raise RuntimeError("captions unavailable")
 
     monkeypatch.setattr(search_workflow, "fetch_channel_metadata", fake_fetch_channel_metadata)
     monkeypatch.setattr(search_semantic, "fetch_transcript", fail_fetch_transcript)
+    monkeypatch.setattr(search_semantic, "fetch_live_transcript", fail_fetch_transcript)
 
     with pytest.raises(RuntimeError, match="captions unavailable"):
         search(
@@ -1634,7 +1796,7 @@ def test_db_semantic_chunk_search_uses_lancedb_without_preloaded_video_ids(
             }
         ]
 
-    monkeypatch.setattr(search_semantic, "search_transcript_chunks", fake_search_transcript_chunks)
+    monkeypatch.setattr(search_database, "search_transcript_chunks", fake_search_transcript_chunks)
 
     results = search(
         SearchRequest(
@@ -1702,7 +1864,7 @@ def test_db_semantic_video_search_uses_lancedb_scores_without_indexing(
     def fail_auto_index(connection, video_id: str) -> dict:
         raise AssertionError("DB semantic video search should not auto-index")
 
-    monkeypatch.setattr(search_semantic, "search_transcript_chunk_scores", fake_search_transcript_chunk_scores)
+    monkeypatch.setattr(search_database, "search_transcript_chunk_scores", fake_search_transcript_chunk_scores)
     monkeypatch.setattr(search_semantic, "auto_index_transcript_chunks", fail_auto_index)
 
     results = search(
@@ -1762,7 +1924,7 @@ def test_db_semantic_video_search_pushes_date_filter_to_lancedb(
         assert min_similarity == 0.5
         return {"aaaaaaaaaaa": 0.91}
 
-    monkeypatch.setattr(search_semantic, "search_transcript_chunk_scores", fake_search_transcript_chunk_scores)
+    monkeypatch.setattr(search_database, "search_transcript_chunk_scores", fake_search_transcript_chunk_scores)
 
     results = search(
         SearchRequest(

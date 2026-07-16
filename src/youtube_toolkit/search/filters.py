@@ -120,7 +120,7 @@ def chunk_result(
         "chunk_index": row["chunk_index"],
         "text": row["text"],
         "score": float(row["similarity"]),
-        "video": None if video is None else {key: video[key] for key in VIDEO_RESULT_KEYS},
+        "video": None if video is None else {key: video.get(key) for key in VIDEO_RESULT_KEYS},
     }
     if warnings:
         result["warnings"] = warnings
@@ -205,13 +205,15 @@ def filter_candidates(
     candidates: list[dict[str, Any]],
     request: SearchRequest,
     *,
+    blacklisted_channels: tuple[ChannelIdentity, ...] | None = None,
     include_upload_date: bool = True,
 ) -> list[dict[str, Any]]:
-    """Apply local search filters with the current blacklist loaded from storage."""
+    """Apply local filters with either an explicit blacklist or the current stored blacklist."""
     if not candidates:
         return []
-    with get_connection() as connection:
-        blacklisted_channels = tuple(list_blacklist_channel_identities(connection))
+    if blacklisted_channels is None:
+        with get_connection() as connection:
+            blacklisted_channels = tuple(list_blacklist_channel_identities(connection))
     return [
         candidate
         for candidate in candidates

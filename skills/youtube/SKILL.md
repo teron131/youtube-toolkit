@@ -71,7 +71,7 @@ youtube search "open source agents" --exclude-channels shorts --exclude-channels
 - `--source channel` searches videos from specified channels; repeat `--channels <channel>` for multiple channel targets.
 - `--source db` searches stored local video rows.
 - `<channel>` is a channel URL, handle like `@OpenAI`, or channel ID.
-- `--mode semantic` uses transcript embeddings; it returns chunks by default, or ranked videos with `--return video`.
+- `--mode semantic` uses independent title, transcript, chunk-index, and scoring stages. Fresh YouTube/channel searches prefer the DB option at each storage-capable stage and fall back stage-by-stage to memory. It returns chunks by default, or ranked videos with `--return video`.
 - `--extra-query TEXT` adds another YouTube relevance query while keeping one result set.
 - `--min-views N`, `--min-duration 3:00`, and `--max-duration 20:00` filter YouTube-style candidates.
 - `--uploaded-after YYYY-MM-DD` and `--uploaded-within-days N` filter by upload date.
@@ -140,6 +140,6 @@ youtube setup codex --yes
 
 All CLI and source-checkout invocations use the operating system's standard user data directory unless `YOUTUBE_TOOLKIT_STORAGE_HOME` explicitly selects isolated storage. Run `youtube doctor` when storage behavior matters.
 
-If a sandbox denies a write to the installed data directory, run `youtube setup codex --yes` from a normal terminal and start a new Codex task. Do not set `YOUTUBE_TOOLKIT_STORAGE_HOME` as a permission workaround because that silently selects a separate database; use the override only when the user intentionally wants isolated storage.
+If a sandbox denies a write to the installed data directory, fresh YouTube/channel semantic search records the denial once and routes later stages directly to their in-memory options. Results report skipped stored blacklist behavior or semantic-stage degradation. For DB sources, watchlists, blacklists, indexes, and other stateful operations, run `youtube setup codex --yes` from a normal terminal and start a new Codex task. Do not set `YOUTUBE_TOOLKIT_STORAGE_HOME` as a permission workaround because that silently selects a separate database; use the override only when the user intentionally wants isolated storage.
 
 The repository install flow is `uv run python scripts/install.py`; it replaces an existing tool environment rather than creating another install and idempotently configures the Codex writable root when Codex is available.
