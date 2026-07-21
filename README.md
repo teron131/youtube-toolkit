@@ -1,6 +1,6 @@
 # YouTube Toolkit
 
-Opinionated `yt-dlp` plus LanceDB toolkit for agents that need reusable YouTube search, transcripts, watchlists, and semantic retrieval.
+Opinionated `yt-dlp` plus LanceDB toolkit for agents that need reusable YouTube search, transcripts, visual context, watchlists, and semantic retrieval.
 
 The toolkit turns YouTube into local agent memory:
 
@@ -29,7 +29,7 @@ The toolkit intentionally ships a small working surface:
   </thead>
   <tbody>
     <tr>
-      <td rowspan="2"><code>video</code></td>
+      <td rowspan="3"><code>video</code></td>
       <td><code>transcript</code></td>
       <td><code>&lt;url-or-id&gt;</code></td>
       <td>Return a stored transcript first, then fetch captions or fall back to STT; persists the normalized transcript.</td>
@@ -37,7 +37,12 @@ The toolkit intentionally ships a small working surface:
     <tr>
       <td><code>metadata</code></td>
       <td><code>&lt;url-or-id&gt;</code></td>
-      <td>Fetch raw <code>yt-dlp</code> metadata JSON.</td>
+      <td>Fetch normalized video metadata JSON.</td>
+    </tr>
+    <tr>
+      <td><code>vision</code></td>
+      <td><code>&lt;url-or-id&gt;</code></td>
+      <td>Generate bounded timestamped 2×3 visual-context collages and return their absolute paths.</td>
     </tr>
     <tr>
       <td><code>search</code></td>
@@ -188,6 +193,11 @@ The default watchlist schedule runs every 12 hours, scans uploads from the last 
 
 ## Setup
 
+Runtime requirements:
+
+- `yt-dlp` is installed with the Python package and owns YouTube metadata, captions, search, and media acquisition.
+- `ffmpeg` must be available on `PATH`; video vision uses it for frame analysis and decoding. On macOS, install it with `brew install ffmpeg`.
+
 Install or refresh the system command and configure Codex in one idempotent step:
 
 ```bash
@@ -218,6 +228,7 @@ youtube video transcript JpSHyEIZ_bo
 youtube video transcript JpSHyEIZ_bo --timestamps
 youtube video transcript JpSHyEIZ_bo --export
 youtube video metadata https://www.youtube.com/watch?v=JpSHyEIZ_bo
+youtube video vision https://www.youtube.com/watch?v=JpSHyEIZ_bo
 youtube db get JpSHyEIZ_bo
 youtube db refresh JpSHyEIZ_bo
 youtube db edit JpSHyEIZ_bo --summary "Concise corrected summary"
@@ -238,6 +249,8 @@ youtube setup
 ```
 
 Transcript exports use `<normalized-title>_<normalized-channel>.txt` in the working directory, omitting the channel suffix when unavailable. Add `--force` to replace an existing export.
+
+Vision extraction requires `ffmpeg`. It downloads one temporary video-only stream at up to 720p, samples at one frame per second, combines scene changes with optional viewer-replay peaks and stationary frames, rejects transient blur, removes perceptual duplicates, and writes at most 96 selected frames as timestamped 2×3 JPEG pages under `.cache/vision/<video-id>/`. Each page contains up to six frames downscaled with Lanczos to 640×360 and uses optimized progressive 4:2:2 JPEG quality 80. The JSON result includes timestamps and absolute collage paths; temporary downloaded media is removed after processing.
 
 ## Agent Skill
 
