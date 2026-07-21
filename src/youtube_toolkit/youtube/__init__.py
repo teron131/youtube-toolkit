@@ -3,6 +3,7 @@
 from .caption import TranscriptOptions, fetch_transcript
 from .channels import ChannelOptions, fetch_channel_videos
 from .client import YtDlpClient
+from .vision import sample_vision
 
 __all__ = [
     "ChannelOptions",
@@ -10,4 +11,5 @@ __all__ = [
     "YtDlpClient",
     "fetch_channel_videos",
     "fetch_transcript",
+    "sample_vision",
 ]

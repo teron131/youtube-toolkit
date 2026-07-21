@@ -71,16 +71,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 class VideoCommandParser:
-    """Parser group for retrieving video metadata and transcripts."""
+    """Parser group for retrieving video metadata, transcripts, and visual context."""
 
     @staticmethod
     def add_to(subparsers: argparse._SubParsersAction) -> None:
-        video_parser = subparsers.add_parser("video", help="Fetch video metadata or transcripts")
+        video_parser = subparsers.add_parser("video", help="Fetch video metadata, transcripts, or visual context")
         video_subparsers = add_command_subparsers(
             video_parser,
             dest="video_command",
             required=True,
-            metavar="{metadata,transcript}",
+            metavar="{metadata,transcript,vision}",
         )
 
         metadata_parser = video_subparsers.add_parser("metadata", help="Fetch video metadata JSON")
@@ -105,6 +105,10 @@ class VideoCommandParser:
             help="Replace an existing transcript export; requires --export",
         )
         transcript_parser.set_defaults(handler=VideoCommands.transcript)
+
+        vision_parser = video_subparsers.add_parser("vision", help="Generate timestamped visual-context collages")
+        vision_parser.add_argument("video_ref", metavar="url", help="YouTube video URL or ID")
+        vision_parser.set_defaults(handler=VideoCommands.vision)
 
 
 class SearchCommandParser:

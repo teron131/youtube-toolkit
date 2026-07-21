@@ -30,12 +30,15 @@ youtube video transcript <url-or-id>
 youtube video transcript <url-or-id> --timestamps
 youtube video transcript <url-or-id> --export
 youtube video metadata <url-or-id>
+youtube video vision <url-or-id>
 ```
 
 - `<url-or-id>` is a YouTube watch URL or bare video ID.
 - Metadata output contains normalized video facts instead of the raw yt-dlp payload.
 - Transcript fetch is DB-first, then captions, then STT fallback; it persists the normalized transcript and returns one text string unless `--timestamps` is requested.
 - `--export` follows the same retrieval route and writes metadata plus transcript to `<normalized-title>_<normalized-channel>.txt` in the working directory; add `--force` to replace an existing export.
+- Vision is optional supplementary context. Use it only when visual cues might help; sampled frames can miss important moments and should not replace the transcript.
+- When used, vision requires `ffmpeg`, processes one bounded temporary video-only download at up to 720p, downsamples selected frames with Lanczos to 640×360, and returns timestamps plus absolute paths to optimized progressive 4:2:2 timestamped 2×3 JPEG collages under `.cache/vision/<video-id>/`.
 
 Database:
 

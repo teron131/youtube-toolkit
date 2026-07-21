@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -18,6 +19,11 @@ SEARCH_SORT_PARAMS = {
 }
 DEFAULT_AUDIO_DIR = Path(".cache/audio")
 STT_AUDIO_FORMAT_SELECTOR = "bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio[ext=aac]"
+# Budget one quarter of the host for each job while capping low-resolution codec parallelism.
+VISION_FFMPEG_THREADS = max(1, min(4, (os.process_cpu_count() or 1) // 4))
+VISION_VIDEO_FORMAT_SELECTOR = "bestvideo[height<=720][ext=mp4]/bestvideo[height<=720]"
+VISION_VIDEO_DOWNLOAD_TIMEOUT_SECONDS = 10 * 60
+YTDLP_REQUEST_TIMEOUT_SECONDS = 60
 
 
 class YtDlpClient:
@@ -134,6 +140,53 @@ class YtDlpClient:
             )
         raise RuntimeError(f"yt-dlp completed but did not create {output_stem}.*")
 
+    def download_video_for_vision(
+        self,
+        video_ref: VideoRef,
+        output_path: Path,
+        *,
+        max_bytes: int,
+    ) -> Path:
+        """Download one bounded temporary video with the vision format preset."""
+        url = normalize_youtube_url(video_ref)
+        validate_url(url, allowed_hosts=ALLOWED_VIDEO_HOSTS)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            result = subprocess.run(  # noqa: S603 - command is assembled from a fixed yt-dlp executable prefix and argument list.
+                [
+                    *self.command_prefix(),
+                    "--no-playlist",
+                    "--quiet",
+                    "--no-warnings",
+                    "--concurrent-fragments",
+                    "1",
+                    "--max-filesize",
+                    str(max_bytes),
+                    "--format",
+                    VISION_VIDEO_FORMAT_SELECTOR,
+                    "--output",
+                    str(output_path),
+                    url,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=VISION_VIDEO_DOWNLOAD_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError(f"yt-dlp video download for vision timed out after {VISION_VIDEO_DOWNLOAD_TIMEOUT_SECONDS} seconds") from error
+        except OSError as error:
+            raise RuntimeError(f"Could not start yt-dlp video download for vision: {error}") from error
+        if result.returncode != 0:
+            detail = result.stderr.strip() or "yt-dlp video download for vision failed"
+            raise RuntimeError(detail)
+        if not output_path.exists():
+            raise RuntimeError(f"yt-dlp completed but did not create {output_path}")
+        if output_path.stat().st_size > max_bytes:
+            output_path.unlink()
+            raise RuntimeError(f"yt-dlp video download for vision exceeded {max_bytes} bytes")
+        return output_path
+
     def _json(
         self,
         command: list[str],
@@ -141,12 +194,18 @@ class YtDlpClient:
         error_message: str,
     ) -> dict[str, Any]:
         """Run a yt-dlp command expected to emit one JSON object."""
-        result = subprocess.run(  # noqa: S603 - command is assembled from a fixed yt-dlp executable prefix and argument list.
-            command,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        try:
+            result = subprocess.run(  # noqa: S603 - command is assembled from a fixed yt-dlp executable prefix and argument list.
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=YTDLP_REQUEST_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError(f"yt-dlp request timed out after {YTDLP_REQUEST_TIMEOUT_SECONDS} seconds") from error
+        except OSError as error:
+            raise RuntimeError(f"Could not start yt-dlp request: {error}") from error
         if result.returncode != 0:
             detail = result.stderr.strip() or error_message
             raise RuntimeError(detail)

@@ -36,7 +36,7 @@ from ..watchlist_schedule import (
     uninstall_watchlist_schedule,
     watchlist_schedule_status,
 )
-from ..youtube import YtDlpClient
+from ..youtube import YtDlpClient, sample_vision
 from ..youtube.caption import fetch_transcript
 from ..youtube.channels import (
     ChannelOptions,
@@ -185,7 +185,7 @@ class DatabaseCommands:
 
 
 class VideoCommands:
-    """Handlers for retrieving video metadata and transcripts."""
+    """Handlers for retrieving video metadata, transcripts, and visual context."""
 
     @staticmethod
     def transcript(args: argparse.Namespace) -> str | list[dict[str, Any]] | TranscriptExportResult:
@@ -208,6 +208,11 @@ class VideoCommands:
         """Return normalized video facts without exposing the raw yt-dlp payload."""
         metadata = asdict(VideoMetadata.from_yt_dlp(YtDlpClient().metadata(args.video_ref)))
         return {field: metadata[field] for field in VIDEO_METADATA_OUTPUT_FIELDS}
+
+    @staticmethod
+    def vision(args: argparse.Namespace) -> dict[str, Any]:
+        """Return bounded timestamped visual context and its local collage paths."""
+        return sample_vision(args.video_ref)
 
 
 def write_transcript_export(
