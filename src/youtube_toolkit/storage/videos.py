@@ -6,15 +6,11 @@ from collections.abc import Collection, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
-from ..schemas import ChannelIdentity, VideoRecord, extract_channel_identity, extract_video_record
+from ..schemas import VIDEO_AGENT_EDITABLE_FIELDS, ChannelIdentity, VideoRecord, extract_channel_identity, extract_video_record
 from .channels import upsert_channel
 from .connection import LanceConnection, filter_literal, transcript_chunk_metadata
 from .payloads import stored_video_payload
 
-VIDEO_AGENT_EDITABLE_FIELDS = (
-    "transcript",
-    "summary",
-)
 VIDEO_EMBEDDING_SOURCE_FIELDS = ("channel_id", "title", "transcript")
 VIDEO_CHUNK_METADATA_FIELDS = (
     "channel_id",

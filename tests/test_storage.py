@@ -3,15 +3,16 @@ import pytest
 import urllib.error
 
 import youtube_toolkit.storage.connection as storage_connection
-from youtube_toolkit import EmbeddingConfig
+from youtube_toolkit.embeddings import embed_text, post_embedding_json
+from youtube_toolkit.model_config import EmbeddingConfig
 from youtube_toolkit.schemas import ChannelIdentity
+from youtube_toolkit.semantic import split_transcript_chunks
 from youtube_toolkit.storage import (
     DATABASE_FILENAME,
     analyze_transcript_chunk_search,
     auto_index_transcript_chunks,
     auto_index_video_embedding,
     database_schema_health,
-    embed_text,
     explain_transcript_chunk_search,
     get_connection,
     get_stored_video,
@@ -26,7 +27,6 @@ from youtube_toolkit.storage import (
     search_transcript_chunks,
     search_transcript_chunk_scores,
     search_video_title_scores,
-    split_transcript_chunks,
     store_search_candidates,
     upsert_watchlist_channel,
     upsert_video,
@@ -37,7 +37,6 @@ from youtube_toolkit.storage.connection import (
     SCALAR_INDEX_COLUMNS,
     filter_contains_case_insensitive,
 )
-from youtube_toolkit.storage.embeddings import post_embedding_json
 from youtube_toolkit.storage.videos import delete_video_record, edit_video_content, get_video_record
 
 
@@ -1306,7 +1305,7 @@ def test_embed_text_uses_embedding_config(monkeypatch) -> None:
         base_url="https://embedding.example/v1/",
         output_dimensionality=512,
     )
-    monkeypatch.setattr("youtube_toolkit.storage.embeddings.post_embedding_json", fake_post_embedding_json)
+    monkeypatch.setattr("youtube_toolkit.embeddings.post_embedding_json", fake_post_embedding_json)
 
     assert embed_text("hello", config=config) == [0.25, 0.75]
     assert calls == {
@@ -1349,8 +1348,8 @@ def test_embedding_request_retries_transient_network_failures(monkeypatch) -> No
         base_url="https://embedding.example/v1/",
         output_dimensionality=2,
     )
-    monkeypatch.setattr("youtube_toolkit.storage.embeddings.urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr("youtube_toolkit.storage.embeddings.time.sleep", delays.append)
+    monkeypatch.setattr("youtube_toolkit.embeddings.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("youtube_toolkit.embeddings.time.sleep", delays.append)
 
     assert post_embedding_json(
         "https://embedding.example/v1/embeddings",

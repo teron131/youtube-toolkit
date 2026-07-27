@@ -16,7 +16,6 @@ import sys
 from typing import Any, Literal, NotRequired, TypedDict
 
 from .schemas import WatchlistSyncResult
-from .storage import resolve_storage_dir
 from .youtube.channels import ChannelOptions, sync_watchlist
 
 DEFAULT_WATCHLIST_SCHEDULE_LABEL = "com.teron.youtube-toolkit.watchlist"
@@ -191,6 +190,8 @@ def scheduled_sync_watchlist(
     options: ChannelOptions,
 ) -> ScheduledSyncResult:
     """Run the scheduler entrypoint once, skipping cleanly when another run holds the lock."""
+    from .storage import resolve_storage_dir
+
     storage_dir = resolve_storage_dir()
     storage_dir.mkdir(parents=True, exist_ok=True)
     lock_path = storage_dir / WATCHLIST_SYNC_LOCK_FILENAME
@@ -226,6 +227,8 @@ def build_watchlist_schedule_plist(
     options: WatchlistScheduleOptions,
 ) -> dict[str, Any]:
     """Build the LaunchAgent plist payload owned by the scheduler installer."""
+    from .storage import resolve_storage_dir
+
     validate_schedule_options(options)
     storage_home = resolve_storage_dir()
     program_arguments = [

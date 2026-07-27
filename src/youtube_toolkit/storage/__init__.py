@@ -2,11 +2,6 @@
 
 from __future__ import annotations
 
-from ..model_config import (
-    DEFAULT_EMBEDDING_DIMENSIONALITY,
-    DEFAULT_EMBEDDING_MODEL,
-    EMBEDDING_BASE_URL,
-)
 from .blacklist import (
     delete_blacklist_channel,
     list_blacklist_channel_identities,
@@ -19,15 +14,11 @@ from .connection import (
     get_connection,
     resolve_storage_dir,
 )
-from .embeddings import EmbeddingSearchError, embed_text
 from .search import get_stored_video, search_stored_videos
 from .semantic import (
-    TRANSCRIPT_CHUNK_CHARS,
-    TRANSCRIPT_CHUNK_OVERLAP_CHARS,
     analyze_transcript_chunk_search,
     auto_index_transcript_chunks,
     auto_index_video_embedding,
-    auto_index_video_title_embedding,
     explain_transcript_chunk_search,
     index_transcript_chunks,
     index_video_embedding,
@@ -37,8 +28,6 @@ from .semantic import (
     search_transcript_chunk_scores,
     search_transcript_chunks,
     search_video_title_scores,
-    search_video_titles,
-    split_transcript_chunks,
 )
 from .videos import store_channel_listing, upsert_video, upsert_video_summary
 from .watchlist import (
@@ -53,20 +42,12 @@ from .watchlist import (
 
 __all__ = [
     "DATABASE_FILENAME",
-    "DEFAULT_EMBEDDING_DIMENSIONALITY",
-    "DEFAULT_EMBEDDING_MODEL",
-    "EMBEDDING_BASE_URL",
-    "TRANSCRIPT_CHUNK_CHARS",
-    "TRANSCRIPT_CHUNK_OVERLAP_CHARS",
-    "EmbeddingSearchError",
     "analyze_transcript_chunk_search",
     "auto_index_transcript_chunks",
     "auto_index_video_embedding",
-    "auto_index_video_title_embedding",
     "database_schema_health",
     "delete_blacklist_channel",
     "delete_watchlist_channel",
-    "embed_text",
     "explain_transcript_chunk_search",
     "get_connection",
     "get_stored_video",
@@ -87,8 +68,6 @@ __all__ = [
     "search_transcript_chunk_scores",
     "search_transcript_chunks",
     "search_video_title_scores",
-    "search_video_titles",
-    "split_transcript_chunks",
     "store_channel_listing",
     "store_search_candidates",
     "store_watchlist_channel_listing",

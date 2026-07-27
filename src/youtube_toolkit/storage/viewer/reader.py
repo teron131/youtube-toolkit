@@ -20,7 +20,7 @@ import pyarrow as pa
 from ...identity import extract_video_id
 from ...search.request import RESULT_MIN_SIMILARITY
 from ..connection import filter_contains_case_insensitive, filter_equal, filter_in_values
-from ..embeddings import EmbeddingSearchError, embed_text
+from ...embeddings import EmbeddingError, embed_text
 from ..semantic import search_transcript_chunk_scores_in_table
 
 DEFAULT_PAGE_SIZE = 25
@@ -243,7 +243,7 @@ class ReadOnlyLanceViewer:
                 min_similarity=RESULT_MIN_SIMILARITY,
                 embed_text=self.embed_query,
             )
-        except EmbeddingSearchError as error:
+        except EmbeddingError as error:
             return SemanticSearchResult("unavailable", {}, str(error))
         with self._semantic_cache_lock:
             if len(self._semantic_score_cache) >= SEMANTIC_CACHE_SIZE:

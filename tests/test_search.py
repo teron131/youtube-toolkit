@@ -3,14 +3,12 @@ from threading import Barrier
 
 import pytest
 
-import youtube_toolkit
-import youtube_toolkit.search as search_package
 import youtube_toolkit.search.database as search_database
-import youtube_toolkit.search.filters as search_filters
 import youtube_toolkit.search.semantic as search_semantic
 import youtube_toolkit.search.workflow as search_workflow
-from youtube_toolkit.search import ChannelTarget, SearchRequest, search
-from youtube_toolkit.search.request import parse_duration
+import youtube_toolkit.storage as storage
+from youtube_toolkit.search.request import ChannelTarget, SearchRequest, parse_duration
+from youtube_toolkit.search.workflow import search
 from youtube_toolkit.schemas import ChannelIdentity, TranscriptChunk, TranscriptDocument, VideoMetadata
 from youtube_toolkit.storage import get_connection, get_stored_video, upsert_blacklist_channel, upsert_video
 from youtube_toolkit.storage.connection import DatabaseWritePermissionError
@@ -95,11 +93,11 @@ def search_transcript_side_effects(monkeypatch, tmp_path) -> dict[str, list[str]
     monkeypatch.setattr(search_semantic, "fetch_transcript", fake_fetch_transcript)
     monkeypatch.setattr(search_semantic, "fetch_live_transcript", fake_fetch_live_transcript)
     monkeypatch.setattr(search_semantic, "embed_text", lambda _text: [1.0, 0.0])
-    monkeypatch.setattr(search_semantic, "auto_index_transcript_chunks", fake_auto_index_transcript_chunks)
-    monkeypatch.setattr(search_semantic, "index_search_candidate_titles", fake_index_search_candidate_titles)
-    monkeypatch.setattr(search_semantic, "index_video_title_embeddings", fake_index_video_title_embeddings)
-    monkeypatch.setattr(search_semantic, "search_candidate_title_scores", fake_search_candidate_title_scores)
-    monkeypatch.setattr(search_semantic, "search_video_title_scores", fake_search_video_title_scores)
+    monkeypatch.setattr(storage, "auto_index_transcript_chunks", fake_auto_index_transcript_chunks)
+    monkeypatch.setattr(storage, "index_search_candidate_titles", fake_index_search_candidate_titles)
+    monkeypatch.setattr(storage, "index_video_title_embeddings", fake_index_video_title_embeddings)
+    monkeypatch.setattr(storage, "search_candidate_title_scores", fake_search_candidate_title_scores)
+    monkeypatch.setattr(storage, "search_video_title_scores", fake_search_video_title_scores)
     return {
         "fetched": fetched_video_ids,
         "indexed": indexed_video_ids,
@@ -117,7 +115,7 @@ def test_parse_duration_rejects_invalid_values() -> None:
         parse_duration("1::30")
 
 
-def test_search_module_runs_youtube_source(
+def test_native_youtube_search_stays_stateless_without_storage(
     monkeypatch,
     search_transcript_side_effects,
 ) -> None:
@@ -140,6 +138,8 @@ def test_search_module_runs_youtube_source(
         ]
 
     monkeypatch.setattr(search_workflow, "youtube_search", fake_youtube_search)
+    monkeypatch.setattr(search_workflow, "capability_available", lambda _capability: False)
+    monkeypatch.setattr(storage, "get_connection", lambda: pytest.fail("stateless search opened storage"))
 
     assert search(
         SearchRequest(
@@ -1218,7 +1218,7 @@ def test_live_semantic_search_survives_database_permission_denial(
             }
         ]
 
-    monkeypatch.setattr(search_filters, "get_connection", deny_connection)
+    monkeypatch.setattr(storage, "get_connection", deny_connection)
     monkeypatch.setattr(search_workflow, "youtube_search", fake_youtube_search)
     monkeypatch.setattr(
         search_semantic,
@@ -1303,11 +1303,11 @@ def test_semantic_stages_fall_back_independently_after_transcript_db_denial(
         )
 
     monkeypatch.setattr(search_workflow, "fetch_channel_metadata", fake_fetch_channel_metadata)
-    monkeypatch.setattr(search_semantic, "search_candidate_title_scores", fake_search_candidate_title_scores)
+    monkeypatch.setattr(storage, "search_candidate_title_scores", fake_search_candidate_title_scores)
     monkeypatch.setattr(search_semantic, "fetch_transcript", deny_database_transcript)
     monkeypatch.setattr(search_semantic, "fetch_live_transcript", fake_fetch_live_transcript)
     monkeypatch.setattr(
-        search_semantic,
+        storage,
         "auto_index_transcript_chunks",
         lambda *_args, **_kwargs: pytest.fail("later stages should skip a DB already known to be denied"),
     )
@@ -1865,7 +1865,7 @@ def test_db_semantic_video_search_uses_lancedb_scores_without_indexing(
         raise AssertionError("DB semantic video search should not auto-index")
 
     monkeypatch.setattr(search_database, "search_transcript_chunk_scores", fake_search_transcript_chunk_scores)
-    monkeypatch.setattr(search_semantic, "auto_index_transcript_chunks", fail_auto_index)
+    monkeypatch.setattr(storage, "auto_index_transcript_chunks", fail_auto_index)
 
     results = search(
         SearchRequest(
@@ -1981,13 +1981,6 @@ def test_db_popularity_search_ranks_before_final_limit(
     )
 
     assert [result["video_id"] for result in results] == ["oldhigh0000"]
-
-
-def test_package_exports_search_request_without_shadowing_search_module() -> None:
-    assert youtube_toolkit.SearchRequest is SearchRequest
-    assert youtube_toolkit.ChannelTarget is ChannelTarget
-    assert youtube_toolkit.run_search is search
-    assert search_package.search is search
 
 
 def test_channel_search_limits_after_merge_and_sort(monkeypatch, tmp_path) -> None:

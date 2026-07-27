@@ -15,7 +15,6 @@ from ..convert_zh import convert_zh
 from ..identity import ALLOWED_CAPTION_HOST_SUFFIXES, VideoRef, validate_url
 from ..execution import retry_transient
 from ..schemas import TranscriptChunk, TranscriptDocument, TranscriptSection, VideoMetadata
-from ..storage import auto_index_video_embedding, get_connection, get_stored_video, upsert_video
 from ..stt import transcribe_audio_details
 from .client import YtDlpClient
 
@@ -53,41 +52,6 @@ class SttAudioClient(CaptionMetadataClient, Protocol):
         ...
 
 
-def fetch_transcript(
-    video_ref: VideoRef,
-    *,
-    options: TranscriptOptions | None = None,
-    client: CaptionMetadataClient | None = None,
-    auto_index: bool = True,
-) -> TranscriptDocument:
-    """Return the transcript document from storage first, then captions, then STT while preserving DB state."""
-    options = options or TranscriptOptions()
-    if options == TranscriptOptions():
-        stored_document = fetch_stored_transcript(video_ref)
-        if stored_document is not None:
-            if auto_index:
-                index_stored_transcript(stored_document.metadata.video_id)
-            return stored_document
-
-    client = client or YtDlpClient()
-    metadata_payload = client.metadata(video_ref)
-    document = fetch_transcript_from_metadata(
-        metadata_payload,
-        options=options,
-        client=cast(SttAudioClient, client),
-    )
-
-    with get_connection() as connection:
-        upsert_video(
-            connection,
-            metadata_payload,
-            transcript=document.text,
-        )
-    if auto_index:
-        index_stored_transcript(document.metadata.video_id)
-    return document
-
-
 def fetch_live_transcript(
     video_ref: VideoRef,
     *,
@@ -122,12 +86,6 @@ def fetch_transcript_from_metadata(
             metadata_payload,
             client=client,
         )
-
-
-def index_stored_transcript(youtube_video_id: str) -> None:
-    """Maintain the video-level embedding for a stored transcript."""
-    with get_connection() as connection:
-        auto_index_video_embedding(connection, youtube_video_id)
 
 
 def fetch_caption_transcript(
@@ -179,47 +137,6 @@ def fetch_stt_transcript(
         )
     finally:
         audio_path.unlink(missing_ok=True)
-
-
-def fetch_stored_transcript(video_ref: VideoRef) -> TranscriptDocument | None:
-    """Use the direct stored-video lookup path for transcript cache hits."""
-    with get_connection() as connection:
-        stored_video = get_stored_video(
-            connection,
-            video_ref,
-            require_transcript=True,
-        )
-    if stored_video is None:
-        return None
-    return stored_transcript_document(stored_video)
-
-
-def stored_transcript_document(
-    stored_video: dict,
-    *,
-    language: str = "stored",
-    source: str = "database",
-) -> TranscriptDocument:
-    """Stored transcript text is rewrapped in the same document contract as live caption and STT fetches."""
-    transcript = stored_video["transcript"]
-    metadata = VideoMetadata(
-        video_id=stored_video["video_id"],
-        url=f"https://www.youtube.com/watch?v={stored_video['video_id']}",
-        title=stored_video["title"],
-        channel=None,
-        channel_id=stored_video["channel_id"],
-        channel_handle=stored_video["channel_handle"],
-        upload_date=stored_video["upload_date"],
-        duration_seconds=stored_video["duration"],
-        view_count=stored_video["view_count"],
-        like_count=stored_video["like_count"],
-    )
-    return transcript_document_from_text(
-        metadata,
-        transcript,
-        language=language,
-        source=source,
-    )
 
 
 def transcript_document_from_text(

@@ -13,18 +13,8 @@ import unicodedata
 
 from ..identity import require_video_id
 from ..schemas import ChannelRemovalResult, EmbeddingIndexResult, TranscriptDocument, VideoMetadata, WatchlistSyncResult
-from ..search import ChannelTarget, SearchRequest, search as run_search_request
-from ..search.request import SearchSource
-from ..storage import (
-    DATABASE_FILENAME,
-    get_connection,
-    index_video_embedding,
-    list_video_ids_for_embedding_index,
-    resolve_storage_dir,
-    upsert_video,
-)
-from ..storage.videos import delete_video_record, edit_video_content, get_video_record
-from ..storage.viewer import serve_database_viewer
+from ..search.request import ChannelTarget, SearchRequest, SearchSource
+from ..transcript import fetch_transcript
 from ..watchlist_schedule import (
     ScheduledSyncResult,
     WatchlistScheduleInstallResult,
@@ -36,8 +26,6 @@ from ..watchlist_schedule import (
     uninstall_watchlist_schedule,
     watchlist_schedule_status,
 )
-from ..youtube import YtDlpClient, sample_vision
-from ..youtube.caption import fetch_transcript
 from ..youtube.channels import (
     ChannelOptions,
     add_blacklist_channels,
@@ -49,6 +37,7 @@ from ..youtube.channels import (
     remove_watchlist_channels,
     sync_watchlist,
 )
+from ..youtube.client import YtDlpClient
 
 
 class IndexCommandResult(TypedDict):
@@ -120,6 +109,9 @@ class DatabaseCommands:
     @staticmethod
     def view(args: argparse.Namespace) -> None:
         """Serve the active database until the user stops the viewer."""
+        from ..storage import DATABASE_FILENAME, resolve_storage_dir
+        from ..storage.viewer import serve_database_viewer
+
         serve_database_viewer(
             resolve_storage_dir() / DATABASE_FILENAME,
             port=args.port,
@@ -129,6 +121,9 @@ class DatabaseCommands:
     @staticmethod
     def get(args: argparse.Namespace) -> dict[str, Any]:
         """Return one complete locally stored video record."""
+        from ..storage import get_connection
+        from ..storage.videos import get_video_record
+
         video_id = require_video_id(args.video_ref)
         with get_connection() as connection:
             return get_video_record(connection, video_id)
@@ -136,6 +131,8 @@ class DatabaseCommands:
     @staticmethod
     def refresh(args: argparse.Namespace) -> dict[str, Any]:
         """Refresh provider-owned metadata through yt-dlp and report the stored facts."""
+        from ..storage import get_connection, upsert_video
+
         requested_video_id = require_video_id(args.video_ref)
         metadata = YtDlpClient().metadata(args.video_ref)
         fetched_video_id = require_video_id(str(metadata.get("id") or ""))
@@ -154,6 +151,9 @@ class DatabaseCommands:
     @staticmethod
     def edit(args: argparse.Namespace) -> dict[str, Any]:
         """Translate explicit agent-owned content fields into one validated edit."""
+        from ..storage import get_connection
+        from ..storage.videos import edit_video_content
+
         video_id = require_video_id(args.video_ref)
         values = {}
         if args.summary is not None:
@@ -173,6 +173,9 @@ class DatabaseCommands:
     @staticmethod
     def delete(args: argparse.Namespace) -> dict[str, Any]:
         """Require explicit confirmation before cascading one stored video deletion."""
+        from ..storage import get_connection
+        from ..storage.videos import delete_video_record
+
         video_id = require_video_id(args.video_ref)
         if not args.dry_run and not args.yes:
             raise ValueError("Video deletion requires --yes; use --dry-run to inspect it first")
@@ -212,6 +215,8 @@ class VideoCommands:
     @staticmethod
     def vision(args: argparse.Namespace) -> dict[str, Any]:
         """Return bounded timestamped visual context and its local collage paths."""
+        from ..youtube.vision import sample_vision
+
         return sample_vision(args.video_ref)
 
 
@@ -322,12 +327,14 @@ class SearchCommands:
     @staticmethod
     def search(args: argparse.Namespace) -> list[dict[str, Any]]:
         """Translate parsed CLI arguments into the public search request contract."""
+        from ..search.workflow import search
+
         raw_sources = tuple(dict.fromkeys(args.source or ["youtube"]))
         limit = args.limit
         if limit is None:
             limit = DEFAULT_CHANNEL_SEARCH_LIMIT if raw_sources == ("channel",) else DEFAULT_YOUTUBE_SEARCH_LIMIT
         sources = cast(tuple[SearchSource, ...], raw_sources)
-        return run_search_request(
+        return search(
             SearchRequest(
                 query=args.query,
                 extra_queries=tuple(getattr(args, "extra_queries", [])),
@@ -427,6 +434,8 @@ class IndexCommands:
     @staticmethod
     def videos(args: argparse.Namespace) -> IndexCommandResult:
         """Index explicit videos or all eligible stored videos when no refs are provided."""
+        from ..storage import get_connection, list_video_ids_for_embedding_index
+
         video_ids = [require_video_id(video_ref) for video_ref in args.video_refs]
         indexed: list[EmbeddingIndexResult] = []
         skipped: list[EmbeddingIndexResult] = []
@@ -462,6 +471,8 @@ def index_one_video(
     video_id: str,
 ) -> EmbeddingIndexResult:
     """Index one stored video and convert storage outcomes into command result rows."""
+    from ..storage import index_video_embedding
+
     try:
         payload = index_video_embedding(connection, video_id)
     except Exception as error:

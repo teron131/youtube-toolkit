@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from urllib.parse import urlparse
 
-from platformdirs import user_data_path
+from .capabilities import capability_available, require_capability
 
 APP_STATE_DIRNAME = "youtube-toolkit"
 CONFIG_FILENAME = "config.env"
@@ -169,11 +169,16 @@ def config_bool_value(
 
 def app_config_path() -> Path:
     """Installed CLI config uses the platform data directory so tool installs do not depend on repo checkouts."""
+    require_capability("storage", "persistent model configuration")
+    from platformdirs import user_data_path
+
     return user_data_path(APP_STATE_DIRNAME) / CONFIG_FILENAME
 
 
 def app_config_values() -> dict[str, str]:
     """Read persisted app-local model settings without consulting the environment."""
+    if not capability_available("storage"):
+        return {}
     file_path = app_config_path()
     if not file_path.exists():
         return {}

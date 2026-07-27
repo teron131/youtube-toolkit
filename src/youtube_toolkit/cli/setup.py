@@ -6,9 +6,8 @@ import argparse
 from dataclasses import dataclass
 import getpass
 import sys
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
-from ..codex_config import CodexSetupResult, configure_codex_permissions
 from ..model_config import (
     DEFAULT_EMBEDDING_DIMENSIONALITY,
     DEFAULT_EMBEDDING_MODEL,
@@ -25,6 +24,9 @@ from .health import (
     skipped_model_verification,
     verify_model_apis,
 )
+
+if TYPE_CHECKING:
+    from ..codex_config import CodexSetupResult
 
 
 class ModelSetupResult(TypedDict):
@@ -60,6 +62,8 @@ class SetupCommands:
     @staticmethod
     def codex(args: argparse.Namespace) -> CodexSetupResult:
         """Preview or apply the active storage writable root in Codex config."""
+        from ..codex_config import configure_codex_permissions
+
         return configure_codex_permissions(apply=args.yes)
 
 

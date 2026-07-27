@@ -6,8 +6,9 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
+from ..capabilities import capability_available, require_capability
 from ..identity import ChannelRef, ChannelRefInput, YouTubeRefs, normalize_channel_url, parse_channel_ref
 from ..schemas import (
     ChannelIdentity,
@@ -17,23 +18,11 @@ from ..schemas import (
     WatchlistSyncResult,
     extract_channel_identity,
 )
-from ..storage import (
-    auto_index_video_embedding,
-    delete_blacklist_channel,
-    delete_watchlist_channel,
-    get_connection,
-    list_missing_watchlist_video_ids,
-    list_recent_watchlist_video_payloads,
-    list_watchlist_channel_refs,
-    list_watchlist_video_ids_missing_embeddings,
-    store_channel_listing,
-    store_watchlist_channel_listing,
-    upsert_blacklist_channel,
-    upsert_watchlist_channel,
-)
-from ..storage.connection import LanceConnection
-from .caption import fetch_transcript
+from ..transcript import fetch_transcript
 from .client import YtDlpClient
+
+if TYPE_CHECKING:
+    from ..storage.connection import LanceConnection
 
 DEFAULT_LAST_VIDEOS = 10
 MIN_DAYS_WINDOW = 10
@@ -66,12 +55,17 @@ def fetch_channel_videos(
     options: ChannelOptions | None = None,
     client: ChannelVideosClient | None = None,
 ) -> dict[str, Any]:
-    """Persist catalog metadata for one channel listing after the fetch policy is resolved."""
+    """Fetch one channel listing and persist it only when storage is installed."""
     metadata = fetch_channel_metadata(
         channel_ref,
         options=options,
         client=client,
     )
+    if not capability_available("storage"):
+        return metadata
+
+    from ..storage import get_connection, store_channel_listing
+
     with get_connection() as connection:
         store_channel_listing(connection, metadata)
     return metadata
@@ -179,6 +173,9 @@ def should_expand_window(
 
 def add_watchlist_channels(channel_refs: ChannelRefInput) -> list[str]:
     """Resolve and add channels to the local watchlist membership."""
+    require_capability("storage", "watchlist membership")
+    from ..storage import upsert_watchlist_channel
+
     return _add_channel_memberships(
         channel_refs,
         add_membership=upsert_watchlist_channel,
@@ -187,6 +184,9 @@ def add_watchlist_channels(channel_refs: ChannelRefInput) -> list[str]:
 
 def add_blacklist_channels(channel_refs: ChannelRefInput) -> list[str]:
     """Resolve and add channels to the local search blacklist membership."""
+    require_capability("storage", "blacklist membership")
+    from ..storage import upsert_blacklist_channel
+
     return _add_channel_memberships(
         channel_refs,
         add_membership=upsert_blacklist_channel,
@@ -195,6 +195,9 @@ def add_blacklist_channels(channel_refs: ChannelRefInput) -> list[str]:
 
 def list_watchlist_channels() -> list[str]:
     """Return watched channels using the storage-owned display reference policy."""
+    require_capability("storage", "watchlist membership")
+    from ..storage import get_connection, list_watchlist_channel_refs
+
     with get_connection() as connection:
         return list_watchlist_channel_refs(connection)
 
@@ -204,6 +207,8 @@ def _add_channel_memberships(
     *,
     add_membership: Callable[[LanceConnection, ChannelIdentity], str | None],
 ) -> list[str]:
+    from ..storage import get_connection
+
     fetched_channels = _map_concurrently(
         list(YouTubeRefs.parse(channel_refs)),
         lambda channel_ref: (
@@ -227,6 +232,9 @@ def _add_channel_memberships(
 
 def remove_watchlist_channels(channel_refs: ChannelRefInput) -> list[ChannelRemovalResult]:
     """Remove channels from the local watchlist without deleting catalog data."""
+    require_capability("storage", "watchlist membership")
+    from ..storage import delete_watchlist_channel
+
     return _remove_channel_memberships(
         channel_refs,
         remove_membership=delete_watchlist_channel,
@@ -235,6 +243,9 @@ def remove_watchlist_channels(channel_refs: ChannelRefInput) -> list[ChannelRemo
 
 def remove_blacklist_channels(channel_refs: ChannelRefInput) -> list[ChannelRemovalResult]:
     """Remove channels from the local search blacklist without deleting catalog data."""
+    require_capability("storage", "blacklist membership")
+    from ..storage import delete_blacklist_channel
+
     return _remove_channel_memberships(
         channel_refs,
         remove_membership=delete_blacklist_channel,
@@ -246,6 +257,8 @@ def _remove_channel_memberships(
     *,
     remove_membership: Callable[[LanceConnection, ChannelIdentity], bool],
 ) -> list[ChannelRemovalResult]:
+    from ..storage import get_connection
+
     resolved_channels = _map_concurrently(
         list(YouTubeRefs.parse(channel_refs)),
         _resolve_channel_identity,
@@ -292,6 +305,15 @@ def sync_watchlist(
     options: ChannelOptions,
 ) -> WatchlistSyncResult:
     """Refresh watched channel listings, persist new videos, fetch transcripts, and maintain embeddings."""
+    require_capability("storage", "watchlist sync")
+    from ..storage import (
+        get_connection,
+        list_missing_watchlist_video_ids,
+        list_watchlist_channel_refs,
+        list_watchlist_video_ids_missing_embeddings,
+        store_watchlist_channel_listing,
+    )
+
     with get_connection() as connection:
         watched_channel_refs = list_watchlist_channel_refs(connection)
 
@@ -338,6 +360,7 @@ def fetch_watchlist_transcripts(
     video_ids: list[str],
 ) -> list[TranscriptFetchResult]:
     """Fetch and store missing watchlist transcripts with per-video failure reporting."""
+    from ..storage import auto_index_video_embedding, get_connection
 
     def fetch(video_id: str) -> TranscriptFetchResult:
         try:
@@ -367,6 +390,7 @@ def fetch_watchlist_transcripts(
 
 def index_watchlist_embeddings(video_ids: list[str]) -> list[EmbeddingIndexResult]:
     """Index missing watchlist video embeddings with per-video status reporting."""
+    from ..storage import auto_index_video_embedding, get_connection
 
     def index(video_id: str) -> EmbeddingIndexResult:
         with get_connection() as connection:
@@ -381,6 +405,9 @@ def list_recent_watchlist_videos(
     days: int,
 ) -> list[dict[str, Any]]:
     """Return recent stored watchlist videos, optionally narrowed to selected channels."""
+    require_capability("storage", "recent watchlist videos")
+    from ..storage import get_connection, list_recent_watchlist_video_payloads
+
     if days <= 0:
         raise ValueError("--days must be greater than 0")
     channel_identities = YouTubeRefs.parse(channel_refs).channel_identities()

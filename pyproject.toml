@@ -1,30 +1,21 @@
 [project]
 name = "youtube-toolkit"
-version = "0.18.0"
+version = "0.19.0"
 description = "Transcript-first YouTube research toolkit for agents and local workflows"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = [
-    "lancedb>=0.34.0",
-    "langchain-core>=1.2.12",
-    "langchain-openai>=1.1.9",
-    "numpy>=2.4.0",
-    "opencc>=1.3.1",
-    "pillow>=11.0.0",
-    "platformdirs>=4.10.0",
-    "pydantic>=2.12.5",
-    "tomlkit>=0.15.0",
-    "yt-dlp>=2026.2.4",
-]
+dependencies = ["opencc>=1.3.1", "yt-dlp>=2026.2.4"]
 
 [dependency-groups]
-dev = [
-    "pytest>=9.0.2",
-    "ruff>=0.15.1",
-]
+dev = ["pytest>=9.0.2", "ruff>=0.15.1"]
 
 [project.scripts]
-youtube = "youtube_toolkit.cli:main"
+youtube = "youtube_toolkit.cli.__main__:main"
+
+[project.optional-dependencies]
+storage = ["lancedb>=0.34.0", "platformdirs>=4.10.0", "tomlkit>=0.15.0"]
+vision = ["numpy>=2.4.0", "pillow>=11.0.0"]
+llm = ["langchain-core>=1.2.12", "langchain-openai>=1.1.9", "pydantic>=2.12.5"]
 
 [build-system]
 requires = ["hatchling"]
@@ -41,34 +32,26 @@ line-length = 180
 
 [tool.ruff.lint]
 select = [
-    "E4", "E7", "E9", "F",
-    "B", "B9",
-    "I",
-    "UP",
-    "SIM",
-    "C4",
-    "ARG",
-    "DTZ",
-    "G",
-    "S",
-    "RUF",
-    "PT",
-    "PIE",
-    "T20"
+  "E4",
+  "E7",
+  "E9",
+  "F",
+  "B",
+  "B9",
+  "I",
+  "UP",
+  "SIM",
+  "C4",
+  "ARG",
+  "DTZ",
+  "G",
+  "S",
+  "RUF",
+  "PT",
+  "PIE",
+  "T20",
 ]
-ignore = [
-    "B008",
-    "S101",
-    "S105",
-    "S106",
-    "G004",
-    "T201",
-    "S112",
-    "E731",
-    "S311",
-    "I001",
-    "S608"
-]
+ignore = ["B008", "S101", "S105", "S106", "G004", "T201", "S112", "E731", "S311", "I001", "S608"]
 unfixable = ["DTZ", "S"]
 
 [tool.ruff.lint.per-file-ignores]

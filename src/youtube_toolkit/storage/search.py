@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from ..identity import VideoRef, extract_video_id
 from ..model_config import EmbeddingConfig
-from . import embeddings
+from .. import embeddings
 from .connection import MAX_TABLE_SCAN_ROWS, LanceConnection, filter_contains_case_insensitive, filter_equal, filter_in_values
 from .payloads import stored_video_payload
 

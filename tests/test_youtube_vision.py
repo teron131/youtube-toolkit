@@ -288,7 +288,7 @@ def test_video_vision_cli_routes_to_public_extraction(monkeypatch) -> None:
         "timestamps_seconds": [8.0],
         "collage_paths": ["/example/page1.jpg"],
     }
-    monkeypatch.setattr(commands, "sample_vision", lambda video_ref: expected if video_ref == VIDEO_ID else {})
+    monkeypatch.setattr(vision, "sample_vision", lambda video_ref: expected if video_ref == VIDEO_ID else {})
 
     assert args.handler is commands.VideoCommands.vision
     assert commands.VideoCommands.vision(argparse.Namespace(video_ref=VIDEO_ID)) == expected

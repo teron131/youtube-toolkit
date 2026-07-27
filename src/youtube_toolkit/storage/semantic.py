@@ -10,17 +10,15 @@ from typing import Any
 from lancedb.rerankers import RRFReranker
 from lancedb.table import Table
 
+from .. import embeddings
 from ..execution import collect_concurrently
 from ..model_config import EmbeddingConfig, embedding_auto_index_enabled, embedding_concurrency
 from ..schemas import EmbeddingIndexResult
-from . import embeddings
+from ..semantic import cosine_similarity, split_transcript_chunks
 from .connection import MAX_TABLE_SCAN_ROWS, LanceConnection, filter_in_values, filter_literal, is_database_write_permission_error, transcript_chunk_metadata
-from .embeddings import EmbeddingSearchError
 from .videos import find_video_row, video_payload_row
 
 EmbedText = Callable[[str], list[float]]
-TRANSCRIPT_CHUNK_CHARS = 1200
-TRANSCRIPT_CHUNK_OVERLAP_CHARS = 200
 COSINE_DISTANCE_EPSILON = 1e-6
 
 
@@ -183,7 +181,7 @@ def index_transcript_chunks(
 
         embedding = embed_text(chunk_text) if embed_text is not None else embeddings.embed_text(chunk_text, config=embedding_config)
         if not embedding:
-            raise EmbeddingSearchError("Embedding request returned an empty vector")
+            raise embeddings.EmbeddingError("Embedding request returned an empty vector")
         dimensions = len(embedding)
         connection.ensure_transcript_chunk_table(dimensions)
         indexed_rows.append(
@@ -210,34 +208,6 @@ def index_transcript_chunks(
         "video_id": youtube_video_id,
         "dimensions": dimensions or 0,
     }
-
-
-def split_transcript_chunks(
-    transcript: str,
-    *,
-    chunk_chars: int = TRANSCRIPT_CHUNK_CHARS,
-    overlap_chars: int = TRANSCRIPT_CHUNK_OVERLAP_CHARS,
-) -> list[str]:
-    """Split normalized transcript text into overlapping chunks for embedding search."""
-    clean_transcript = " ".join(transcript.split())
-    if not clean_transcript:
-        return []
-    if chunk_chars <= 0:
-        raise ValueError("transcript chunk size must be greater than 0")
-    if overlap_chars < 0 or overlap_chars >= chunk_chars:
-        raise ValueError("transcript chunk overlap must be non-negative and smaller than chunk size")
-
-    chunks: list[str] = []
-    start = 0
-    while start < len(clean_transcript):
-        end = min(len(clean_transcript), start + chunk_chars)
-        chunk = clean_transcript[start:end].strip()
-        if chunk:
-            chunks.append(chunk)
-        if end == len(clean_transcript):
-            break
-        start = end - overlap_chars
-    return chunks
 
 
 def search_transcript_chunk_scores(
@@ -438,24 +408,6 @@ def rows_with_similarity(
     )
 
 
-def cosine_similarity(
-    left: list[float],
-    right: Any,
-) -> float:
-    """Compute cosine similarity for same-length numeric vectors, treating invalid rows as zero."""
-    if not isinstance(right, list) or len(left) != len(right):
-        return 0.0
-    if not all(isinstance(value, int | float) and not isinstance(value, bool) for value in right):
-        return 0.0
-    right_values = [float(value) for value in right]
-    numerator = sum(left_value * right_value for left_value, right_value in zip(left, right_values, strict=True))
-    left_norm = math.sqrt(sum(left_value * left_value for left_value in left))
-    right_norm = math.sqrt(sum(right_value * right_value for right_value in right_values))
-    if not left_norm or not right_norm:
-        return 0.0
-    return numerator / (left_norm * right_norm)
-
-
 def explain_transcript_chunk_search(
     connection: LanceConnection,
     query: str,
@@ -567,7 +519,7 @@ def index_video_embedding(
 
     embedding = embed_text(source_text) if embed_text is not None else embeddings.embed_text(source_text, config=embedding_config)
     if not embedding:
-        raise EmbeddingSearchError("Embedding request returned an empty vector")
+        raise embeddings.EmbeddingError("Embedding request returned an empty vector")
     connection.ensure_video_embedding_table(len(embedding))
     connection.upsert_rows(
         "video_embeddings",
@@ -625,7 +577,7 @@ def index_video_title_embedding(
 
     embedding = embed_text(source_text) if embed_text is not None else embeddings.embed_text(source_text, config=embedding_config)
     if not embedding:
-        raise EmbeddingSearchError("Embedding request returned an empty vector")
+        raise embeddings.EmbeddingError("Embedding request returned an empty vector")
     connection.ensure_video_title_embedding_table(len(embedding))
     connection.upsert_rows(
         "video_title_embeddings",
@@ -733,7 +685,7 @@ def index_video_title_embeddings(
         video_id, source_text, content_hash = job
         embedding = embed_text(source_text) if embed_text is not None else embeddings.embed_text(source_text, config=embedding_config)
         if not embedding:
-            raise EmbeddingSearchError("Embedding request returned an empty vector")
+            raise embeddings.EmbeddingError("Embedding request returned an empty vector")
         return {
             "video_id": video_id,
             "title": source_text,

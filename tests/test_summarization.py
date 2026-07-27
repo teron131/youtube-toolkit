@@ -1,8 +1,7 @@
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import SecretStr
 
-from youtube_toolkit import ModelConfig
-from youtube_toolkit.model_config import DEFAULT_EMBEDDING_CONCURRENCY, MAX_EMBEDDING_CONCURRENCY, embedding_concurrency
+from youtube_toolkit.model_config import DEFAULT_EMBEDDING_CONCURRENCY, MAX_EMBEDDING_CONCURRENCY, ModelConfig, embedding_concurrency
 from youtube_toolkit.summarization import Chapter, TranscriptSummary, summarize_transcript
 
 

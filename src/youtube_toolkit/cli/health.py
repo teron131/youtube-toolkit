@@ -5,8 +5,8 @@ from __future__ import annotations
 import argparse
 from typing import Literal, NotRequired, TypedDict
 
-from pydantic import SecretStr
-
+from ..capabilities import capability_available
+from ..embeddings import embed_text
 from ..model_config import (
     DEFAULT_EMBEDDING_MODEL,
     LLM_REQUIRED_CONFIG,
@@ -15,9 +15,15 @@ from ..model_config import (
     embedding_config_from_env,
     llm_config_from_env,
 )
-from ..storage import DATABASE_FILENAME, database_schema_health, embed_text, resolve_storage_dir
-from ..storage.connection import DatabaseSchemaHealthResult
 from ..watchlist_schedule import DEFAULT_WATCHLIST_SCHEDULE_LABEL, watchlist_schedule_status
+
+
+class StorageHealthResult(TypedDict):
+    """Capability-aware storage readiness reported by doctor."""
+
+    ok: bool
+    status: str
+    detail: str
 
 
 class DoctorResult(TypedDict):
@@ -25,7 +31,7 @@ class DoctorResult(TypedDict):
 
     yt_dlp_version: str
     database: str
-    database_schema: DatabaseSchemaHealthResult
+    database_schema: StorageHealthResult
     watchlist_schedule: WatchlistScheduleHealthResult
     model_apis: ModelApisHealthResult
 
@@ -76,13 +82,34 @@ def run_doctor(args: argparse.Namespace) -> DoctorResult:
     del args
     import yt_dlp.version
 
+    database, database_schema = storage_health()
     return {
         "yt_dlp_version": yt_dlp.version.__version__,
-        "database": str(resolve_storage_dir() / DATABASE_FILENAME),
-        "database_schema": database_schema_health(),
+        "database": database,
+        "database_schema": database_schema,
         "watchlist_schedule": watchlist_schedule_health(),
         "model_apis": model_api_health(),
     }
+
+
+def storage_health() -> tuple[str, StorageHealthResult]:
+    """Report absent optional storage without importing LanceDB."""
+    if not capability_available("storage"):
+        return (
+            "not installed",
+            {
+                "ok": False,
+                "status": "unavailable",
+                "detail": "storage capability is not installed",
+            },
+        )
+
+    from ..storage import DATABASE_FILENAME, database_schema_health, resolve_storage_dir
+
+    return (
+        str(resolve_storage_dir() / DATABASE_FILENAME),
+        database_schema_health(),
+    )
 
 
 def watchlist_schedule_health(
@@ -234,6 +261,7 @@ def call_llm_hello(config: ModelConfig) -> str:
     """Call the configured chat model with the setup smoke-test prompt."""
     from langchain_core.messages import HumanMessage
     from langchain_openai import ChatOpenAI
+    from pydantic import SecretStr
 
     response = ChatOpenAI(
         model=config.model,

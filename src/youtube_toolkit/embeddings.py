@@ -1,4 +1,4 @@
-"""Configured embedding API client for storage indexing and semantic search."""
+"""Configured embedding API client shared by stateless search and storage indexing."""
 
 from __future__ import annotations
 
@@ -8,15 +8,15 @@ import time
 import urllib.error
 import urllib.request
 
-from ..model_config import EmbeddingConfig, embedding_config_from_env
-from ..execution import retry_transient
+from .execution import retry_transient
+from .model_config import EmbeddingConfig, embedding_config_from_env
 
 EMBEDDING_REQUEST_ATTEMPTS = 3
 EMBEDDING_RETRY_BACKOFF_SECONDS = 0.25
 
 
-class EmbeddingSearchError(RuntimeError):
-    """Raised when semantic search cannot call or parse the embedding response."""
+class EmbeddingError(RuntimeError):
+    """Raised when the configured embedding API cannot return a usable vector."""
 
 
 def embed_text(
@@ -28,7 +28,7 @@ def embed_text(
     try:
         resolved_config = config or embedding_config_from_env()
     except ValueError as error:
-        raise EmbeddingSearchError(str(error)) from error
+        raise EmbeddingError(str(error)) from error
     payload = {
         "model": resolved_config.model,
         "input": text,
@@ -45,7 +45,7 @@ def embed_text(
     if values is None:
         values = response.get("embedding")
     if not isinstance(values, list):
-        raise EmbeddingSearchError("Embedding response did not include values")
+        raise EmbeddingError("Embedding response did not include values")
     return [float(value) for value in values]
 
 
@@ -56,7 +56,7 @@ def post_embedding_json(
 ) -> dict[str, Any]:
     """POST one embedding request with bounded retries for transient provider failures."""
     if not url.startswith(f"{config.base_url}/"):
-        raise EmbeddingSearchError("Unsupported embedding URL")
+        raise EmbeddingError("Unsupported embedding URL")
     request = urllib.request.Request(  # noqa: S310
         url,
         data=json.dumps(payload).encode("utf-8"),
@@ -84,9 +84,9 @@ def post_embedding_json(
         )
     except urllib.error.HTTPError as error:
         message = compact_embedding_error(error.read().decode("utf-8", errors="replace"))
-        raise EmbeddingSearchError(message or f"Embedding request HTTP {error.code}") from error
+        raise EmbeddingError(message or f"Embedding request HTTP {error.code}") from error
     except (OSError, json.JSONDecodeError) as error:
-        raise EmbeddingSearchError(str(error)) from error
+        raise EmbeddingError(str(error)) from error
 
 
 def compact_embedding_error(text: str) -> str:

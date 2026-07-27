@@ -6,11 +6,14 @@ import stat
 
 import pytest
 
-from youtube_toolkit import cli
-from youtube_toolkit.cli import commands, health, main, setup
+import youtube_toolkit.cli.__main__ as cli
+import youtube_toolkit.search.workflow as search_workflow
+import youtube_toolkit.storage as storage
+from youtube_toolkit.cli import commands, health, output, setup
+from youtube_toolkit.cli.__main__ import main
 from youtube_toolkit.cli.parser import build_parser
 from youtube_toolkit.schemas import ChannelIdentity, TranscriptChunk, TranscriptDocument, VideoMetadata
-from youtube_toolkit.search import ChannelTarget, SearchRequest
+from youtube_toolkit.search.request import ChannelTarget, SearchRequest
 from youtube_toolkit.storage import get_connection, upsert_video, upsert_watchlist_channel
 from youtube_toolkit.storage.connection import DatabaseWritePermissionError
 
@@ -132,6 +135,37 @@ def test_main_explains_database_write_permission_errors(
         "error: Database write access was denied. Grant this process write access to the active database and retry; run `youtube doctor` to see its path. "
         "Set YOUTUBE_TOOLKIT_STORAGE_HOME only when you intentionally want a different database.\n"
     )
+
+
+@pytest.mark.parametrize(
+    ("argv", "capability", "feature"),
+    [
+        (["video", "vision", "JpSHyEIZ_bo"], "vision", "video vision"),
+        (["watchlist", "list"], "storage", "watchlist"),
+        (["db", "get", "JpSHyEIZ_bo"], "storage", "database access"),
+        (["setup", "codex"], "storage", "persistent setup"),
+    ],
+)
+def test_main_enforces_command_capabilities_before_handlers(
+    capsys,
+    monkeypatch,
+    argv: list[str],
+    capability: str,
+    feature: str,
+) -> None:
+    """Parser metadata gates optional command groups once at dispatch."""
+    checked = []
+
+    def reject_capability(actual_capability: str, actual_feature: str) -> None:
+        checked.append((actual_capability, actual_feature))
+        raise RuntimeError(f"{actual_feature} requires youtube-toolkit[{actual_capability}]")
+
+    monkeypatch.setattr(cli, "require_capability", reject_capability)
+    monkeypatch.setattr(cli, "capability_available", lambda _capability: False)
+
+    assert main(argv) == 1
+    assert checked == [(capability, feature)]
+    assert capsys.readouterr().err == f"error: {feature} requires youtube-toolkit[{capability}]\n"
 
 
 def test_main_emits_doctor_as_human_report(
@@ -922,7 +956,7 @@ def test_search_command_builds_default_youtube_request(monkeypatch) -> None:
         requests.append(request)
         return [{"id": "aaaaaaaaaaa"}]
 
-    monkeypatch.setattr(commands, "run_search_request", fake_run_search_request)
+    monkeypatch.setattr(search_workflow, "search", fake_run_search_request)
     payload = commands.SearchCommands.search(
         argparse.Namespace(
             query="agents",
@@ -973,7 +1007,7 @@ def test_search_command_builds_channel_request(monkeypatch) -> None:
         requests.append(request)
         return [{"id": "aaaaaaaaaaa"}]
 
-    monkeypatch.setattr(commands, "run_search_request", fake_run_search_request)
+    monkeypatch.setattr(search_workflow, "search", fake_run_search_request)
     payload = commands.SearchCommands.search(
         argparse.Namespace(
             query="agents",
@@ -1028,7 +1062,7 @@ def test_index_command_indexes_stored_transcript_videos(
             "content_hash": "hash",
         }
 
-    monkeypatch.setattr(commands, "index_video_embedding", fake_index_video_embedding)
+    monkeypatch.setattr(storage, "index_video_embedding", fake_index_video_embedding)
 
     with get_connection() as connection:
         upsert_video(
@@ -1110,7 +1144,7 @@ def test_main_emits_index_as_human_report(
 
 
 def test_render_index_summarizes_successes() -> None:
-    assert cli.render_index(
+    assert output.render_index(
         {
             "videos": 7,
             "indexed": [
@@ -1317,9 +1351,9 @@ def test_watchlist_list_returns_stored_channel_refs(
 
 def test_emit_json_truncates_long_text_fields(capsys, monkeypatch) -> None:
     """Large text fields are capped without cutting the whole JSON payload."""
-    monkeypatch.setattr(cli, "MAX_STDOUT_TEXT_FIELD_CHARS", 20)
+    monkeypatch.setattr(output, "MAX_STDOUT_TEXT_FIELD_CHARS", 20)
 
-    cli.emit_json({"title": "y" * 100, "transcript": "x" * 100})
+    output.emit_json({"title": "y" * 100, "transcript": "x" * 100})
 
     payload = json.loads(capsys.readouterr().out)
     assert payload == {
@@ -1327,7 +1361,7 @@ def test_emit_json_truncates_long_text_fields(capsys, monkeypatch) -> None:
         "transcript": "x" * 20,
     }
 
-    cli.emit_json("z" * 100)
+    output.emit_json("z" * 100)
 
     assert json.loads(capsys.readouterr().out) == "z" * 20
 
