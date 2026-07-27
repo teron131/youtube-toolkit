@@ -9,12 +9,11 @@ from typing import Any
 
 from lancedb.rerankers import RRFReranker
 
+from .. import embeddings
 from ..execution import collect_concurrently
 from ..model_config import EmbeddingConfig, embedding_concurrency
 from ..schemas import EmbeddingIndexResult
-from . import embeddings
 from .connection import LanceConnection, filter_literal
-from .embeddings import EmbeddingSearchError
 from .semantic import EmbedText, rows_with_similarity
 
 
@@ -111,7 +110,7 @@ def index_search_candidate_titles(
         video_id, source_rank, source_text, content_hash = job
         embedding = embed_text(source_text) if embed_text is not None else embeddings.embed_text(source_text, config=embedding_config)
         if not embedding:
-            raise EmbeddingSearchError("Embedding request returned an empty vector")
+            raise embeddings.EmbeddingError("Embedding request returned an empty vector")
         return {
             "session_id": session_id,
             "video_id": video_id,

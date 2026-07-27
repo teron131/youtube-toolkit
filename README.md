@@ -195,24 +195,38 @@ The default watchlist schedule runs every 12 hours, scans uploads from the last 
 
 Runtime requirements:
 
-- `yt-dlp` is installed with the Python package and owns YouTube metadata, captions, search, and media acquisition.
-- `ffmpeg` must be available on `PATH`; video vision uses it for frame analysis and decoding. On macOS, install it with `brew install ffmpeg`.
+- `yt-dlp` and OpenCC are installed at every level. They own YouTube metadata, captions, search, media acquisition, and transcript normalization.
+- `ffmpeg` is optional. It must be available on `PATH` only when `video vision` processes frames. On macOS, install it with `brew install ffmpeg`.
 
-Install or refresh the system command and configure Codex in one idempotent step:
+Install or refresh the system command at one cumulative dependency level:
 
 ```bash
-uv run python scripts/install.py
+uv run python scripts/install.py --level lite
+uv run python scripts/install.py --level standard
+uv run python scripts/install.py --level full
 ```
 
-The installer builds a wheel, replaces the existing `uv tool` environment instead of creating a duplicate, runs `youtube setup codex --yes` when Codex is installed, and finishes with `youtube doctor`.
+| Level | Included capabilities |
+| --- | --- |
+| `lite` | Stateless metadata, captions/STT, channel listings, fresh search, and in-memory semantic scoring |
+| `standard` | Lite plus LanceDB persistence, watchlist, blacklist, stored search, database administration, and embedding indexes |
+| `full` | Standard plus NumPy/Pillow vision and LangChain/OpenAI summarization support |
+
+`standard` is the default when `--level` is omitted. The installer builds a wheel, replaces the existing `uv tool` environment instead of creating a duplicate, configures the Codex storage root only for `standard` and `full`, and finishes with `youtube doctor`.
+
+The Python extras remain capability-based for direct package consumers: `youtube-toolkit[storage]`, `youtube-toolkit[vision]`, and `youtube-toolkit[llm]`. Installation levels compose those extras; application modules do not depend on level names.
+
+Lite does not persist model configuration. Set the embedding environment variables for in-memory semantic search; `youtube setup` requires the standard or full level.
 
 For checkout-only development:
 
 ```bash
-uv sync
+uv sync --all-extras
 youtube setup
 youtube doctor
 ```
+
+Use plain `uv sync` when intentionally testing only the lite dependency surface, or select individual capabilities with `uv sync --extra storage`.
 
 Use `uv run youtube ...` only when intentionally testing the checkout without reinstalling. Normal usage below assumes the installed `youtube` command.
 

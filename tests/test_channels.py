@@ -5,6 +5,7 @@ import threading
 
 import pytest
 
+import youtube_toolkit.storage as storage
 from youtube_toolkit.cli.parser import build_parser
 from youtube_toolkit.identity import YouTubeRefs, normalize_channel_url, parse_channel_ref
 from youtube_toolkit.schemas import ChannelIdentity, TranscriptDocument, VideoMetadata
@@ -20,6 +21,7 @@ from youtube_toolkit.storage import (
 from youtube_toolkit.youtube.channels import (
     ChannelOptions,
     add_watchlist_channels,
+    fetch_channel_videos,
     fetch_watchlist_transcripts,
     get_recent_channel_entries,
     list_recent_watchlist_videos,
@@ -29,6 +31,28 @@ from youtube_toolkit.youtube.channels import (
     sync_watchlist,
     validate_channel_options,
 )
+
+
+def test_fetch_channel_videos_stays_stateless_without_storage(monkeypatch) -> None:
+    """Direct channel retrieval returns provider metadata without opening storage."""
+
+    class FakeClient:
+        def channel_videos(
+            self,
+            channel_url: str,
+            *,
+            last: int | None,
+            flat: bool = True,
+        ) -> dict:
+            assert channel_url == "https://www.youtube.com/@OpenAI/videos"
+            assert last == 1
+            assert flat is True
+            return openai_listing()
+
+    monkeypatch.setattr("youtube_toolkit.youtube.channels.capability_available", lambda _capability: False)
+    monkeypatch.setattr(storage, "get_connection", lambda: pytest.fail("stateless channel retrieval opened storage"))
+
+    assert fetch_channel_videos("@OpenAI", options=ChannelOptions(last=1), client=FakeClient()) == openai_listing()
 
 
 def test_normalize_channel_url_from_common_inputs() -> None:
@@ -663,7 +687,8 @@ def test_sync_watchlist_fetches_channels_concurrently(
         fake_fetch_channel_metadata,
     )
     monkeypatch.setattr(
-        "youtube_toolkit.youtube.channels.store_watchlist_channel_listing",
+        storage,
+        "store_watchlist_channel_listing",
         fake_store_watchlist_channel_listing,
     )
     monkeypatch.setattr(
@@ -715,7 +740,8 @@ def test_fetch_watchlist_transcripts_fetches_videos_concurrently(monkeypatch) ->
         fake_fetch_transcript,
     )
     monkeypatch.setattr(
-        "youtube_toolkit.youtube.channels.auto_index_video_embedding",
+        storage,
+        "auto_index_video_embedding",
         fake_auto_index_video_embedding,
     )
 

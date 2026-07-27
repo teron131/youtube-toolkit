@@ -8,8 +8,6 @@ from typing import Any
 
 from ..identity import extract_video_id
 from ..schemas import ChannelIdentity, extract_channel_identity
-from ..storage import get_connection, list_blacklist_channel_identities
-from ..storage.connection import filter_contains_case_insensitive, filter_in_values, filter_literal
 from .request import (
     VIDEO_RESULT_KEYS,
     SearchRequest,
@@ -212,6 +210,8 @@ def filter_candidates(
     if not candidates:
         return []
     if blacklisted_channels is None:
+        from ..storage import get_connection, list_blacklist_channel_identities
+
         with get_connection() as connection:
             blacklisted_channels = tuple(list_blacklist_channel_identities(connection))
     return [
@@ -317,6 +317,8 @@ def db_chunk_filter(
     blacklisted_channels: tuple[ChannelIdentity, ...],
 ) -> str | None:
     """Translate DB-applicable search filters into a SQL fragment for chunk search."""
+    from ..storage.connection import filter_in_values
+
     clauses = db_metadata_filter_clauses(request)
 
     blacklisted_channel_ids = [channel.youtube_channel_id for channel in blacklisted_channels if channel.youtube_channel_id is not None]
@@ -348,6 +350,8 @@ def db_video_filter(
     blacklisted_channels: tuple[ChannelIdentity, ...],
 ) -> str | None:
     """Translate filters owned by stored video columns into a native LanceDB predicate."""
+    from ..storage.connection import filter_in_values
+
     clauses = db_metadata_filter_clauses(request)
 
     blacklisted_channel_ids = [channel.youtube_channel_id for channel in blacklisted_channels if channel.youtube_channel_id is not None]
@@ -361,6 +365,8 @@ def db_video_filter(
 
 def db_metadata_filter_clauses(request: SearchRequest) -> list[str]:
     """Build native numeric, date, and title clauses shared by stored DB searches."""
+    from ..storage.connection import filter_literal
+
     clauses: list[str] = []
     if request.min_views is not None:
         clauses.append(f"view_count >= {request.min_views}")
@@ -407,6 +413,8 @@ def text_filter_clause(
     channel_aliases: bool,
 ) -> str:
     """Build one case-insensitive substring rule across equivalent stored text columns."""
+    from ..storage.connection import filter_contains_case_insensitive
+
     predicates = [filter_contains_case_insensitive(column_name, needle) for column_name in columns]
     if channel_aliases and needle.startswith("@") and len(needle) > 1:
         predicates.extend(filter_contains_case_insensitive(column_name, needle[1:]) for column_name in columns)

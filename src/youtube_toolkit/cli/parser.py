@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from ..storage.videos import VIDEO_AGENT_EDITABLE_FIELDS
+from ..schemas import VIDEO_AGENT_EDITABLE_FIELDS
 from ..watchlist_schedule import (
     DEFAULT_WATCHLIST_SCHEDULE_DAYS,
     DEFAULT_WATCHLIST_SCHEDULE_LABEL,
@@ -108,7 +108,11 @@ class VideoCommandParser:
 
         vision_parser = video_subparsers.add_parser("vision", help="Generate timestamped visual-context collages")
         vision_parser.add_argument("video_ref", metavar="url", help="YouTube video URL or ID")
-        vision_parser.set_defaults(handler=VideoCommands.vision)
+        vision_parser.set_defaults(
+            handler=VideoCommands.vision,
+            required_capability="vision",
+            capability_feature="video vision",
+        )
 
 
 class SearchCommandParser:
@@ -157,6 +161,10 @@ class WatchlistCommandParser:
     @staticmethod
     def add_to(subparsers: argparse._SubParsersAction) -> None:
         watchlist_parser = subparsers.add_parser("watchlist", help="Manage or sync watchlist channels")
+        watchlist_parser.set_defaults(
+            required_capability="storage",
+            capability_feature="watchlist",
+        )
         watchlist_subparsers = add_command_subparsers(watchlist_parser, dest="watchlist_command", required=True, metavar="{add,list,remove,sync,recent,schedule}")
         watchlist_add_parser = watchlist_subparsers.add_parser("add", help="Add one or more channels to the watchlist")
         add_channel_refs_arg(watchlist_add_parser)
@@ -215,6 +223,10 @@ class BlacklistCommandParser:
     @staticmethod
     def add_to(subparsers: argparse._SubParsersAction) -> None:
         blacklist_parser = subparsers.add_parser("blacklist", help="Manage search blacklist channels")
+        blacklist_parser.set_defaults(
+            required_capability="storage",
+            capability_feature="blacklist",
+        )
         blacklist_subparsers = add_command_subparsers(blacklist_parser, dest="blacklist_command", required=True)
         blacklist_add_parser = blacklist_subparsers.add_parser("add", help="Add one or more channels to the search blacklist")
         add_channel_refs_arg(blacklist_add_parser)
@@ -236,7 +248,11 @@ class IndexCommandParser:
             action="store_true",
             help="Include stored videos without transcripts when indexing all videos",
         )
-        index_parser.set_defaults(handler=IndexCommands.videos)
+        index_parser.set_defaults(
+            handler=IndexCommands.videos,
+            required_capability="storage",
+            capability_feature="embedding index maintenance",
+        )
 
 
 class DatabaseCommandParser:
@@ -245,6 +261,10 @@ class DatabaseCommandParser:
     @staticmethod
     def add_to(subparsers: argparse._SubParsersAction) -> None:
         database_parser = subparsers.add_parser("db", help="Inspect or edit the active LanceDB store")
+        database_parser.set_defaults(
+            required_capability="storage",
+            capability_feature="database access",
+        )
         database_subparsers = add_command_subparsers(
             database_parser,
             dest="database_command",
@@ -310,7 +330,12 @@ class SetupCommandParser:
             default=None,
             help="Send 'Hello' to the configured model APIs after saving",
         )
-        setup_parser.set_defaults(setup_command=None, handler=SetupCommands.models)
+        setup_parser.set_defaults(
+            setup_command=None,
+            handler=SetupCommands.models,
+            required_capability="storage",
+            capability_feature="persistent setup",
+        )
         setup_subparsers = add_command_subparsers(setup_parser, dest="setup_command")
         codex_parser = setup_subparsers.add_parser("codex", help="Authorize the active storage directory in Codex workspace-write sandboxes")
         codex_parser.add_argument("--yes", action="store_true", help="Write the Codex sandbox configuration instead of previewing it")

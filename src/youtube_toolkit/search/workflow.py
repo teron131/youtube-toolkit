@@ -11,10 +11,9 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
+from ..capabilities import capability_available, require_capability
 from ..identity import parse_channel_ref
 from ..schemas import ChannelIdentity, extract_channel_identity
-from ..storage import get_connection, store_search_candidates, upsert_video
-from ..storage.connection import DatabaseWritePermissionError
 from ..youtube.channels import ChannelOptions, fetch_channel_metadata
 from ..youtube.client import YtDlpClient
 from .filters import (
@@ -39,7 +38,6 @@ from .request import (
     resolve_sort,
     validate_request,
 )
-from .database import db_candidates, db_semantic_candidates, search_db_chunks, search_db_videos
 from .semantic import (
     SemanticSearchState,
     ensure_semantic_index,
@@ -54,6 +52,10 @@ from .semantic import (
 def search(request: SearchRequest) -> list[dict[str, Any]]:
     """Run the public search workflow across configured sources, filters, persistence, and result shapes."""
     validate_request(request)
+    if "db" in request.sources:
+        require_capability("storage", "database search")
+        from .database import search_db_chunks, search_db_videos
+
     limit = request.limit
     return_type = resolve_return_type(request)
     sort = resolve_sort(request)
@@ -67,7 +69,7 @@ def search(request: SearchRequest) -> list[dict[str, Any]]:
             request,
             limit=limit,
         )
-    semantic_state = SemanticSearchState() if request.mode == "semantic" else None
+    semantic_state = SemanticSearchState(database_available=capability_available("storage")) if request.mode == "semantic" else None
 
     candidates = dedupe_candidates(
         collect_sources(
@@ -167,6 +169,16 @@ def filter_search_candidates(
     include_upload_date: bool = True,
 ) -> tuple[list[dict[str, Any]], tuple[str, ...]]:
     """Let fresh semantic search continue without stored blacklist state when DB access is denied."""
+    if not capability_available("storage"):
+        return (
+            filter_candidates(
+                candidates,
+                request,
+                blacklisted_channels=(),
+                include_upload_date=include_upload_date,
+            ),
+            (),
+        )
     if semantic_state is not None and not semantic_state.database_available:
         return (
             filter_candidates(
@@ -186,7 +198,11 @@ def filter_search_candidates(
             ),
             (),
         )
-    except DatabaseWritePermissionError:
+    except Exception as error:
+        from ..storage.connection import is_database_write_permission_error
+
+        if not is_database_write_permission_error(error):
+            raise
         if request.mode != "semantic" or "db" in request.sources:
             raise
         if semantic_state is not None:
@@ -228,6 +244,8 @@ def collect_sources(
                 )
             )
         elif source == "db":
+            from .database import db_candidates, db_semantic_candidates
+
             if request.mode == "semantic":
                 candidates.extend(db_semantic_candidates(request))
                 continue
@@ -411,8 +429,10 @@ def channel_entries(
 
 def persist_metadata(candidates: list[dict[str, Any]]) -> None:
     """Persist candidate metadata so future transcript, summary, and DB searches share one catalog."""
-    if not candidates:
+    if not candidates or not capability_available("storage"):
         return
+    from ..storage import get_connection, upsert_video
+
     with get_connection() as connection:
         for candidate in candidates:
             upsert_video(connection, candidate)
@@ -424,8 +444,10 @@ def stage_search_candidates(
     candidates: list[dict[str, Any]],
 ) -> None:
     """Persist non-DB search candidates for title-embedding prefiltering within this search session."""
-    if not any(candidate.get("source") != "db" for candidate in candidates):
+    if not capability_available("storage") or not any(candidate.get("source") != "db" for candidate in candidates):
         return
+    from ..storage import get_connection, store_search_candidates
+
     with get_connection() as connection:
         store_search_candidates(
             connection,

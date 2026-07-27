@@ -15,10 +15,11 @@ from lancedb.index import BTree
 import pyarrow as pa
 import pytest
 
-from youtube_toolkit import cli
 from youtube_toolkit.cli import commands
+from youtube_toolkit.cli.__main__ import main
 from youtube_toolkit.cli.parser import build_parser
-from youtube_toolkit.storage.embeddings import EmbeddingSearchError
+from youtube_toolkit.embeddings import EmbeddingError
+from youtube_toolkit.storage import viewer as storage_viewer
 from youtube_toolkit.storage.viewer import ReadOnlyLanceViewer, ViewerQueryError, create_database_viewer_server
 
 
@@ -211,7 +212,7 @@ def test_viewer_blends_literal_scalar_and_read_only_semantic_video_search(tmp_pa
     assert embedding_queries == []
 
     def unavailable_embedding(_query: str) -> list[float]:
-        raise EmbeddingSearchError("Embedding API is not configured")
+        raise EmbeddingError("Embedding API is not configured")
 
     fallback_page = ReadOnlyLanceViewer(database_path, embed_query=unavailable_embedding).table_rows(
         "videos",
@@ -301,7 +302,7 @@ def test_database_view_cli_forwards_active_path_without_json_output(
     calls: list[tuple[Path, int, bool]] = []
     monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(storage_home))
     monkeypatch.setattr(
-        commands,
+        storage_viewer,
         "serve_database_viewer",
         lambda path, *, port, open_browser: calls.append((path, port, open_browser)),
     )
@@ -312,7 +313,7 @@ def test_database_view_cli_forwards_active_path_without_json_output(
     assert parsed.port == 8042
     assert parsed.no_open is True
     assert commands.DatabaseCommands.view(argparse.Namespace(port=8042, no_open=True)) is None
-    assert cli.main(["db", "view", "--port", "8043", "--no-open"]) == 0
+    assert main(["db", "view", "--port", "8043", "--no-open"]) == 0
     assert calls == [
         (storage_home / "youtube.lancedb", 8042, False),
         (storage_home / "youtube.lancedb", 8043, False),

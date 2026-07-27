@@ -13,10 +13,10 @@ from youtube_toolkit.youtube.caption import (
     TranscriptOptions,
     fetch_caption_payload,
     fetch_live_transcript,
-    fetch_transcript,
     remove_sponsorblock_chunks,
     select_caption_track,
 )
+from youtube_toolkit.transcript import fetch_transcript
 
 
 def test_remove_sponsorblock_chunks_drops_overlapping_chunks() -> None:
@@ -154,8 +154,8 @@ def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
     assert stored_video["transcript"] == "數據庫"
 
 
-def test_fetch_live_transcript_does_not_open_storage(monkeypatch) -> None:
-    """Stateless caption retrieval should complete even when every storage access would fail."""
+def test_fetch_transcript_uses_live_path_without_storage(monkeypatch) -> None:
+    """Public transcript retrieval stays stateless when storage is not installed."""
 
     class FakeClient:
         def metadata(self, video_ref: str) -> dict:
@@ -172,10 +172,6 @@ def test_fetch_live_transcript_does_not_open_storage(monkeypatch) -> None:
                 },
             }
 
-    def deny_connection():
-        raise AssertionError("storage should not be opened")
-
-    monkeypatch.setattr("youtube_toolkit.youtube.caption.get_connection", deny_connection)
     monkeypatch.setattr(
         "youtube_toolkit.youtube.caption.fetch_caption_payload",
         lambda _url: {
@@ -188,8 +184,9 @@ def test_fetch_live_transcript_does_not_open_storage(monkeypatch) -> None:
             ]
         },
     )
+    monkeypatch.setattr("youtube_toolkit.transcript.capability_available", lambda _capability: False)
 
-    document = fetch_live_transcript("JpSHyEIZ_bo", client=FakeClient())
+    document = fetch_transcript("JpSHyEIZ_bo", client=FakeClient())
 
     assert document.metadata.video_id == "JpSHyEIZ_bo"
     assert document.text == "GPT-5.6 model analysis"

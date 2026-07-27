@@ -8,6 +8,11 @@ from urllib.parse import urlparse
 
 from .convert_zh import convert_zh
 
+VIDEO_AGENT_EDITABLE_FIELDS = (
+    "transcript",
+    "summary",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class VideoMetadata:

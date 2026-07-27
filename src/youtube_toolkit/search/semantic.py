@@ -5,26 +5,16 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 import hashlib
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from ..capabilities import capability_available
+from ..embeddings import embed_text
 from ..execution import collect_concurrently
 from ..model_config import embedding_concurrency
 from ..schemas import EmbeddingIndexResult, TranscriptDocument
-from ..storage import (
-    auto_index_transcript_chunks,
-    embed_text,
-    get_connection,
-    index_search_candidate_titles,
-    index_video_title_embeddings,
-    search_candidate_title_scores,
-    search_transcript_chunk_scores,
-    search_transcript_chunks,
-    search_video_title_scores,
-    store_search_candidates,
-)
-from ..storage.connection import LanceConnection, filter_in_values, is_database_write_permission_error
-from ..storage.semantic import cosine_similarity, split_transcript_chunks
-from ..youtube.caption import fetch_live_transcript, fetch_transcript, stored_transcript_document
+from ..semantic import cosine_similarity, split_transcript_chunks
+from ..transcript import fetch_transcript, stored_transcript_document
+from ..youtube.caption import fetch_live_transcript
 from .filters import (
     candidate_id,
     candidate_ids,
@@ -34,7 +24,19 @@ from .filters import (
 )
 from .request import SearchRequest, SearchReturnType
 
+if TYPE_CHECKING:
+    from ..storage.connection import LanceConnection
+
 MAX_CONCURRENT_TRANSCRIPT_FETCHES = 16
+
+
+def _is_database_write_permission_error(error: BaseException) -> bool:
+    """Identify storage permission failures only when the storage capability is installed."""
+    if not capability_available("storage"):
+        return False
+    from ..storage.connection import is_database_write_permission_error as is_permission_error
+
+    return is_permission_error(error)
 
 
 @dataclass(slots=True)
@@ -207,7 +209,7 @@ def fetch_semantic_transcripts(
     """Run the transcript stage DB-first, retrying only permission-denied items through the live adapter."""
     fetch_document = fetch_transcript_with_database if state.database_available else fetch_transcript_in_memory
     documents, failures = fetch_transcripts_concurrently(candidates, fetch_document)
-    database_failures = {video_id: error for video_id, error in failures.items() if is_database_write_permission_error(error)}
+    database_failures = {video_id: error for video_id, error in failures.items() if _is_database_write_permission_error(error)}
     if database_failures:
         state.disable_database()
         retry_candidates = [candidate for candidate in candidates if candidate_id(candidate) in database_failures]
@@ -340,6 +342,8 @@ def prefilter_titles_with_database(
     session_id: str,
 ) -> list[dict[str, Any]]:
     """Stage and score candidate titles through their LanceDB-owned indexes."""
+    from ..storage import get_connection, store_search_candidates
+
     with get_connection() as connection:
         if any(candidate.get("source") != "db" for candidate in candidates):
             store_search_candidates(
@@ -380,7 +384,7 @@ def prefilter_by_title_semantics(
                 session_id=session_id,
             )
         except Exception as error:
-            if not is_database_write_permission_error(error):
+            if not _is_database_write_permission_error(error):
                 raise
             state.disable_database()
 
@@ -404,6 +408,13 @@ def title_semantic_scores(
     session_id: str,
 ) -> dict[str, float]:
     """Score external search-session titles and stored DB titles with their owned embedding indexes."""
+    from ..storage import (
+        index_search_candidate_titles,
+        index_video_title_embeddings,
+        search_candidate_title_scores,
+        search_video_title_scores,
+    )
+
     scores: dict[str, float] = {}
     external_ids = candidate_ids([candidate for candidate in candidates if candidate.get("source") != "db"])
     if external_ids:
@@ -451,6 +462,8 @@ def title_prefilter_limit(
 
 def index_transcripts(candidates: list[dict[str, Any]]) -> list[EmbeddingIndexResult]:
     """Run the database chunk-index option for transcripts already prepared by the prior stage."""
+    from ..storage import auto_index_transcript_chunks, get_connection
+
     results: list[EmbeddingIndexResult] = []
     for candidate in candidates:
         video_id = candidate_id(candidate)
@@ -460,7 +473,7 @@ def index_transcripts(candidates: list[dict[str, Any]]) -> list[EmbeddingIndexRe
             with get_connection() as connection:
                 results.append(auto_index_transcript_chunks(connection, video_id))
         except Exception as error:
-            if is_database_write_permission_error(error):
+            if _is_database_write_permission_error(error):
                 raise
             results.append(
                 {
@@ -477,6 +490,9 @@ def semantic_ready_ids(
     index_results: list[EmbeddingIndexResult],
 ) -> set[str]:
     """Combine newly indexed and already stored chunk IDs that can satisfy semantic search."""
+    from ..storage import get_connection
+    from ..storage.connection import filter_in_values
+
     video_ids = candidate_ids(candidates)
     indexed_ids = {str(result["video_id"]) for result in index_results if result.get("status") == "indexed" and result.get("video_id")}
     if not video_ids:
@@ -539,7 +555,7 @@ def prepare_semantic_index(
                 documents,
             )
         except Exception as error:
-            if not is_database_write_permission_error(error):
+            if not _is_database_write_permission_error(error):
                 raise
             state.disable_database()
 
@@ -590,6 +606,8 @@ def score_chunks_with_database(
     return_type: SearchReturnType,
 ) -> tuple[list[ScoredChunk], dict[str, float]]:
     """Score the database-ready portion of a semantic index through LanceDB."""
+    from ..storage import get_connection, search_transcript_chunk_scores, search_transcript_chunks
+
     with get_connection() as connection:
         video_scores = search_transcript_chunk_scores(
             connection,
@@ -645,7 +663,7 @@ def score_semantic_index(
                 return_type=return_type,
             )
         except Exception as error:
-            if not is_database_write_permission_error(error):
+            if not _is_database_write_permission_error(error):
                 raise
             state.disable_database()
             database_video_ids.clear()
