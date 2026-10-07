@@ -9,6 +9,8 @@ import re
 from typing import Any, TypedDict, cast
 import unicodedata
 
+from ..capabilities import require_capability
+from ..config import DEFAULT_CHANNEL_SEARCH_LIMIT, DEFAULT_YOUTUBE_SEARCH_LIMIT
 from ..schemas import TranscriptDocument, VideoMetadata
 from ..search.request import ChannelTarget, SearchRequest, SearchSource
 from ..transcript import fetch_transcript
@@ -23,20 +25,6 @@ class TranscriptExportResult(TypedDict):
     path: str
 
 
-DEFAULT_YOUTUBE_SEARCH_LIMIT = 10
-DEFAULT_CHANNEL_SEARCH_LIMIT = 30
-VIDEO_METADATA_OUTPUT_FIELDS = (
-    "video_id",
-    "url",
-    "title",
-    "channel",
-    "channel_id",
-    "channel_handle",
-    "upload_date",
-    "duration_seconds",
-    "view_count",
-    "like_count",
-)
 TRANSCRIPT_LANGUAGE_LABELS = {
     "en-orig": "English",
     "en": "English",
@@ -84,14 +72,12 @@ class VideoCommands:
     @staticmethod
     def metadata(args: argparse.Namespace) -> dict[str, Any]:
         """Return normalized video facts without exposing the raw yt-dlp payload."""
-        metadata = asdict(
-            VideoMetadata.from_yt_dlp(YtDlpClient().metadata(args.video_ref))
-        )
-        return {field: metadata[field] for field in VIDEO_METADATA_OUTPUT_FIELDS}
+        return asdict(VideoMetadata.from_yt_dlp(YtDlpClient().metadata(args.video_ref)))
 
     @staticmethod
     def vision(args: argparse.Namespace) -> dict[str, Any]:
         """Return bounded timestamped visual context and its local collage paths."""
+        require_capability("vision", "video vision")
         from ..youtube.vision import sample_vision
 
         return sample_vision(args.video_ref)
@@ -194,7 +180,9 @@ class ChannelCommands:
 
     @staticmethod
     def videos(args: argparse.Namespace) -> dict[str, Any]:
-        return fetch_channel_videos(args.channel_ref, options=channel_options(args))
+        return fetch_channel_videos(
+            args.channel_ref, options=ChannelOptions(last=args.last, days=args.days)
+        )
 
 
 class SearchCommands:
@@ -237,8 +225,3 @@ class SearchCommands:
                 exclude_title=tuple(args.exclude_title),
             )
         )
-
-
-def channel_options(args: argparse.Namespace) -> ChannelOptions:
-    """Translate shared CLI window flags into channel workflow options."""
-    return ChannelOptions(last=args.last, days=args.days)

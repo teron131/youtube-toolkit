@@ -2,15 +2,14 @@
 
 import urllib.error
 
-from youtube_toolkit.embeddings import embed_text, post_embedding_json
-from youtube_toolkit.model_config import (
+from youtube_toolkit.config import (
     DEFAULT_EMBEDDING_CONCURRENCY,
     MAX_EMBEDDING_CONCURRENCY,
     EmbeddingConfig,
-    ModelConfig,
     embedding_concurrency,
 )
-from youtube_toolkit.semantic import split_transcript_chunks
+from youtube_toolkit.embeddings import embed_text, post_embedding_json
+from youtube_toolkit.search.semantic import split_transcript_chunks
 
 
 def test_split_transcript_chunks_uses_overlap() -> None:
@@ -91,7 +90,7 @@ def test_embedding_request_retries_transient_network_failures(monkeypatch) -> No
     monkeypatch.setattr(
         "youtube_toolkit.embeddings.urllib.request.urlopen", fake_urlopen
     )
-    monkeypatch.setattr("youtube_toolkit.embeddings.time.sleep", delays.append)
+    monkeypatch.setattr("youtube_toolkit.execution.time.sleep", delays.append)
 
     assert post_embedding_json(
         "https://embedding.example/v1/embeddings",
@@ -106,16 +105,16 @@ def test_embedding_request_retries_transient_network_failures(monkeypatch) -> No
     assert delays == [0.25, 0.5]
 
 
-def test_model_config_normalizes_values() -> None:
-    config = ModelConfig(
-        model=" summary-model ",
-        api_key=" summary-key ",
-        base_url=" https://summary.example/v1/ ",
+def test_embedding_config_normalizes_values() -> None:
+    config = EmbeddingConfig(
+        model=" embedding-model ",
+        api_key=" embedding-key ",
+        base_url=" https://embedding.example/v1/ ",
     )
 
-    assert config.model == "summary-model"
-    assert config.api_key == "summary-key"
-    assert config.base_url == "https://summary.example/v1"
+    assert config.model == "embedding-model"
+    assert config.api_key == "embedding-key"
+    assert config.base_url == "https://embedding.example/v1"
 
 
 def test_embedding_concurrency_defaults_and_caps(monkeypatch) -> None:

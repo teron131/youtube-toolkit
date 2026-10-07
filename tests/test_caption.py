@@ -97,6 +97,9 @@ def test_fetch_transcript_fetches_and_caches_captions(monkeypatch, tmp_path) -> 
                 },
             }
 
+        def download_transcription_audio(self, _video_id: str) -> Path:
+            pytest.fail("caption retrieval should not download STT audio")
+
     monkeypatch.setattr(
         "youtube_toolkit.youtube.caption.fetch_caption_payload",
         lambda _url: {
@@ -176,7 +179,7 @@ def test_fetch_caption_payload_retries_transient_network_failures(monkeypatch) -
     monkeypatch.setattr(
         "youtube_toolkit.youtube.caption.urllib.request.urlopen", fake_urlopen
     )
-    monkeypatch.setattr("youtube_toolkit.youtube.caption.time.sleep", delays.append)
+    monkeypatch.setattr("youtube_toolkit.execution.time.sleep", delays.append)
 
     assert fetch_caption_payload("https://www.youtube.com/api/timedtext?v=example") == {
         "events": []
@@ -296,11 +299,7 @@ def test_transcript_cache_preserves_timing_and_separates_caption_options(
     monkeypatch, tmp_path, options
 ) -> None:
     """Equivalent video URLs reuse documents while different language/source policies fetch independently."""
-    from youtube_toolkit.schemas import (
-        TranscriptDocument,
-        TranscriptSection,
-        VideoMetadata,
-    )
+    from youtube_toolkit.schemas import TranscriptDocument, VideoChapter, VideoMetadata
 
     monkeypatch.chdir(tmp_path)
     calls = []
@@ -309,16 +308,16 @@ def test_transcript_cache_preserves_timing_and_separates_caption_options(
             video_id="JpSHyEIZ_bo",
             url="https://www.youtube.com/watch?v=JpSHyEIZ_bo",
             title="Example",
+            description="A demonstration",
+            thumbnail="https://example.com/thumbnail.jpg",
+            chapters=[
+                VideoChapter(title="Opening", start_seconds=0.0, end_seconds=4.0)
+            ],
         ),
         language="en",
         source="manual",
         chunks=[
             TranscriptChunk(start_seconds=1.5, end_seconds=4.0, text="An example.")
-        ],
-        sections=[
-            TranscriptSection(
-                title="Opening", start_seconds=1.5, end_seconds=4.0, text="An example."
-            )
         ],
     )
 
@@ -346,3 +345,69 @@ def test_transcript_cache_preserves_timing_and_separates_caption_options(
     monkeypatch.chdir(other)
     assert fetch_transcript("JpSHyEIZ_bo") == expected
     assert len(calls) == 4
+
+
+@pytest.mark.parametrize("source", ["automatic_captions", "speech-to-text"])
+def test_transcript_cache_upgrades_metadata_without_retranscribing(
+    monkeypatch, tmp_path, source
+) -> None:
+    """Old cache formats acquire chapters without replacing their saved transcript or invoking STT."""
+    from youtube_toolkit.cache import read_cache, write_cache
+    from youtube_toolkit.schemas import VideoChapter
+
+    monkeypatch.chdir(tmp_path)
+    key = {
+        "video_id": "JpSHyEIZ_bo",
+        "languages": list(TranscriptOptions().languages),
+        "source": "any",
+    }
+    metadata = {
+        "video_id": "JpSHyEIZ_bo",
+        "url": "https://www.youtube.com/watch?v=JpSHyEIZ_bo",
+    }
+    if source == "speech-to-text":
+        metadata.update(description="Old description", thumbnail=None)
+    write_cache(
+        "transcripts",
+        key,
+        {
+            "metadata": metadata,
+            "language": "en",
+            "source": source,
+            "chunks": [
+                {"start_seconds": 0, "end_seconds": 0, "text": "Saved transcript"}
+            ],
+        },
+    )
+    calls = []
+
+    class FakeClient:
+        def metadata(self, video_ref: str, /) -> dict:
+            calls.append(video_ref)
+            return {
+                "id": "JpSHyEIZ_bo",
+                "description": "Complete description",
+                "thumbnail": "https://example.com/thumb.jpg",
+                "chapters": [{"title": "Opening", "start_time": 0, "end_time": 10}],
+            }
+
+        def download_transcription_audio(self, video_ref: str, /) -> Path:
+            pytest.fail("A metadata upgrade must not download audio")
+
+    def fail_fetch(*args, **kwargs):
+        pytest.fail("A metadata upgrade must not fetch another transcript")
+
+    monkeypatch.setattr("youtube_toolkit.transcript.fetch_live_transcript", fail_fetch)
+    document = fetch_transcript("JpSHyEIZ_bo", client=FakeClient())
+    assert document.text == "Saved transcript"
+    assert document.source == source
+    assert document.metadata.description == "Complete description"
+    assert document.metadata.thumbnail == "https://example.com/thumb.jpg"
+    assert document.metadata.chapters == [
+        VideoChapter(title="Opening", start_seconds=0.0, end_seconds=10.0)
+    ]
+    assert fetch_transcript("JpSHyEIZ_bo", client=FakeClient()) == document
+    assert calls == ["JpSHyEIZ_bo"]
+    cached = read_cache("transcripts", key)
+    assert cached is not None
+    assert cached["metadata"]["chapters"][0]["title"] == "Opening"

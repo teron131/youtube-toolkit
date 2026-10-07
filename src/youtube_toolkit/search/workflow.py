@@ -10,15 +10,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..identity import parse_channel_ref
-from ..schemas import ChannelIdentity, extract_channel_identity
-from ..youtube.channels import ChannelOptions, fetch_channel_videos
+from ..execution import collect_concurrently
 from ..youtube.client import YtDlpClient
+from .discovery import channel_listings, youtube_candidates
 from .filters import (
     candidate_id,
     dedupe_candidates,
     filter_candidates,
-    interlace_relevance,
     normalized_upload_date,
     popularity,
     rank_by_value,
@@ -26,81 +24,31 @@ from .filters import (
     video_result,
 )
 from .request import (
-    CHANNEL_NAME_SEARCH_LIMIT,
     DATE_FILTER_SOURCE_OVERSAMPLE_FACTOR,
     SOURCE_OVERSAMPLE_FACTOR,
-    ChannelTarget,
     SearchRequest,
     SearchSort,
-    resolve_return_type,
     resolve_sort,
     validate_request,
 )
-from .semantic import (
-    SemanticSearchState,
-    ensure_semantic_index,
-    fetch_semantic_transcripts,
-    prefilter_by_title_semantics,
-    prepare_semantic_index,
-    project_semantic_results,
-    score_semantic_index,
-)
+from .semantic import search_transcripts
+
+MAX_CONCURRENT_METADATA_FETCHES = 8
 
 
 def search(request: SearchRequest) -> list[dict[str, Any]]:
     """Run the public search workflow across configured sources, filters, and result shapes."""
     validate_request(request)
-    limit = request.limit
-    return_type = resolve_return_type(request)
     sort = resolve_sort(request)
-    semantic_state = SemanticSearchState() if request.mode == "semantic" else None
+    cutoff = upload_cutoff(request)
 
-    candidates = dedupe_candidates(
-        collect_sources(
-            request,
-            limit,
-        )
+    candidates = filter_candidates(
+        dedupe_candidates(collect_sources(request, sort=sort, cutoff=cutoff)),
+        request,
+        cutoff=cutoff,
     )
-    if upload_cutoff(request) is not None:
-        candidates = filter_candidates(candidates, request, include_upload_date=False)
-        candidates = fetch_metadata_for_date_filters(candidates, request)
-    candidates = filter_candidates(candidates, request)
-    if semantic_state is not None:
-        candidates = [
-            {
-                **candidate,
-                "upload_date": normalized_upload_date(candidate.get("upload_date")),
-            }
-            for candidate in candidates
-        ]
-        candidates = prefilter_by_title_semantics(
-            request,
-            candidates,
-            semantic_state,
-        )
-        documents, transcript_failures = fetch_semantic_transcripts(candidates)
-        semantic_index = prepare_semantic_index(
-            candidates,
-            documents,
-        )
-        ensure_semantic_index(
-            semantic_index,
-            transcript_failures,
-        )
-        scores = score_semantic_index(
-            request,
-            semantic_index,
-            semantic_state,
-        )
-        return project_semantic_results(
-            request,
-            candidates,
-            semantic_index,
-            scores,
-            semantic_state,
-            transcript_failures,
-            return_type=return_type,
-        )
+    if request.mode == "semantic":
+        return search_transcripts(request, candidates)
     if sort == "recency":
         candidates = rank_by_value(
             candidates,
@@ -112,223 +60,127 @@ def search(request: SearchRequest) -> list[dict[str, Any]]:
             value=popularity,
         )
 
-    return [
-        video_result(candidate, warnings_by_video_id={})
-        for candidate in candidates[:limit]
-    ]
+    return [video_result(candidate) for candidate in candidates[: request.limit]]
 
 
 def collect_sources(
     request: SearchRequest,
-    limit: int,
+    *,
+    sort: SearchSort,
+    cutoff: str | None,
 ) -> list[dict[str, Any]]:
-    """Collect raw candidates from each requested source with oversampling needed by later filters."""
+    """Collect candidates from each requested source, hydrated with any metadata the filters or sort need.
+
+    Sources oversample more under an upload-date filter because it discards candidates after collection.
+    """
+    fields = required_fields(request, sort=sort, cutoff=cutoff)
+    date_fetch_limit = request.limit * DATE_FILTER_SOURCE_OVERSAMPLE_FACTOR
     candidates: list[dict[str, Any]] = []
-    source_fetch_limit = limit * SOURCE_OVERSAMPLE_FACTOR
-    date_fetch_limit = limit * DATE_FILTER_SOURCE_OVERSAMPLE_FACTOR
-    sort = resolve_sort(request)
     for source in request.sources:
         if source == "youtube":
+            entries = youtube_candidates(
+                request,
+                fetch_limit=date_fetch_limit
+                if cutoff is not None
+                else request.limit * SOURCE_OVERSAMPLE_FACTOR,
+                sort=sort,
+            )
             candidates.extend(
-                youtube_candidates(
-                    request,
-                    fetch_limit=date_fetch_limit
-                    if upload_cutoff(request) is not None
-                    else source_fetch_limit,
-                    sort=sort,
-                )
+                hydrate_candidates(entries, request, fields=fields, cutoff=cutoff)
             )
         elif source == "channel":
-            candidates.extend(
-                channel_candidates(
-                    request,
-                    limit=date_fetch_limit
-                    if upload_cutoff(request) is not None
-                    else limit,
+            for listing in channel_listings(
+                request,
+                limit=date_fetch_limit if cutoff is not None else request.limit,
+            ):
+                candidates.extend(
+                    hydrate_candidates(
+                        listing,
+                        request,
+                        fields=fields,
+                        cutoff=cutoff,
+                        newest_first=True,
+                    )
                 )
-            )
         else:
             raise ValueError(f"unsupported search source: {source}")
     return candidates
 
 
-def fetch_metadata_for_date_filters(
+def required_fields(
+    request: SearchRequest,
+    *,
+    sort: SearchSort,
+    cutoff: str | None,
+) -> frozenset[str]:
+    """Name the candidate fields that active filters or native result ordering compare."""
+    fields: set[str] = set()
+    if request.min_views is not None or (
+        request.mode == "native" and sort == "popularity"
+    ):
+        fields.add("view_count")
+    if request.min_duration is not None or request.max_duration is not None:
+        fields.add("duration")
+    if cutoff is not None or (request.mode == "native" and sort == "recency"):
+        fields.add("upload_date")
+    return frozenset(fields)
+
+
+def hydrate_candidates(
     candidates: list[dict[str, Any]],
     request: SearchRequest,
-) -> list[dict[str, Any]]:
-    """Hydrate YouTube candidates that need upload dates before upload-date filtering can run."""
-    if upload_cutoff(request) is None:
-        return candidates
-    client = YtDlpClient()
-    enriched_candidates: list[dict[str, Any]] = []
-    for candidate in candidates:
-        if (
-            candidate.get("source") != "youtube"
-            or candidate.get("upload_date") is not None
-        ):
-            enriched_candidates.append(candidate)
-            continue
-        video_id = candidate_id(candidate)
-        if video_id is None:
-            enriched_candidates.append(candidate)
-            continue
-        try:
-            metadata = client.metadata(video_id)
-        except Exception:
-            enriched_candidates.append(candidate)
-            continue
-        enriched_candidates.append(
-            {
-                **candidate,
-                **metadata,
-                "id": video_id,
-                "upload_date": normalized_upload_date(metadata.get("upload_date")),
-                "source": candidate.get("source"),
-            }
-        )
-    return enriched_candidates
-
-
-def youtube_candidates(
-    request: SearchRequest,
     *,
-    fetch_limit: int,
-    sort: SearchSort,
+    fields: frozenset[str],
+    cutoff: str | None,
+    newest_first: bool = False,
 ) -> list[dict[str, Any]]:
-    """Fetch and normalize YouTube search candidates for the requested ranking policy."""
-    youtube_sort = "popularity" if sort == "popularity" else "relevance"
-    candidate_lists = [
-        youtube_search(
-            query,
-            fetch_limit=fetch_limit,
-            sort=youtube_sort,
-        )
-        for query in (request.query, *request.extra_queries)
-    ]
-    if sort == "relevance":
-        return [
-            {
-                **candidate,
-                "source": "youtube",
-            }
-            for candidate in interlace_relevance(candidate_lists)
-        ]
-    candidates = [
-        candidate for candidates in candidate_lists for candidate in candidates
-    ]
-    return [
-        {
-            **candidate,
-            "source": "youtube",
-        }
-        for candidate in dedupe_candidates(candidates)
-    ]
+    """Fetch full metadata for candidates that pass the known filters but lack a field the filters or sort need.
 
-
-def youtube_search(
-    query: str,
-    *,
-    fetch_limit: int,
-    sort: str,
-) -> list[dict[str, Any]]:
-    """Call the yt-dlp search adapter and keep only object entries."""
-    client = YtDlpClient()
-    payload = client.search(
-        query,
-        fetch=fetch_limit,
-        sort=sort,
+    Flat listings omit fields (channel listings carry no view counts or upload dates), so unknown values pass a lenient prefilter and only its survivors are fetched, concurrently and in order.
+    A newest-first listing under an upload cutoff is fetched in batches that stop at the first video older than the cutoff, because every later video is older too.
+    Failed fetches leave candidates unhydrated for the strict filter to judge.
+    """
+    survivors = filter_candidates(
+        candidates, request, cutoff=cutoff, allow_missing=True
     )
-    return [entry for entry in payload.get("entries") or [] if isinstance(entry, dict)]
-
-
-def channel_candidates(
-    request: SearchRequest,
-    *,
-    limit: int,
-) -> list[dict[str, Any]]:
-    """Fetch candidate videos from explicitly selected channel listings."""
-    candidates: list[dict[str, Any]] = []
-    for selection in request.channels:
-        channel_ref, channel_identity = resolve_channel_listing(selection)
-        metadata = fetch_channel_videos(
-            channel_ref,
-            options=ChannelOptions(last=limit),
+    stop_before = cutoff if newest_first else None
+    batch_size = (
+        MAX_CONCURRENT_METADATA_FETCHES if stop_before is not None else len(survivors)
+    )
+    client = YtDlpClient()
+    hydrated: list[dict[str, Any]] = []
+    for start in range(0, len(survivors), max(batch_size, 1)):
+        batch = survivors[start : start + batch_size]
+        missing = {
+            video_id: video_id
+            for candidate in batch
+            if any(candidate.get(field) is None for field in fields)
+            and (video_id := candidate_id(candidate)) is not None
+        }
+        metadata_by_id, _failures = collect_concurrently(
+            missing,
+            client.metadata,
+            max_workers=MAX_CONCURRENT_METADATA_FETCHES,
         )
-        candidates.extend(
-            channel_entries(
-                metadata,
-                known_channel=channel_identity,
+        for candidate in batch:
+            video_id = candidate_id(candidate)
+            metadata = metadata_by_id.get(video_id) if video_id is not None else None
+            hydrated.append(
+                candidate
+                if video_id is None or metadata is None
+                else {
+                    **candidate,
+                    **metadata,
+                    "id": video_id,
+                    "upload_date": normalized_upload_date(metadata.get("upload_date")),
+                    "source": candidate.get("source"),
+                }
             )
-        )
-    return [
-        {
-            **candidate,
-            "source": "channel",
-        }
-        for candidate in dedupe_candidates(candidates)
-    ]
-
-
-def resolve_channel_listing(selection: ChannelTarget) -> tuple[str, ChannelIdentity]:
-    """Resolve a channel target to a concrete channel ref plus identity for listing fetches."""
-    if selection.channel_name is None:
-        channel_ref = selection.channel_ref()
-        return (
-            channel_ref,
-            parse_channel_ref(channel_ref),
-        )
-    wanted_name = normalized_channel_name(selection.channel_name)
-    for query in (
-        selection.channel_name,
-        f"{selection.channel_name} official YouTube channel",
-    ):
-        for match in youtube_search(
-            query,
-            fetch_limit=CHANNEL_NAME_SEARCH_LIMIT,
-            sort="relevance",
+        if stop_before is not None and any(
+            (upload_date := normalized_upload_date(candidate.get("upload_date")))
+            is not None
+            and upload_date < stop_before
+            for candidate in hydrated[start:]
         ):
-            if not any(
-                normalized_channel_name(value) == wanted_name
-                for value in (match.get("channel"), match.get("uploader"))
-                if isinstance(value, str)
-            ):
-                continue
-            identity = extract_channel_identity(match)
-            channel_ref = identity.youtube_channel_id or identity.channel_handle
-            if channel_ref is not None:
-                return (
-                    channel_ref,
-                    identity,
-                )
-    raise ValueError(
-        f"Could not resolve YouTube channel name: {selection.channel_name}"
-    )
-
-
-def normalized_channel_name(value: str) -> str:
-    """Normalize channel names for fuzzy YouTube-search confirmation."""
-    return " ".join(value.casefold().split())
-
-
-def channel_entries(
-    metadata: dict[str, Any],
-    *,
-    known_channel: ChannelIdentity,
-) -> list[dict[str, Any]]:
-    """Attach known channel identity fields to listing entries before candidate filtering."""
-    channel_identity = extract_channel_identity(
-        metadata,
-        fallback_channel_id=known_channel.youtube_channel_id,
-        fallback_channel_handle=known_channel.channel_handle,
-    )
-    return [
-        {
-            **entry,
-            "channel_id": entry.get("channel_id")
-            or channel_identity.youtube_channel_id,
-            "channel_handle": entry.get("channel_handle")
-            or channel_identity.channel_handle,
-        }
-        for entry in metadata.get("entries") or []
-        if isinstance(entry, dict)
-    ]
+            break
+    return hydrated

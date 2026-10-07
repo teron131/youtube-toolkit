@@ -36,7 +36,9 @@ def test_sample_vision_returns_collages_and_removes_temporary_media(
                 ],
             }
 
-        def download_video_for_vision(self, video_ref: str, output_path: Path, *, max_bytes: int) -> Path:
+        def download_video_for_vision(
+            self, video_ref: str, output_path: Path, *, max_bytes: int
+        ) -> Path:
             assert video_ref == VIDEO_ID
             assert max_bytes == vision.MAX_VIDEO_BYTES
             output_path.write_bytes(b"video")
@@ -62,7 +64,9 @@ def test_sample_vision_returns_collages_and_removes_temporary_media(
 
     monkeypatch.setattr(vision, "YtDlpClient", FakeClient)
     monkeypatch.setattr(vision.shutil, "which", lambda _name: "/usr/local/bin/ffmpeg")
-    monkeypatch.setattr(vision, "select_frames", lambda _path, _heatmap, _ffmpeg: selected)
+    monkeypatch.setattr(
+        vision, "select_frames", lambda _path, _heatmap, _ffmpeg: selected
+    )
     monkeypatch.setattr(vision, "render_timestamped_collages", fake_render)
 
     output_dir = tmp_path / "vision"
@@ -81,7 +85,9 @@ def test_sample_vision_returns_collages_and_removes_temporary_media(
     assert not list(output_dir.glob("*.mp4"))
 
 
-def test_sample_vision_rejects_long_video_before_download(monkeypatch, tmp_path) -> None:
+def test_sample_vision_rejects_long_video_before_download(
+    monkeypatch, tmp_path
+) -> None:
     """Metadata preflight blocks an oversized runtime before media acquisition starts."""
 
     class FakeClient:
@@ -129,30 +135,53 @@ def test_heatmap_bins_reject_invalid_intervals_and_values(raw_heatmap) -> None:
         vision.heatmap_bins(raw_heatmap)
 
 
-def test_selection_falls_back_when_no_candidate_source_produces_a_frame(monkeypatch, tmp_path) -> None:
+def test_selection_falls_back_when_no_candidate_source_produces_a_frame(
+    monkeypatch, tmp_path
+) -> None:
     """A successfully decoded video always contributes at least one visual frame."""
     frame = vision.ScoredFrame(index=0, timestamp_seconds=0.0, score=0.0)
-    monkeypatch.setattr(vision, "scene_scores", lambda _path, _ffmpeg: [frame])
-    monkeypatch.setattr(vision, "blur_scores", lambda _path, _ffmpeg: [2.0])
+    monkeypatch.setattr(vision, "frame_scores", lambda _path, _ffmpeg: ([frame], [2.0]))
     monkeypatch.setattr(
         vision,
         "extract_thumbnails",
-        lambda _path, _count, _ffmpeg: np.zeros((1, vision.THUMBNAIL_HEIGHT, vision.THUMBNAIL_WIDTH), dtype=np.uint8),
+        lambda _path, _count, _ffmpeg: np.zeros(
+            (1, vision.THUMBNAIL_HEIGHT, vision.THUMBNAIL_WIDTH), dtype=np.uint8
+        ),
     )
-    monkeypatch.setattr(vision, "stationary_midpoints", lambda _path, _frames, _ffmpeg: [])
+    monkeypatch.setattr(
+        vision, "stationary_midpoints", lambda _path, _frames, _ffmpeg: []
+    )
 
     assert vision.select_frames(tmp_path / "video.mp4", [], "ffmpeg") == [frame]
 
 
 def test_ffmpeg_metadata_parser_rejects_incomplete_output() -> None:
-    """All one-FPS metric readers reject malformed FFmpeg frame metadata consistently."""
-    with pytest.raises(ValueError, match=r"incomplete lavfi\.blur metadata"):
-        vision.parse_frame_metadata(b"frame:0 pts_time:0\n", "lavfi.blur")
+    """The one-FPS metric reader rejects frames missing any requested metadata line."""
+    keys = ("lavfi.scene_score", "lavfi.blur")
+    with pytest.raises(
+        ValueError, match=r"incomplete lavfi\.scene_score, lavfi\.blur metadata"
+    ):
+        vision.parse_frame_metadata(
+            b"frame:0 pts_time:0\nlavfi.scene_score=0.1\n", keys
+        )
+    with pytest.raises(ValueError, match="invalid"):
+        vision.parse_frame_metadata(
+            b"frame:0 pts_time:0\nlavfi.blur=1\nlavfi.scene_score=0.1\n", keys
+        )
+    assert (
+        vision.parse_frame_metadata(
+            b"frame:0 pts_time:1.5\nlavfi.scene_score=0.1\nlavfi.blur=nan\n", keys
+        )[0][0]
+        == 1.5
+    )
 
 
 def test_frame_limit_evenly_preserves_full_chronological_span() -> None:
     """The sanity cap uses no importance ranking and retains both endpoints."""
-    frames = [vision.ScoredFrame(index=index, timestamp_seconds=float(index), score=0.0) for index in range(150)]
+    frames = [
+        vision.ScoredFrame(index=index, timestamp_seconds=float(index), score=0.0)
+        for index in range(150)
+    ]
 
     selected = vision.limit_frames(frames)
 
@@ -173,11 +202,15 @@ def test_candidate_selection_discards_perceptual_duplicates() -> None:
         [
             np.zeros((vision.THUMBNAIL_HEIGHT, vision.THUMBNAIL_WIDTH), dtype=np.uint8),
             np.zeros((vision.THUMBNAIL_HEIGHT, vision.THUMBNAIL_WIDTH), dtype=np.uint8),
-            np.full((vision.THUMBNAIL_HEIGHT, vision.THUMBNAIL_WIDTH), 255, dtype=np.uint8),
+            np.full(
+                (vision.THUMBNAIL_HEIGHT, vision.THUMBNAIL_WIDTH), 255, dtype=np.uint8
+            ),
         ]
     )
 
-    selected = vision.add_distinct_candidates([], frames, thumbnails, similarity_threshold=0.95)
+    selected = vision.add_distinct_candidates(
+        [], frames, thumbnails, similarity_threshold=0.95
+    )
 
     assert selected == [frames[0], frames[2]]
 
@@ -188,16 +221,32 @@ def test_timestamp_footer_preserves_frame_and_renders_text() -> None:
 
     timestamped = vision.add_timestamp_footer(frame, 754.0)
 
-    assert timestamped.shape == (vision.FRAME_HEIGHT + vision.TIMESTAMP_FOOTER_HEIGHT, vision.FRAME_WIDTH, 3)
+    assert timestamped.shape == (
+        vision.FRAME_HEIGHT + vision.TIMESTAMP_FOOTER_HEIGHT,
+        vision.FRAME_WIDTH,
+        3,
+    )
     assert np.array_equal(timestamped[: vision.FRAME_HEIGHT], frame)
     text_color = np.array((211, 216, 224), dtype=np.uint8)
     assert np.any(np.all(timestamped[vision.FRAME_HEIGHT :] == text_color, axis=2))
 
 
-def test_collage_renderer_uses_six_360p_frames_per_progressive_jpeg(monkeypatch, tmp_path) -> None:
+def test_collage_renderer_uses_six_360p_frames_per_progressive_jpeg(
+    monkeypatch, tmp_path
+) -> None:
     """The artifact contract keeps six chronological 360p cues on each optimized page."""
-    frames = [vision.ScoredFrame(index=index, timestamp_seconds=float(index), score=0.0) for index in range(7)]
-    decoded = np.stack([np.full((vision.FRAME_HEIGHT, vision.FRAME_WIDTH, 3), index * 20, dtype=np.uint8) for index in range(len(frames))])
+    frames = [
+        vision.ScoredFrame(index=index, timestamp_seconds=float(index), score=0.0)
+        for index in range(7)
+    ]
+    decoded = np.stack(
+        [
+            np.full(
+                (vision.FRAME_HEIGHT, vision.FRAME_WIDTH, 3), index * 20, dtype=np.uint8
+            )
+            for index in range(len(frames))
+        ]
+    )
     ffmpeg_arguments: list[list[str]] = []
 
     def fake_run_ffmpeg(_ffmpeg_path, arguments, **_kwargs):
@@ -216,8 +265,13 @@ def test_collage_renderer_uses_six_360p_frames_per_progressive_jpeg(monkeypatch,
     assert len(output_paths) == 2
     video_filter = ffmpeg_arguments[0][ffmpeg_arguments[0].index("-vf") + 1]
     assert "flags=lanczos" in video_filter
-    expected_width = vision.FRAME_WIDTH * vision.COLLAGE_COLUMNS + vision.COLLAGE_PADDING * (vision.COLLAGE_COLUMNS + 1)
-    expected_height = (vision.FRAME_HEIGHT + vision.TIMESTAMP_FOOTER_HEIGHT) * vision.COLLAGE_ROWS + vision.COLLAGE_PADDING * (vision.COLLAGE_ROWS + 1)
+    expected_width = (
+        vision.FRAME_WIDTH * vision.COLLAGE_COLUMNS
+        + vision.COLLAGE_PADDING * (vision.COLLAGE_COLUMNS + 1)
+    )
+    expected_height = (
+        vision.FRAME_HEIGHT + vision.TIMESTAMP_FOOTER_HEIGHT
+    ) * vision.COLLAGE_ROWS + vision.COLLAGE_PADDING * (vision.COLLAGE_ROWS + 1)
     with Image.open(output_paths[0]) as first_page:
         assert first_page.size == (expected_width, expected_height)
         assert first_page.format == "JPEG"
@@ -225,7 +279,9 @@ def test_collage_renderer_uses_six_360p_frames_per_progressive_jpeg(monkeypatch,
         assert JpegImagePlugin.get_sampling(first_page) == 1
 
 
-def test_download_video_for_vision_uses_bounded_720p_video_only_preset(monkeypatch, tmp_path) -> None:
+def test_download_video_for_vision_uses_bounded_720p_video_only_preset(
+    monkeypatch, tmp_path
+) -> None:
     """The yt-dlp adapter owns video-only format, size, fragment, and timeout policy."""
     calls: list[list[str]] = []
 
@@ -238,7 +294,12 @@ def test_download_video_for_vision_uses_bounded_720p_video_only_preset(monkeypat
     monkeypatch.setattr("youtube_toolkit.youtube.client.subprocess.run", fake_run)
     output_path = tmp_path / "video.mp4"
 
-    assert YtDlpClient().download_video_for_vision(VIDEO_ID, output_path, max_bytes=123_456) == output_path
+    assert (
+        YtDlpClient().download_video_for_vision(
+            VIDEO_ID, output_path, max_bytes=123_456
+        )
+        == output_path
+    )
     command = calls[0]
     assert command[command.index("--format") + 1] == VISION_VIDEO_FORMAT_SELECTOR
     assert command[command.index("--max-filesize") + 1] == "123456"
@@ -249,7 +310,9 @@ def test_download_video_for_vision_uses_bounded_720p_video_only_preset(monkeypat
     assert "--merge-output-format" not in command
 
 
-def test_vision_subprocess_timeouts_become_user_facing_runtime_errors(monkeypatch, tmp_path) -> None:
+def test_vision_subprocess_timeouts_become_user_facing_runtime_errors(
+    monkeypatch, tmp_path
+) -> None:
     """Both external process boundaries translate timeout exceptions for CLI handling."""
 
     def time_out(*_args, **_kwargs):
@@ -257,22 +320,30 @@ def test_vision_subprocess_timeouts_become_user_facing_runtime_errors(monkeypatc
 
     monkeypatch.setattr("youtube_toolkit.youtube.client.subprocess.run", time_out)
     with pytest.raises(RuntimeError, match="video download for vision timed out"):
-        YtDlpClient().download_video_for_vision(VIDEO_ID, tmp_path / "video.mp4", max_bytes=123)
+        YtDlpClient().download_video_for_vision(
+            VIDEO_ID, tmp_path / "video.mp4", max_bytes=123
+        )
 
     monkeypatch.setattr(vision.subprocess, "run", time_out)
     with pytest.raises(RuntimeError, match="FFmpeg vision processing timed out"):
         vision.run_ffmpeg("ffmpeg", ["-version"])
 
 
-def test_vision_subprocess_start_failures_become_user_facing_runtime_errors(monkeypatch, tmp_path) -> None:
+def test_vision_subprocess_start_failures_become_user_facing_runtime_errors(
+    monkeypatch, tmp_path
+) -> None:
     """Missing or unlaunchable executables retain boundary-specific error context."""
 
     def fail_start(*_args, **_kwargs):
         raise OSError("cannot execute")
 
     monkeypatch.setattr("youtube_toolkit.youtube.client.subprocess.run", fail_start)
-    with pytest.raises(RuntimeError, match="Could not start yt-dlp video download for vision"):
-        YtDlpClient().download_video_for_vision(VIDEO_ID, tmp_path / "video.mp4", max_bytes=123)
+    with pytest.raises(
+        RuntimeError, match="Could not start yt-dlp video download for vision"
+    ):
+        YtDlpClient().download_video_for_vision(
+            VIDEO_ID, tmp_path / "video.mp4", max_bytes=123
+        )
 
     monkeypatch.setattr(vision.subprocess, "run", fail_start)
     with pytest.raises(RuntimeError, match="Could not start FFmpeg vision processing"):
@@ -288,7 +359,14 @@ def test_video_vision_cli_routes_to_public_extraction(monkeypatch) -> None:
         "timestamps_seconds": [8.0],
         "collage_paths": ["/example/page1.jpg"],
     }
-    monkeypatch.setattr(vision, "sample_vision", lambda video_ref: expected if video_ref == VIDEO_ID else {})
+    monkeypatch.setattr(
+        vision,
+        "sample_vision",
+        lambda video_ref: expected if video_ref == VIDEO_ID else {},
+    )
 
     assert args.handler is commands.VideoCommands.vision
-    assert commands.VideoCommands.vision(argparse.Namespace(video_ref=VIDEO_ID)) == expected
+    assert (
+        commands.VideoCommands.vision(argparse.Namespace(video_ref=VIDEO_ID))
+        == expected
+    )

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -11,25 +10,19 @@ from typing import Any
 from urllib.parse import urlencode
 from uuid import uuid4
 
-from ..cache import REQUEST_MAX_AGE_SECONDS, cache_root, read_cache, write_cache
-from ..identity import (
-    ALLOWED_VIDEO_HOSTS,
-    VideoRef,
-    normalize_youtube_url,
-    require_video_id,
-    validate_url,
-)
+from ..cache import cache_root, read_cache, write_cache
+from ..identity import VideoRef, normalize_youtube_url, require_video_id
 
 SEARCH_SORT_PARAMS = {
     "relevance": "EgIQAQ==",  # boolean "true"
     "popularity": "CAMSAhAB",  # sort search results by view count in descending order
 }
 STT_AUDIO_FORMAT_SELECTOR = "bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio[ext=aac]"
-# Budget one quarter of the host for each job while capping low-resolution codec parallelism.
-VISION_FFMPEG_THREADS = max(1, min(4, (os.process_cpu_count() or 1) // 4))
 VISION_VIDEO_FORMAT_SELECTOR = "bestvideo[height<=720][ext=mp4]/bestvideo[height<=720]"
 VISION_VIDEO_DOWNLOAD_TIMEOUT_SECONDS = 10 * 60
 YTDLP_REQUEST_TIMEOUT_SECONDS = 60
+REQUEST_MAX_AGE_SECONDS = 15 * 60
+AUDIO_DOWNLOAD_TIMEOUT_SECONDS = 30
 
 
 class YtDlpClient:
@@ -41,8 +34,6 @@ class YtDlpClient:
 
     def metadata(self, video_ref: VideoRef) -> dict[str, Any]:
         """Fetch full yt-dlp metadata for one validated YouTube video reference."""
-        url = normalize_youtube_url(video_ref)
-        validate_url(url, allowed_hosts=ALLOWED_VIDEO_HOSTS)
         return self._json(
             [
                 *self.command_prefix(),
@@ -50,7 +41,7 @@ class YtDlpClient:
                 "--skip-download",
                 "--sponsorblock-mark",
                 "default",
-                url,
+                normalize_youtube_url(video_ref),
             ],
             error_message="yt-dlp metadata request failed",
         )
@@ -112,10 +103,8 @@ class YtDlpClient:
         )
 
     def download_transcription_audio(self, video_ref: VideoRef) -> Path:
-        """Download one temporary audio file for STT and return its created path."""
+        """Bound STT audio acquisition and clean partial files; the caller owns the returned complete file."""
         video_id = require_video_id(video_ref)
-        url = normalize_youtube_url(video_ref)
-        validate_url(url, allowed_hosts=ALLOWED_VIDEO_HOSTS)
         output_stem = cache_root() / "audio" / f"{video_id}-{uuid4().hex}"
         output_stem.parent.mkdir(parents=True, exist_ok=True)
         command = [
@@ -127,28 +116,31 @@ class YtDlpClient:
             STT_AUDIO_FORMAT_SELECTOR,
             "--output",
             str(output_stem.with_suffix(".%(ext)s")),
-            url,
+            normalize_youtube_url(video_id),
         ]
-        result = subprocess.run(  # noqa: S603 - command is assembled from a fixed yt-dlp executable prefix and argument list.
-            command,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            detail = result.stderr.strip() or "yt-dlp audio download failed"
-            raise RuntimeError(detail)
-        candidates = [
-            path
-            for path in output_stem.parent.glob(f"{output_stem.name}.*")
-            if path.is_file()
-        ]
-        if candidates:
-            return max(
-                candidates,
-                key=lambda path: path.stat().st_mtime,
+        downloaded_path: Path | None = None
+        try:
+            _run(
+                command,
+                action="audio download",
+                timeout_seconds=AUDIO_DOWNLOAD_TIMEOUT_SECONDS,
             )
-        raise RuntimeError(f"yt-dlp completed but did not create {output_stem}.*")
+            candidates = [
+                path
+                for path in output_stem.parent.glob(f"{output_stem.name}.*")
+                if path.is_file()
+            ]
+            if not candidates:
+                raise RuntimeError(
+                    f"yt-dlp completed but did not create {output_stem}.*"
+                )
+            downloaded_path = max(candidates, key=lambda path: path.stat().st_mtime)
+            return downloaded_path
+        finally:
+            # The caller owns the returned audio; this invocation owns all partial files.
+            for path in output_stem.parent.glob(f"{output_stem.name}.*"):
+                if path.is_file() and path != downloaded_path:
+                    path.unlink(missing_ok=True)
 
     def download_video_for_vision(
         self,
@@ -158,42 +150,26 @@ class YtDlpClient:
         max_bytes: int,
     ) -> Path:
         """Download one bounded temporary video with the vision format preset."""
-        url = normalize_youtube_url(video_ref)
-        validate_url(url, allowed_hosts=ALLOWED_VIDEO_HOSTS)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            result = subprocess.run(  # noqa: S603 - command is assembled from a fixed yt-dlp executable prefix and argument list.
-                [
-                    *self.command_prefix(),
-                    "--no-playlist",
-                    "--quiet",
-                    "--no-warnings",
-                    "--concurrent-fragments",
-                    "1",
-                    "--max-filesize",
-                    str(max_bytes),
-                    "--format",
-                    VISION_VIDEO_FORMAT_SELECTOR,
-                    "--output",
-                    str(output_path),
-                    url,
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=VISION_VIDEO_DOWNLOAD_TIMEOUT_SECONDS,
-            )
-        except subprocess.TimeoutExpired as error:
-            raise RuntimeError(
-                f"yt-dlp video download for vision timed out after {VISION_VIDEO_DOWNLOAD_TIMEOUT_SECONDS} seconds"
-            ) from error
-        except OSError as error:
-            raise RuntimeError(
-                f"Could not start yt-dlp video download for vision: {error}"
-            ) from error
-        if result.returncode != 0:
-            detail = result.stderr.strip() or "yt-dlp video download for vision failed"
-            raise RuntimeError(detail)
+        _run(
+            [
+                *self.command_prefix(),
+                "--no-playlist",
+                "--quiet",
+                "--no-warnings",
+                "--concurrent-fragments",
+                "1",
+                "--max-filesize",
+                str(max_bytes),
+                "--format",
+                VISION_VIDEO_FORMAT_SELECTOR,
+                "--output",
+                str(output_path),
+                normalize_youtube_url(video_ref),
+            ],
+            action="video download for vision",
+            timeout_seconds=VISION_VIDEO_DOWNLOAD_TIMEOUT_SECONDS,
+        )
         if not output_path.exists():
             raise RuntimeError(f"yt-dlp completed but did not create {output_path}")
         if output_path.stat().st_size > max_bytes:
@@ -214,23 +190,12 @@ class YtDlpClient:
         cached = read_cache("requests", key, max_age=REQUEST_MAX_AGE_SECONDS)
         if cached is not None:
             return cached
-        try:
-            result = subprocess.run(  # noqa: S603 - command is assembled from a fixed yt-dlp executable prefix and argument list.
-                command,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=YTDLP_REQUEST_TIMEOUT_SECONDS,
-            )
-        except subprocess.TimeoutExpired as error:
-            raise RuntimeError(
-                f"yt-dlp request timed out after {YTDLP_REQUEST_TIMEOUT_SECONDS} seconds"
-            ) from error
-        except OSError as error:
-            raise RuntimeError(f"Could not start yt-dlp request: {error}") from error
-        if result.returncode != 0:
-            detail = result.stderr.strip() or error_message
-            raise RuntimeError(detail)
+        result = _run(
+            command,
+            action="request",
+            timeout_seconds=YTDLP_REQUEST_TIMEOUT_SECONDS,
+            failure_message=error_message,
+        )
         try:
             data = json.loads(result.stdout)
         except json.JSONDecodeError as exc:
@@ -239,3 +204,32 @@ class YtDlpClient:
             raise RuntimeError("yt-dlp returned a non-object JSON payload")
         write_cache("requests", key, data)
         return data
+
+
+def _run(
+    command: list[str],
+    *,
+    action: str,
+    timeout_seconds: int,
+    failure_message: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run one bounded yt-dlp process, translating timeouts, launch errors, and exit codes into RuntimeError."""
+    try:
+        result = subprocess.run(  # noqa: S603 - fixed yt-dlp executable prefix and argument list.
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError(
+            f"yt-dlp {action} timed out after {timeout_seconds} seconds"
+        ) from error
+    except OSError as error:
+        raise RuntimeError(f"Could not start yt-dlp {action}: {error}") from error
+    if result.returncode != 0:
+        raise RuntimeError(
+            result.stderr.strip() or failure_message or f"yt-dlp {action} failed"
+        )
+    return result

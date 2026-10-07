@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import json
-import time
 from typing import Any
 import urllib.error
 import urllib.request
 
+from .config import EmbeddingConfig, embedding_config_from_env
 from .execution import retry_transient
-from .model_config import EmbeddingConfig, embedding_config_from_env
 
 EMBEDDING_REQUEST_ATTEMPTS = 3
 EMBEDDING_RETRY_BACKOFF_SECONDS = 0.25
@@ -35,7 +34,7 @@ def embed_text(
         "dimensions": resolved_config.output_dimensionality,
     }
     response = post_embedding_json(
-        resolved_config.endpoint("embeddings"),
+        f"{resolved_config.base_url}/embeddings",
         resolved_config,
         payload,
     )
@@ -57,9 +56,7 @@ def post_embedding_json(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     """POST one embedding request with bounded retries for transient provider failures."""
-    if not url.startswith(f"{config.base_url}/"):
-        raise EmbeddingError("Unsupported embedding URL")
-    request = urllib.request.Request(  # noqa: S310
+    request = urllib.request.Request(  # noqa: S310 - URL is built from the validated http(s) base URL.
         url,
         data=json.dumps(payload).encode("utf-8"),
         headers={
@@ -84,7 +81,6 @@ def post_embedding_json(
             attempts=EMBEDDING_REQUEST_ATTEMPTS,
             backoff_seconds=EMBEDDING_RETRY_BACKOFF_SECONDS,
             retryable_errors=(OSError, json.JSONDecodeError),
-            sleep=time.sleep,
         )
     except urllib.error.HTTPError as error:
         message = compact_embedding_error(

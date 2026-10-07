@@ -9,8 +9,6 @@ import time
 from typing import Any
 from uuid import uuid4
 
-REQUEST_MAX_AGE_SECONDS = 15 * 60
-
 
 def cache_root() -> Path:
     """Resolve the task-local cache without creating directories or consulting global settings."""

@@ -5,11 +5,10 @@ from datetime import date
 import pytest
 
 from youtube_toolkit.identity import (
-    YouTubeRefs,
+    ChannelIdentity,
     normalize_channel_url,
     parse_channel_ref,
 )
-from youtube_toolkit.schemas import ChannelIdentity
 from youtube_toolkit.youtube.channels import (
     ChannelOptions,
     fetch_channel_videos,
@@ -72,24 +71,6 @@ def test_parse_channel_ref_normalizes_public_channel_refs() -> None:
         youtube_channel_id="UC123",
         channel_handle=None,
     )
-
-
-def test_channel_refs_normalize_refs_and_parse_identities() -> None:
-    """Normalize one-or-many channel refs and parse URL, handle, or ID identity."""
-    refs = YouTubeRefs.parse(["@OpenAI", "https://www.youtube.com/channel/UC123"])
-
-    assert list(YouTubeRefs.parse("@OpenAI")) == ["@OpenAI"]
-    assert list(YouTubeRefs.parse(None)) == []
-    assert refs.channel_identities() == [
-        ChannelIdentity(
-            youtube_channel_id=None,
-            channel_handle="@OpenAI",
-        ),
-        ChannelIdentity(
-            youtube_channel_id="UC123",
-            channel_handle=None,
-        ),
-    ]
 
 
 def test_unlimited_days_window_uses_bounded_first_fetch(monkeypatch) -> None:

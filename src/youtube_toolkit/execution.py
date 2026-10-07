@@ -16,7 +16,6 @@ def retry_transient[Result](
     attempts: int,
     backoff_seconds: float,
     retryable_errors: tuple[type[Exception], ...],
-    sleep: Callable[[float], None] = time.sleep,
 ) -> Result:
     """Retry one idempotent operation while preserving its final underlying exception."""
     if attempts <= 0:
@@ -30,7 +29,7 @@ def retry_transient[Result](
         except Exception as error:
             if attempt == attempts or not _is_retryable_error(error, retryable_errors):
                 raise
-            sleep(_retry_delay_seconds(error, attempt, backoff_seconds))
+            time.sleep(_retry_delay_seconds(error, attempt, backoff_seconds))
     raise AssertionError("retry loop exhausted without returning or raising")
 
 
@@ -51,7 +50,9 @@ def _retry_delay_seconds(
 ) -> float:
     """Honor numeric Retry-After responses before bounded exponential backoff."""
     if isinstance(error, urllib.error.HTTPError):
-        retry_after = error.headers.get("Retry-After") if error.headers is not None else None
+        retry_after = (
+            error.headers.get("Retry-After") if error.headers is not None else None
+        )
         if retry_after is not None:
             try:
                 return max(0.0, float(retry_after))

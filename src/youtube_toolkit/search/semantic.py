@@ -1,35 +1,32 @@
-"""Semantic title, transcript, and chunk search stages."""
+"""Semantic search ranks filtered candidates by title, then by transcript chunks, entirely within one invocation."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-import hashlib
+from dataclasses import dataclass
+import math
 from typing import Any
 
+from ..config import embedding_concurrency
 from ..embeddings import embed_text
 from ..execution import collect_concurrently
-from ..model_config import embedding_concurrency
 from ..schemas import TranscriptDocument
-from ..semantic import cosine_similarity, split_transcript_chunks
 from ..transcript import fetch_transcript
 from .filters import (
     candidate_id,
-    candidate_ids,
-    chunk_result,
-    rank_by_value,
+    candidate_metadata,
+    normalized_upload_date,
     video_result,
 )
-from .request import SearchRequest, SearchReturnType
+from .request import SearchRequest, resolve_return_type
 
 MAX_CONCURRENT_TRANSCRIPT_FETCHES = 16
-
-
-@dataclass(slots=True)
-class SemanticSearchState:
-    """Carry the shared query vector and partial-failure warnings across semantic stages."""
-
-    query_embedding: list[float] | None = None
-    warnings: list[str] = field(default_factory=list)
+TRANSCRIPT_CHUNK_CHARS = 1200
+TRANSCRIPT_CHUNK_OVERLAP_CHARS = 200
+TITLE_PREFILTER_FACTOR = 3
+TITLE_PREFILTER_MIN = 15
+TITLE_PREFILTER_MAX = 60
+TITLE_MIN_SIMILARITY = 0.3
+RESULT_MIN_SIMILARITY = 0.5
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,87 +47,107 @@ class ScoredChunk:
     similarity: float
 
 
-@dataclass(frozen=True, slots=True)
-class SemanticIndex:
-    """Keep prepared transcript chunks, deduplicated vectors, and embedding failures."""
+def search_transcripts(
+    request: SearchRequest, candidates: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Shortlist by title, fetch cached transcripts, embed chunks, and project chunk or video results.
 
-    chunks: list[PreparedChunk]
-    vectors: dict[str, list[float]]
-    failures: dict[str, str]
+    Partial title, transcript, or chunk-embedding failures become per-result warnings; the search fails only when no transcript chunk could be embedded.
+    """
+    candidates = [
+        {
+            **candidate,
+            "upload_date": normalized_upload_date(candidate.get("upload_date")),
+        }
+        for candidate in candidates
+    ]
+    if not candidates:
+        raise unprepared_embeddings_error([])
+    query_embedding = embed_text(request.query)
+    candidates, title_failures = shortlist_by_title(
+        request, candidates, query_embedding
+    )
+    documents, transcript_failures = fetch_semantic_transcripts(candidates)
+    chunks = prepare_transcript_chunks(candidates, documents)
+    vectors, chunk_failures = embed_texts_concurrently(
+        {chunk.text: chunk.text for chunk in chunks}
+    )
+    if not vectors:
+        raise unprepared_embeddings_error(
+            [*transcript_failures.values(), *chunk_failures.values()]
+        )
+    scored = score_chunks(chunks, vectors, query_embedding)
+
+    shared_warnings = [
+        *compact_stage_failures("title embedding", title_failures),
+        *compact_stage_failures("transcript preparation", transcript_failures),
+    ]
+    chunk_warnings = chunk_failure_warnings(chunks, chunk_failures)
+
+    def warnings_for(video_id: str) -> list[str]:
+        return [*shared_warnings, *chunk_warnings.get(video_id, [])]
+
+    if resolve_return_type(request) == "chunk":
+        return [
+            chunk_result(chunk, warnings=warnings_for(chunk.prepared.video_id))
+            for chunk in scored[: request.limit]
+        ]
+
+    video_scores: dict[str, float] = {}
+    for chunk in scored:
+        video_scores.setdefault(chunk.prepared.video_id, chunk.similarity)
+    ranked_candidates = sorted(
+        (
+            {**candidate, "score": video_scores[video_id]}
+            for candidate in candidates
+            if (video_id := candidate_id(candidate)) in video_scores
+        ),
+        key=lambda candidate: candidate["score"],
+        reverse=True,
+    )
+    return [
+        video_result(candidate, warnings=warnings_for(str(candidate_id(candidate))))
+        for candidate in ranked_candidates[: request.limit]
+    ]
 
 
-@dataclass(frozen=True, slots=True)
-class SemanticScores:
-    """Carry ranked chunks and per-video scores into result projection."""
-
-    chunks: list[ScoredChunk]
-    videos: dict[str, float]
-
-
-def query_vector(
-    state: SemanticSearchState,
-    query: str,
-) -> list[float]:
-    """Embed the query once for both title and transcript scoring."""
-    if state.query_embedding is None:
-        state.query_embedding = embed_text(query)
-    return state.query_embedding
-
-
-def prefilter_titles_in_memory(
+def shortlist_by_title(
     request: SearchRequest,
     candidates: list[dict[str, Any]],
     query_embedding: list[float],
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
-    """Shortlist fresh candidates by directly scoring their title vectors in memory."""
-    title_texts = {
+    """Score titles before fetching transcripts to bound transcript and chunk-embedding work.
+
+    Candidates below the title threshold are dropped unless none pass; untitled or unembedded candidates are dropped only when some title scored.
+    """
+    titles = {
         video_id: title.strip()
         for candidate in candidates
         if (video_id := candidate_id(candidate)) is not None
         and isinstance((title := candidate.get("title")), str)
         and title.strip()
     }
-    vectors, failures = embed_texts_concurrently(title_texts)
+    vectors, failures = embed_texts_concurrently(titles)
     if not vectors:
         return candidates, failures
-    scores = {
-        video_id: cosine_similarity(query_embedding, vector)
-        for video_id, vector in vectors.items()
-    }
-    return rank_title_candidates(request, candidates, scores), failures
-
-
-def rank_title_candidates(
-    request: SearchRequest,
-    candidates: list[dict[str, Any]],
-    scores: dict[str, float],
-) -> list[dict[str, Any]]:
-    """Apply title-score ranking, soft thresholding, and prefilter limits consistently."""
-    scored_candidates = [
-        {
-            **candidate,
-            "title_score": scores[video_id],
-        }
-        for candidate in candidates
-        if (video_id := candidate_id(candidate)) is not None and video_id in scores
-    ]
-    ranked_candidates = rank_by_value(
-        scored_candidates,
-        value=lambda candidate: candidate.get("title_score"),
+    scored = sorted(
+        (
+            (cosine_similarity(query_embedding, vectors[video_id]), candidate)
+            for candidate in candidates
+            if (video_id := candidate_id(candidate)) in vectors
+        ),
+        key=lambda item: item[0],
+        reverse=True,
     )
-    threshold_candidates = [
-        candidate
-        for candidate in ranked_candidates
-        if request.title_min_similarity is None
-        or candidate["title_score"] >= request.title_min_similarity
+    relevant = [
+        candidate for score, candidate in scored if score >= TITLE_MIN_SIMILARITY
     ]
-    if threshold_candidates:
-        ranked_candidates = threshold_candidates
-    limit = title_prefilter_limit(request, len(candidates))
-    return [
-        {key: value for key, value in candidate.items() if key != "title_score"}
-        for candidate in ranked_candidates[:limit]
-    ]
+    limit = min(
+        len(candidates),
+        TITLE_PREFILTER_MAX,
+        max(request.limit * TITLE_PREFILTER_FACTOR, TITLE_PREFILTER_MIN),
+    )
+    return (relevant or [candidate for _score, candidate in scored])[:limit], failures
 
 
 def fetch_semantic_transcripts(
@@ -152,16 +169,11 @@ def prepare_transcript_chunks(
     candidates: list[dict[str, Any]],
     documents: dict[str, TranscriptDocument],
 ) -> list[PreparedChunk]:
-    """Split fetched transcript documents while keeping their source candidate metadata attached."""
-    candidates_by_id = {
-        video_id: candidate
-        for candidate in candidates
-        if (video_id := candidate_id(candidate)) is not None
-    }
+    """Split fetched transcripts in candidate order while keeping each source candidate attached."""
     prepared: list[PreparedChunk] = []
-    for video_id, document in documents.items():
-        candidate = candidates_by_id.get(video_id)
-        if candidate is None:
+    for candidate in candidates:
+        video_id = candidate_id(candidate)
+        if video_id is None or video_id not in documents:
             continue
         prepared.extend(
             PreparedChunk(
@@ -170,17 +182,11 @@ def prepare_transcript_chunks(
                 text=text,
                 candidate=candidate,
             )
-            for chunk_index, text in enumerate(split_transcript_chunks(document.text))
+            for chunk_index, text in enumerate(
+                split_transcript_chunks(documents[video_id].text)
+            )
         )
     return prepared
-
-
-def embed_chunks_in_memory(
-    chunks: list[PreparedChunk],
-) -> tuple[dict[str, list[float]], dict[str, str]]:
-    """Embed unique transcript chunks once per command and retain content-keyed failures."""
-    texts = {chunk_content_key(chunk.text): chunk.text for chunk in chunks}
-    return embed_texts_concurrently(texts)
 
 
 def embed_texts_concurrently(
@@ -204,53 +210,55 @@ def embed_texts_concurrently(
     return vectors, {key: str(error) for key, error in failures.items()}
 
 
-def score_chunks_in_memory(
-    request: SearchRequest,
+def score_chunks(
     chunks: list[PreparedChunk],
     vectors: dict[str, list[float]],
     query_embedding: list[float],
 ) -> list[ScoredChunk]:
-    """Score available in-memory chunks and apply the public similarity threshold."""
+    """Rank embedded chunks by query similarity after applying the result threshold."""
     scored: list[ScoredChunk] = []
     for chunk in chunks:
-        vector = vectors.get(chunk_content_key(chunk.text))
+        vector = vectors.get(chunk.text)
         if vector is None:
             continue
         similarity = cosine_similarity(query_embedding, vector)
-        if (
-            request.result_min_similarity is not None
-            and similarity < request.result_min_similarity
-        ):
+        if similarity < RESULT_MIN_SIMILARITY:
             continue
-        scored.append(
-            ScoredChunk(
-                prepared=chunk,
-                similarity=similarity,
-            )
-        )
-    return sorted(
-        scored,
-        key=lambda chunk: chunk.similarity,
-        reverse=True,
-    )
+        scored.append(ScoredChunk(prepared=chunk, similarity=similarity))
+    return sorted(scored, key=lambda chunk: chunk.similarity, reverse=True)
+
+
+def chunk_result(chunk: ScoredChunk, *, warnings: list[str]) -> dict[str, Any]:
+    """Chunk results carry the passage, its score, and the source video's public metadata."""
+    result = {
+        "type": "chunk",
+        "video_id": chunk.prepared.video_id,
+        "chunk_index": chunk.prepared.chunk_index,
+        "text": chunk.prepared.text,
+        "score": chunk.similarity,
+        "video": candidate_metadata(chunk.prepared.candidate),
+    }
+    if warnings:
+        result["warnings"] = warnings
+    return result
 
 
 def chunk_failure_warnings(
     chunks: list[PreparedChunk],
     failures: dict[str, str],
 ) -> dict[str, list[str]]:
-    """Project content-keyed embedding failures into compact per-video warnings."""
-    warnings_by_video_id: dict[str, list[str]] = {}
+    """Project text-keyed embedding failures into compact per-video warnings."""
     failed_by_video: dict[str, list[str]] = {}
     for chunk in chunks:
-        error = failures.get(chunk_content_key(chunk.text))
+        error = failures.get(chunk.text)
         if error is not None:
             failed_by_video.setdefault(chunk.video_id, []).append(error)
-    for video_id, failed in failed_by_video.items():
-        warnings_by_video_id[video_id] = [
+    return {
+        video_id: [
             f"{video_id}: {len(failed)} transcript chunk embedding(s) failed: {failed[0]}"
         ]
-    return warnings_by_video_id
+        for video_id, failed in failed_by_video.items()
+    }
 
 
 def compact_stage_failures(
@@ -264,145 +272,48 @@ def compact_stage_failures(
     return [f"{stage} skipped {len(failures)} item(s): {details}"]
 
 
-def chunk_content_key(text: str) -> str:
-    """Deduplicate identical chunk embedding work within one semantic command."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def prefilter_by_title_semantics(
-    request: SearchRequest,
-    candidates: list[dict[str, Any]],
-    state: SemanticSearchState,
-) -> list[dict[str, Any]]:
-    """Score titles before fetching transcripts to bound semantic search work."""
-    if not candidates:
-        return candidates
-    shortlisted, failures = prefilter_titles_in_memory(
-        request, candidates, query_vector(state, request.query)
-    )
-    state.warnings.extend(compact_stage_failures("title embedding", failures))
-    return shortlisted
-
-
-def title_prefilter_limit(
-    request: SearchRequest,
-    candidate_count: int,
-) -> int:
-    """Resolve the capped title-prefilter size from request policy and candidate count."""
-    requested_limit = max(
-        request.limit * request.title_prefilter_factor,
-        request.title_prefilter_min,
-    )
-    return min(
-        candidate_count,
-        request.title_prefilter_max,
-        requested_limit,
-    )
-
-
-def prepare_semantic_index(
-    candidates: list[dict[str, Any]],
-    documents: dict[str, TranscriptDocument],
-) -> SemanticIndex:
-    """Embed unique transcript chunks for this search invocation only."""
-    chunks = prepare_transcript_chunks(candidates, documents)
-    vectors, failures = embed_chunks_in_memory(chunks)
-    return SemanticIndex(chunks=chunks, vectors=vectors, failures=failures)
-
-
-def ensure_semantic_index(
-    semantic_index: SemanticIndex,
-    transcript_failures: dict[str, str],
-) -> None:
-    """Require at least one usable vector after transcript preparation."""
-    if semantic_index.vectors:
-        return
-    failures = [*transcript_failures.values(), *semantic_index.failures.values()]
+def unprepared_embeddings_error(failures: list[str]) -> RuntimeError:
     detail = "; ".join(failures[:3]) or "no transcript chunks were available"
-    raise RuntimeError(
+    return RuntimeError(
         f"semantic search could not prepare transcript embeddings: {detail}"
     )
 
 
-def score_semantic_index(
-    request: SearchRequest,
-    semantic_index: SemanticIndex,
-    state: SemanticSearchState,
-) -> SemanticScores:
-    """Rank chunks by similarity and use each video's best chunk as its score."""
-    chunks = score_chunks_in_memory(
-        request,
-        semantic_index.chunks,
-        semantic_index.vectors,
-        query_vector(state, request.query),
-    )
-    videos: dict[str, float] = {}
-    for scored in chunks:
-        video_id = scored.prepared.video_id
-        videos[video_id] = max(scored.similarity, videos.get(video_id, float("-inf")))
-    return SemanticScores(chunks=chunks, videos=videos)
-
-
-def project_semantic_results(
-    request: SearchRequest,
-    candidates: list[dict[str, Any]],
-    semantic_index: SemanticIndex,
-    scores: SemanticScores,
-    state: SemanticSearchState,
-    transcript_failures: dict[str, str],
+def split_transcript_chunks(
+    transcript: str,
     *,
-    return_type: SearchReturnType,
-) -> list[dict[str, Any]]:
-    """Project semantic scores into the requested public result shape."""
-    pipeline_warnings = [*state.warnings]
-    pipeline_warnings.extend(
-        compact_stage_failures("transcript preparation", transcript_failures)
-    )
-    warnings_by_video_id: dict[str, list[str]] = {}
-    embedding_warnings = chunk_failure_warnings(
-        semantic_index.chunks,
-        semantic_index.failures,
-    )
-    for video_id in candidate_ids(candidates):
-        warnings = warnings_by_video_id.setdefault(video_id, [])
-        for warning in pipeline_warnings:
-            if warning not in warnings:
-                warnings.append(warning)
-        for warning in embedding_warnings.get(video_id, []):
-            if warning not in warnings:
-                warnings.append(warning)
-
-    if return_type == "chunk":
-        return [
-            chunk_result(
-                {
-                    "video_id": scored.prepared.video_id,
-                    "chunk_index": scored.prepared.chunk_index,
-                    "text": scored.prepared.text,
-                    "similarity": scored.similarity,
-                },
-                scored.prepared.candidate,
-                warnings=warnings_by_video_id.get(scored.prepared.video_id),
-            )
-            for scored in scores.chunks[: request.limit]
-        ]
-
-    ranked_candidates = rank_by_value(
-        [
-            {
-                **candidate,
-                "score": scores.videos[video_id],
-            }
-            for candidate in candidates
-            if (video_id := candidate_id(candidate)) is not None
-            and video_id in scores.videos
-        ],
-        value=lambda candidate: candidate.get("score"),
-    )
-    return [
-        video_result(
-            candidate,
-            warnings_by_video_id=warnings_by_video_id,
+    chunk_chars: int = TRANSCRIPT_CHUNK_CHARS,
+    overlap_chars: int = TRANSCRIPT_CHUNK_OVERLAP_CHARS,
+) -> list[str]:
+    """Split normalized transcript text into overlapping chunks for embedding search."""
+    clean_transcript = " ".join(transcript.split())
+    if not clean_transcript:
+        return []
+    if chunk_chars <= 0:
+        raise ValueError("transcript chunk size must be greater than 0")
+    if overlap_chars < 0 or overlap_chars >= chunk_chars:
+        raise ValueError(
+            "transcript chunk overlap must be non-negative and smaller than chunk size"
         )
-        for candidate in ranked_candidates[: request.limit]
-    ]
+
+    chunks: list[str] = []
+    start = 0
+    while start < len(clean_transcript):
+        end = min(len(clean_transcript), start + chunk_chars)
+        chunk = clean_transcript[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        if end == len(clean_transcript):
+            break
+        start = end - overlap_chars
+    return chunks
+
+
+def cosine_similarity(left: list[float], right: list[float]) -> float:
+    """Compute cosine similarity with C-level dot products, scoring mismatched or zero vectors as zero."""
+    if len(left) != len(right):
+        return 0.0
+    norms = math.sqrt(math.sumprod(left, left) * math.sumprod(right, right))
+    if not norms:
+        return 0.0
+    return math.sumprod(left, right) / norms

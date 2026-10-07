@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 import urllib.request
 
-from .transcription import encode_multipart_form, run_json_request
+from .transport import encode_multipart_form, run_json_request
 
 XAI_STT_URL = "https://api.x.ai/v1/stt"
 
