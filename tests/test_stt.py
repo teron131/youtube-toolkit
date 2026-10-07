@@ -12,7 +12,7 @@ from youtube_toolkit.stt import (
     transcribe_audio,
     transcribe_audio_details,
 )
-from youtube_toolkit.stt.transcription import encode_multipart_form, run_json_request
+from youtube_toolkit.stt.transport import encode_multipart_form, run_json_request
 
 
 def test_xai_stt_response_normalizes_to_plain_contract() -> None:
@@ -143,8 +143,10 @@ def test_stt_request_retries_transient_network_failures(monkeypatch) -> None:
             raise urllib.error.URLError("temporary outage")
         return FakeResponse()
 
-    monkeypatch.setattr("youtube_toolkit.stt.transcription.urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr("youtube_toolkit.stt.transcription.time.sleep", delays.append)
+    monkeypatch.setattr(
+        "youtube_toolkit.stt.transport.urllib.request.urlopen", fake_urlopen
+    )
+    monkeypatch.setattr("youtube_toolkit.execution.time.sleep", delays.append)
 
     result = run_json_request(
         urllib.request.Request("https://api.example.test/stt"),
@@ -174,9 +176,11 @@ def test_stt_request_does_not_retry_permanent_client_failure(monkeypatch) -> Non
             io.BytesIO(b"invalid API key"),
         )
 
-    monkeypatch.setattr("youtube_toolkit.stt.transcription.urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr(
-        "youtube_toolkit.stt.transcription.time.sleep",
+        "youtube_toolkit.stt.transport.urllib.request.urlopen", fake_urlopen
+    )
+    monkeypatch.setattr(
+        "youtube_toolkit.execution.time.sleep",
         lambda _delay: pytest.fail("permanent failures must not back off and retry"),
     )
 

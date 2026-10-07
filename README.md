@@ -34,13 +34,15 @@ youtube video vision <url-or-id>
 youtube doctor
 ```
 
-Commands return JSON, except `doctor`, which prints a short readiness report. Transcript output is a text string by default, or timed chunks with `--timestamps`. `--export` writes metadata and transcript to `<normalized-title>_<normalized-channel>.txt` in the working directory; use `--force` to replace an existing export.
+Commands return JSON, except `doctor`, which prints a short readiness report. `video metadata` includes the description, thumbnail URL, and chapters with titles, `start_seconds`, and optional `end_seconds`; videos without chapter metadata return an empty chapter list. Transcript output is a text string by default, or timed chunks with `--timestamps`. `--export` writes metadata and transcript to `<normalized-title>_<normalized-channel>.txt` in the working directory; use `--force` to replace an existing export.
 
-Search sources are selected with repeated `--source youtube|channel` flags. YouTube is the default. Channel search requires `--channels`, accepting handles, URLs, or channel IDs. Repeat `--extra-query` to expand YouTube discovery. Repeat `--include-channels`, `--exclude-channels`, `--include-titles`, or `--exclude-titles` to filter candidates. View, duration, and upload-date filters apply before ranking.
+CLI search defaults to at least 10,000 views and a duration between 3 minutes and 8 hours, with 10 results for YouTube or 30 for channel-only searches. These defaults live in `config.py`; the existing search flags override them per invocation.
+
+Search sources are selected with repeated `--source youtube|channel` flags. YouTube is the default. Channel search requires `--channels`, accepting handles, URLs, or channel IDs. Repeat `--extra-query` to expand YouTube discovery. Repeat `--include-channels`, `--exclude-channels`, `--include-titles`, or `--exclude-titles` to filter candidates. View, duration, and upload-date filters apply before ranking. Channel listings omit view counts and upload dates, so channel search fetches per-video metadata for those filters and for recency sorting; expect it to take several seconds longer than YouTube search.
 
 ## Directory cache
 
-Retrieval files live under `.cache/youtube-toolkit/` in the current working directory. Metadata, search, and channel listings expire after 15 minutes. Normalized transcripts are reused by video and retrieval options until you delete their cache files. Visual collages live under `.cache/youtube-toolkit/vision/<video-id>/`.
+Retrieval files live under `.cache/youtube-toolkit/` in the current working directory. Metadata, search, and channel listings expire after 15 minutes. Normalized transcripts are reused by video and retrieval options until you delete their cache files. Transcript caches also retain this metadata; older caches refresh missing metadata without repeating caption retrieval or speech-to-text. Visual collages live under `.cache/youtube-toolkit/vision/<video-id>/`.
 
 The cache is disposable: deleting it causes the next retrieval to fetch again. There is no database, persistent catalog, watchlist, blacklist, scheduled sync, or stored model configuration. Existing databases, configuration files, and installed schedules from earlier versions are left untouched; an existing schedule should be removed separately if you previously installed one.
 

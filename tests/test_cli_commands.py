@@ -75,8 +75,12 @@ def test_video_metadata_command_returns_normalized_video_facts(monkeypatch) -> N
                 "duration": 125.5,
                 "view_count": 42_000,
                 "like_count": 1_200,
-                "description": "Excluded long description",
+                "description": "Video description",
                 "thumbnail": "https://example.com/thumbnail.jpg",
+                "chapters": [
+                    {"title": "Introduction", "start_time": 0, "end_time": 60},
+                    {"title": "Demo", "start_time": 60},
+                ],
                 "formats": [{"format_id": "provider-internal"}],
             }
 
@@ -95,6 +99,12 @@ def test_video_metadata_command_returns_normalized_video_facts(monkeypatch) -> N
         "duration_seconds": 125.5,
         "view_count": 42_000,
         "like_count": 1_200,
+        "description": "Video description",
+        "thumbnail": "https://example.com/thumbnail.jpg",
+        "chapters": [
+            {"title": "Introduction", "start_seconds": 0.0, "end_seconds": 60.0},
+            {"title": "Demo", "start_seconds": 60.0, "end_seconds": None},
+        ],
     }
 
 
@@ -115,7 +125,6 @@ def test_video_transcript_command_selects_plain_or_timestamped_output(
                 start_seconds=2.5, end_seconds=5.0, text="Second sentence."
             ),
         ],
-        sections=[],
     )
     monkeypatch.setattr(commands, "fetch_transcript", lambda _video_ref: document)
 
@@ -172,7 +181,6 @@ def test_video_transcript_export_writes_metadata_and_plain_transcript(
                 start_seconds=62.0, end_seconds=65.0, text="Second sentence."
             ),
         ],
-        sections=[],
     )
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(commands, "fetch_transcript", lambda _video_ref: document)
@@ -499,12 +507,10 @@ def test_doctor_reports_local_cache_without_creating_it(
 
 
 def test_vision_requires_capability_before_fetch(monkeypatch, capsys) -> None:
-    import youtube_toolkit.cli.__main__ as cli
-
     def reject(capability: str, feature: str) -> None:
         assert (capability, feature) == ("vision", "video vision")
         raise RuntimeError("Vision dependencies missing")
 
-    monkeypatch.setattr(cli, "require_capability", reject)
+    monkeypatch.setattr(commands, "require_capability", reject)
     assert main(["video", "vision", "JpSHyEIZ_bo"]) == 1
     assert "Vision dependencies missing" in capsys.readouterr().err

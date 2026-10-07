@@ -20,7 +20,7 @@ youtube channel videos @OpenAI --days 7
 youtube doctor
 ```
 
-Metadata returns normalized video facts. Transcript retrieval uses cached normalized documents, then captions, then speech-to-text fallback. It returns one text string unless `--timestamps` requests timed chunks. `--export` writes metadata and transcript to `<normalized-title>_<normalized-channel>.txt` in the working directory; add `--force` to replace an existing export.
+Metadata returns normalized video facts, including the description, thumbnail URL, and chapter titles with `start_seconds` and optional `end_seconds`. Chapters are an empty list when unavailable. Transcript retrieval uses cached normalized documents, then captions, then speech-to-text fallback. It returns one text string unless `--timestamps` requests timed chunks. `--export` writes metadata and transcript to `<normalized-title>_<normalized-channel>.txt` in the working directory; add `--force` to replace an existing export.
 
 Use vision when visual cues materially help. It requires the vision extra and `ffmpeg`, samples a bounded video-only download, and returns timestamps and absolute collage paths under `.cache/youtube-toolkit/vision/<video-id>/`. Sampled frames can miss important moments; read the transcript alongside them.
 
@@ -34,7 +34,7 @@ youtube search "model evals" --source channel --channels @OpenAI --mode semantic
 youtube search "open source agents" --extra-query LangGraph --exclude-titles reaction
 ```
 
-YouTube is the default source. Repeat `--source youtube|channel` to mix candidate sources. Channel search requires repeated `--channels` values, accepting channel URLs, handles, or IDs. `--extra-query` adds YouTube relevance queries to the same candidate pool. `--limit` caps results; `--min-views`, `--min-duration`, `--max-duration`, `--uploaded-after`, and `--uploaded-within-days` constrain candidates. Repeat `--include-channels`, `--exclude-channels`, `--include-titles`, and `--exclude-titles` for multiple filters. Native YouTube search does not support recency sorting.
+YouTube is the default source. CLI defaults require at least 10,000 views and a duration from 3 minutes to 8 hours; override these with the existing filter flags when the task calls for different limits. Repeat `--source youtube|channel` to mix candidate sources. Channel search requires repeated `--channels` values, accepting channel URLs, handles, or IDs. `--extra-query` adds YouTube relevance queries to the same candidate pool. `--limit` caps results; `--min-views`, `--min-duration`, `--max-duration`, `--uploaded-after`, and `--uploaded-within-days` constrain candidates. Repeat `--include-channels`, `--exclude-channels`, `--include-titles`, and `--exclude-titles` for multiple filters. Native YouTube search does not support recency sorting. Channel search fetches per-video metadata because channel listings omit view counts and upload dates, so it takes several seconds longer.
 
 Semantic search uses environment-configured embeddings to rank titles and transcript passages during the invocation. Set `EMBEDDING_API_KEY`; optional configuration is `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL`, and `EMBEDDING_DIMENSIONS`. Results are chunks by default, or ranked videos with `--return video`. No persistent embedding index is maintained.
 

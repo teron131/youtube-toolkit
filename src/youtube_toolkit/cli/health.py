@@ -8,7 +8,7 @@ from typing import Literal, TypedDict
 
 from ..cache import cache_root
 from ..capabilities import capability_available
-from ..model_config import (
+from ..config import (
     DEFAULT_EMBEDDING_MODEL,
     config_value,
     embedding_config_from_env,
@@ -24,7 +24,17 @@ class ModelApiHealthResult(TypedDict):
     detail: str
 
 
-def run_doctor(args: argparse.Namespace) -> dict[str, object]:
+class DoctorReport(TypedDict):
+    """Runtime, cache location, and optional capability readiness for the doctor command."""
+
+    yt_dlp_version: str
+    cache: str
+    vision: bool
+    ffmpeg: bool
+    embedding: ModelApiHealthResult
+
+
+def run_doctor(args: argparse.Namespace) -> DoctorReport:
     """Inspect the current working directory and optional retrieval capabilities without creating files."""
     del args
     import yt_dlp.version

@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import sys
 
+from .health import DoctorReport
+
 MAX_STDOUT_TEXT_FIELD_CHARS = 400_000
 LONG_STDOUT_TEXT_FIELDS = frozenset(
     {"description", "overview", "summary", "text", "transcript"}
@@ -20,25 +22,16 @@ def emit_json(payload: object) -> None:
     print()
 
 
-def render_doctor(payload: object) -> str:
-    """Render the health-check payload for humans while preserving JSON output for other commands."""
-    if not isinstance(payload, dict):
-        return str(payload)
-
-    embedding = payload.get("embedding", {})
-    detail = (
-        embedding.get("detail", "unknown")
-        if isinstance(embedding, dict)
-        else str(embedding)
-    )
+def render_doctor(report: DoctorReport) -> str:
+    """Render the health-check report for humans while other commands keep JSON output."""
     return "\n".join(
         [
             "YouTube Toolkit",
-            f"  yt-dlp     {payload.get('yt_dlp_version', 'unknown')}",
-            f"  cache      {payload.get('cache', 'unknown')}",
-            f"  vision     {'available' if payload.get('vision') else 'not installed'}",
-            f"  ffmpeg     {'available' if payload.get('ffmpeg') else 'not installed'}",
-            f"  embedding  {detail}",
+            f"  yt-dlp     {report['yt_dlp_version']}",
+            f"  cache      {report['cache']}",
+            f"  vision     {'available' if report['vision'] else 'not installed'}",
+            f"  ffmpeg     {'available' if report['ffmpeg'] else 'not installed'}",
+            f"  embedding  {report['embedding']['detail']}",
         ]
     )
 

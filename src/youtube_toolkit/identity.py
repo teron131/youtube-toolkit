@@ -1,13 +1,11 @@
-"""User-facing YouTube references become validated video IDs, channel IDs, handles, or canonical URLs here."""
+"""User references and yt-dlp payloads become validated video IDs, channel IDs, handles, or canonical URLs here."""
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from dataclasses import dataclass
 import re
+from typing import Any
 from urllib.parse import parse_qs, urlparse
-
-from .schemas import ChannelIdentity, normalize_channel_id, normalize_handle
 
 type YouTubeRef = str
 type ChannelRef = YouTubeRef
@@ -41,41 +39,14 @@ VIDEO_ID_URL_PATTERNS = (
 
 
 @dataclass(frozen=True, slots=True)
-class YouTubeRefs:
-    """Immutable collection boundary for accepting one or many user-supplied YouTube references."""
+class ChannelIdentity:
+    """Public channel identity that may carry a durable ID, a handle, or both."""
 
-    values: tuple[YouTubeRef, ...]
+    youtube_channel_id: str | None
+    channel_handle: str | None
 
-    @classmethod
-    def parse(cls, refs: YouTubeRefInput | None) -> YouTubeRefs:
-        """Normalize an optional single ref or list of refs into one iterable identity set."""
-        if refs is None:
-            return cls(())
-        if isinstance(refs, YouTubeRefs):
-            return refs
-        if isinstance(refs, str):
-            return cls((refs,))
-        return cls(tuple(refs))
-
-    def __iter__(self) -> Iterator[YouTubeRef]:
-        return iter(self.values)
-
-    def video_ids(self) -> list[str]:
-        """Resolve every reference as a required YouTube video ID."""
-        return [require_video_id(video_ref) for video_ref in self.values]
-
-    def video_urls(self) -> list[str]:
-        """Resolve every reference into a canonical YouTube watch URL."""
-        return [normalize_youtube_url(video_ref) for video_ref in self.values]
-
-    def channel_identities(self) -> list[ChannelIdentity]:
-        """Resolve every reference into the channel identity shape used by channel search."""
-        return [parse_channel_ref(channel_ref) for channel_ref in self.values]
-
-
-type YouTubeRefInput = YouTubeRef | list[YouTubeRef] | YouTubeRefs
-type ChannelRefInput = YouTubeRefInput
-type VideoRefInput = YouTubeRefInput
+    def has_identity(self) -> bool:
+        return self.youtube_channel_id is not None or self.channel_handle is not None
 
 
 def validate_url(
@@ -216,3 +187,73 @@ def normalize_channel_url(channel_ref: ChannelRef) -> str:
     if not any(base_path.startswith(prefix) for prefix in CHANNEL_PREFIXES):
         raise ValueError("Expected a YouTube channel URL, handle, or channel ID")
     return f"https://www.youtube.com{base_path}/videos"
+
+
+def extract_channel_identity(
+    metadata: dict[str, Any],
+    *,
+    fallback_channel_id: str | None = None,
+    fallback_channel_handle: str | None = None,
+) -> ChannelIdentity:
+    """Extract the best durable channel identity from metadata with explicit fallback ownership."""
+    youtube_channel_id = (
+        normalize_channel_id(metadata.get("channel_id")) or fallback_channel_id
+    )
+    handle_candidates = (
+        metadata.get("channel_handle"),
+        metadata.get("uploader_id"),
+        metadata.get("channel_url"),
+        metadata.get("uploader_url"),
+        metadata.get("webpage_url"),
+        fallback_channel_handle,
+    )
+    channel_handle = next(
+        (
+            handle
+            for handle in (
+                normalize_handle(candidate) for candidate in handle_candidates
+            )
+            if handle
+        ),
+        None,
+    )
+    return ChannelIdentity(
+        youtube_channel_id=youtube_channel_id,
+        channel_handle=channel_handle,
+    )
+
+
+def normalize_handle(handle: Any) -> str | None:
+    """Normalize channel handles from handles, usernames, or channel URLs while rejecting IDs."""
+    if not isinstance(handle, str):
+        return None
+    stripped_handle = handle.strip()
+    if not stripped_handle:
+        return None
+    if stripped_handle.startswith(("http://", "https://")):
+        return extract_handle_from_url(stripped_handle)
+    if stripped_handle.startswith("@"):
+        return stripped_handle
+    if (
+        stripped_handle.startswith("UC")
+        or "/" in stripped_handle
+        or " " in stripped_handle
+    ):
+        return None
+    return f"@{stripped_handle}"
+
+
+def normalize_channel_id(channel_id: Any) -> str | None:
+    """Store channel IDs as caller-provided text after stripping empty external values."""
+    if not isinstance(channel_id, str):
+        return None
+    stripped_channel_id = channel_id.strip()
+    return stripped_channel_id or None
+
+
+def extract_handle_from_url(url: str) -> str | None:
+    parsed_url = urlparse(url)
+    for path_part in parsed_url.path.split("/"):
+        if path_part.startswith("@"):
+            return path_part
+    return None

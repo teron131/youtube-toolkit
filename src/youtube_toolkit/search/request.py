@@ -12,24 +12,8 @@ SearchSource = Literal["youtube", "channel"]
 SearchMode = Literal["native", "semantic"]
 SearchReturnType = Literal["video", "chunk"]
 SearchSort = Literal["relevance", "recency", "popularity"]
-SortableValue = str | int | float | tuple[int | float, ...]
 SOURCE_OVERSAMPLE_FACTOR = 3
 DATE_FILTER_SOURCE_OVERSAMPLE_FACTOR = 12
-TITLE_SEMANTIC_PREFILTER_FACTOR = 3
-TITLE_SEMANTIC_PREFILTER_MIN = 15
-TITLE_SEMANTIC_PREFILTER_MAX = 60
-TITLE_MIN_SIMILARITY = 0.3
-RESULT_MIN_SIMILARITY = 0.5
-CHANNEL_NAME_SEARCH_LIMIT = 10
-VIDEO_RESULT_KEYS = (
-    "title",
-    "channel_id",
-    "channel_handle",
-    "upload_date",
-    "duration",
-    "view_count",
-    "like_count",
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,11 +86,6 @@ class SearchRequest:
     exclude_title: tuple[str, ...] = ()
     uploaded_after: str | None = None
     uploaded_within_days: int | None = None
-    title_prefilter_factor: int = TITLE_SEMANTIC_PREFILTER_FACTOR
-    title_prefilter_min: int = TITLE_SEMANTIC_PREFILTER_MIN
-    title_prefilter_max: int = TITLE_SEMANTIC_PREFILTER_MAX
-    title_min_similarity: float | None = TITLE_MIN_SIMILARITY
-    result_min_similarity: float | None = RESULT_MIN_SIMILARITY
 
 
 def normalize_filter_date(value: str) -> str:
@@ -184,22 +163,6 @@ def validate_request(request: SearchRequest) -> None:
         and min_duration_seconds > max_duration_seconds
     ):
         raise ValueError("--min-duration cannot be greater than --max-duration")
-    if request.title_prefilter_factor <= 0:
-        raise ValueError("title prefilter factor must be greater than 0")
-    if request.title_prefilter_min <= 0:
-        raise ValueError("title prefilter minimum must be greater than 0")
-    if request.title_prefilter_max <= 0:
-        raise ValueError("title prefilter maximum must be greater than 0")
-    if request.title_prefilter_min > request.title_prefilter_max:
-        raise ValueError("title prefilter minimum cannot exceed maximum")
-    validate_similarity_threshold(
-        request.title_min_similarity,
-        "title min similarity",
-    )
-    validate_similarity_threshold(
-        request.result_min_similarity,
-        "result min similarity",
-    )
     if request.uploaded_within_days is not None and request.uploaded_within_days < 0:
         raise ValueError("uploaded-within-days must be non-negative")
     if request.uploaded_after is not None:
@@ -220,14 +183,3 @@ def validate_request(request: SearchRequest) -> None:
         and request.sort == "recency"
     ):
         raise ValueError("native YouTube search does not support --sort recency")
-
-
-def validate_similarity_threshold(
-    value: float | None,
-    label: str,
-) -> None:
-    """Validate optional cosine-similarity thresholds for semantic search stages."""
-    if value is None:
-        return
-    if value < -1 or value > 1:
-        raise ValueError(f"{label} must be between -1 and 1")

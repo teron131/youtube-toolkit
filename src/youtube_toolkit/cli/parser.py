@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import argparse
 
+from ..config import (
+    DEFAULT_SEARCH_MAX_DURATION,
+    DEFAULT_SEARCH_MIN_DURATION,
+    DEFAULT_SEARCH_MIN_VIEWS,
+)
+from ..youtube.channels import DEFAULT_LAST_VIDEOS
 from .commands import ChannelCommands, SearchCommands, VideoCommands
 from .health import run_doctor
-
-DEFAULT_SEARCH_MIN_VIEWS = 10_000
-DEFAULT_SEARCH_MIN_DURATION = "3:00"
-DEFAULT_SEARCH_MAX_DURATION = "8:00:00"
 
 
 class YoutubeArgumentParser(argparse.ArgumentParser):
@@ -107,11 +109,7 @@ class VideoCommandParser:
         vision_parser.add_argument(
             "video_ref", metavar="url", help="YouTube video URL or ID"
         )
-        vision_parser.set_defaults(
-            handler=VideoCommands.vision,
-            required_capability="vision",
-            capability_feature="video vision",
-        )
+        vision_parser.set_defaults(handler=VideoCommands.vision)
 
 
 class SearchCommandParser:
@@ -219,7 +217,15 @@ class ChannelCommandParser:
         videos_parser.add_argument(
             "channel_ref", help="YouTube channel URL, handle, or channel ID"
         )
-        add_channel_window_args(videos_parser)
+        videos_parser.add_argument(
+            "--last",
+            type=int,
+            default=DEFAULT_LAST_VIDEOS,
+            help="Return the latest N videos",
+        )
+        videos_parser.add_argument(
+            "--days", type=int, help="Return videos uploaded in the last N days"
+        )
         videos_parser.set_defaults(handler=ChannelCommands.videos)
 
 
@@ -228,21 +234,3 @@ def add_doctor_parser(subparsers: argparse._SubParsersAction) -> None:
         "doctor", help="Check runtime, cache path, and optional capabilities"
     )
     doctor_parser.set_defaults(handler=run_doctor)
-
-
-def add_channel_window_args(
-    parser: argparse.ArgumentParser,
-    *,
-    default_last: int | None = 10,
-    default_days: int | None = None,
-) -> None:
-    """Add the shared count and recency window controls for channel listings."""
-    parser.add_argument(
-        "--last", type=int, default=default_last, help="Return the latest N videos"
-    )
-    parser.add_argument(
-        "--days",
-        type=int,
-        default=default_days,
-        help="Return videos uploaded in the last N days",
-    )

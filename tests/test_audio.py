@@ -1,6 +1,9 @@
 """Media download commands and directory-local request caching."""
 
 from pathlib import Path
+import subprocess
+
+import pytest
 from types import SimpleNamespace
 
 from youtube_toolkit.youtube.client import STT_AUDIO_FORMAT_SELECTOR, YtDlpClient
@@ -27,8 +30,10 @@ def test_download_transcription_audio_uses_unique_cache_stem(
         capture_output,
         text,
         check,
+        timeout,
     ):
         """Capture yt-dlp args and create the expected output file."""
+        assert timeout == 30
         commands.append(command)
         output_pattern = Path(command[command.index("--output") + 1])
         audio_path = output_pattern.with_name(
@@ -81,7 +86,8 @@ def test_channel_videos_omits_playlist_end_when_unlimited(monkeypatch) -> None:
 
 def test_request_cache_reuses_expires_and_recovers(monkeypatch, tmp_path) -> None:
     """Search requests share only identical task-local results and refetch expired or deleted entries."""
-    from youtube_toolkit.cache import REQUEST_MAX_AGE_SECONDS, cache_root
+    from youtube_toolkit.cache import cache_root
+    from youtube_toolkit.youtube.client import REQUEST_MAX_AGE_SECONDS
 
     monkeypatch.chdir(tmp_path)
     now = [1000.0]
@@ -110,3 +116,33 @@ def test_request_cache_reuses_expires_and_recovers(monkeypatch, tmp_path) -> Non
         entry.unlink()
     client.search("agents", fetch=5, sort="relevance")
     assert len(calls) == 4
+
+
+@pytest.mark.parametrize("timed_out", [False, True])
+def test_failed_audio_download_cleans_only_its_own_partial_files(
+    monkeypatch, tmp_path, timed_out
+) -> None:
+    """Failures and timeouts release this download's partial files without deleting other audio."""
+    from youtube_toolkit.cache import cache_root
+
+    monkeypatch.chdir(tmp_path)
+    audio_dir = cache_root() / "audio"
+    audio_dir.mkdir(parents=True)
+    unrelated = audio_dir / "keep.m4a"
+    unrelated.write_bytes(b"existing audio")
+
+    def fail(command, **kwargs):
+        assert kwargs["timeout"] == 30
+        pattern = Path(command[command.index("--output") + 1])
+        pattern.with_suffix(".m4a.part").write_bytes(b"partial")
+        if timed_out:
+            raise subprocess.TimeoutExpired(command, timeout=30)
+        return SimpleNamespace(returncode=1, stderr="download failed")
+
+    monkeypatch.setattr("youtube_toolkit.youtube.client.subprocess.run", fail)
+    with pytest.raises(
+        RuntimeError, match="timed out" if timed_out else "download failed"
+    ):
+        YtDlpClient().download_transcription_audio("JpSHyEIZ_bo")
+    assert list(audio_dir.iterdir()) == [unrelated]
+    assert unrelated.read_bytes() == b"existing audio"

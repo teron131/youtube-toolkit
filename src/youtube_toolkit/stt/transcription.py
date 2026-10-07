@@ -3,35 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 import os
 from pathlib import Path
-import time
 from typing import Any, Literal
-import urllib.error
-import urllib.request
-from uuid import uuid4
 
-from ..execution import retry_transient
 from ..schemas import normalize_text
+from . import elevenlabs, xai
 
 DEFAULT_STT_LANGUAGE = "en"
 DEFAULT_STT_PROVIDER = "xai"
 DEFAULT_ELEVENLABS_STT_MODEL = "scribe_v2"
-STT_REQUEST_ATTEMPTS = 3
-STT_RETRY_BACKOFF_SECONDS = 0.5
-AUDIO_CONTENT_TYPES = {
-    ".aac": "audio/aac",
-    ".flac": "audio/flac",
-    ".m4a": "audio/x-m4a",
-    ".mp3": "audio/mpeg",
-    ".mp4": "audio/mp4",
-    ".ogg": "audio/ogg",
-    ".opus": "audio/opus",
-    ".wav": "audio/wav",
-    ".webm": "audio/webm",
-}
-
 SpeechToTextProvider = Literal["xai", "elevenlabs"]
 
 
@@ -107,26 +88,8 @@ def transcribe_audio_details(
     if not audio_path.is_file():
         raise ValueError(f"audio file does not exist: {audio_path}")
     options = options or SpeechToTextOptions()
-    response = _request_provider_response(
-        audio_path,
-        options=options,
-    )
     if options.provider == "xai":
-        return SpeechTranscription.from_xai_stt(response)
-    if options.provider == "elevenlabs":
-        return SpeechTranscription.from_elevenlabs_stt(response)
-    raise ValueError(f"Unsupported speech-to-text provider: {options.provider}")
-
-
-def _request_provider_response(
-    audio_path: Path,
-    *,
-    options: SpeechToTextOptions,
-) -> dict[str, Any]:
-    if options.provider == "xai":
-        from . import xai
-
-        return xai.xai_stt(
+        response = xai.xai_stt(
             audio_path,
             api_key=_provider_api_key(
                 explicit_api_key=options.api_key,
@@ -136,10 +99,9 @@ def _request_provider_response(
             language=options.language,
             timeout_seconds=options.timeout_seconds,
         )
+        return SpeechTranscription.from_xai_stt(response)
     if options.provider == "elevenlabs":
-        from . import elevenlabs
-
-        return elevenlabs.elevenlabs_stt(
+        response = elevenlabs.elevenlabs_stt(
             audio_path,
             api_key=_provider_api_key(
                 explicit_api_key=options.api_key,
@@ -150,6 +112,7 @@ def _request_provider_response(
             language=options.language,
             timeout_seconds=options.timeout_seconds,
         )
+        return SpeechTranscription.from_elevenlabs_stt(response)
     raise ValueError(f"Unsupported speech-to-text provider: {options.provider}")
 
 
@@ -163,76 +126,3 @@ def _provider_api_key(
     if not api_key:
         raise ValueError(f"{env_var} is required for {provider_name} speech-to-text")
     return api_key
-
-
-def run_json_request(
-    request: urllib.request.Request,
-    *,
-    timeout_seconds: float,
-    provider_name: str,
-) -> dict[str, Any]:
-    """Run one provider request with bounded retries for transient and malformed responses."""
-
-    def request_payload() -> dict[str, Any]:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310 - fixed HTTPS API endpoint.
-            raw_response = response.read()
-        response_data = json.loads(raw_response)
-        if not isinstance(response_data, dict):
-            raise json.JSONDecodeError("STT response was not a JSON object", "", 0)
-        return response_data
-
-    try:
-        return retry_transient(
-            request_payload,
-            attempts=STT_REQUEST_ATTEMPTS,
-            backoff_seconds=STT_RETRY_BACKOFF_SECONDS,
-            retryable_errors=(urllib.error.URLError, json.JSONDecodeError),
-            sleep=time.sleep,
-        )
-    except urllib.error.HTTPError as error:
-        detail = error.read().decode("utf-8", errors="replace").strip()
-        raise RuntimeError(
-            f"{provider_name} STT request failed ({error.code}): {detail}"
-        ) from error
-    except urllib.error.URLError as error:
-        raise RuntimeError(
-            f"{provider_name} STT request failed: {error.reason}"
-        ) from error
-    except json.JSONDecodeError as error:
-        raise RuntimeError(
-            f"{provider_name} STT response was not valid JSON"
-        ) from error
-
-
-def encode_multipart_form(
-    *,
-    fields: dict[str, str | None],
-    file_field: str,
-    file_path: Path,
-) -> tuple[bytes, str]:
-    """Build the multipart payload shared by providers without leaking boundary details to adapters."""
-    boundary = f"----youtube-toolkit-{uuid4().hex}"
-    chunks: list[bytes] = []
-
-    for name, value in fields.items():
-        if value is None:
-            continue
-        chunks.extend(
-            [
-                f"--{boundary}\r\n".encode(),
-                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(),
-                f"{value}\r\n".encode(),
-            ]
-        )
-
-    chunks.extend(
-        [
-            f"--{boundary}\r\n".encode(),
-            f'Content-Disposition: form-data; name="{file_field}"; filename="{file_path.name}"\r\n'.encode(),
-            f"Content-Type: {AUDIO_CONTENT_TYPES.get(file_path.suffix.casefold(), 'application/octet-stream')}\r\n\r\n".encode(),
-            file_path.read_bytes(),
-            b"\r\n",
-            f"--{boundary}--\r\n".encode(),
-        ]
-    )
-    return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
