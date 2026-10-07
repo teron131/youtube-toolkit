@@ -36,20 +36,14 @@ def normalize_arg_string(value: str) -> str:
     return candidate
 
 
-def add_command_subparsers(
-    parser: argparse.ArgumentParser,
-    **kwargs,
-) -> argparse._SubParsersAction:
-    """Create command subparsers that inherit CLI string normalization."""
-    return parser.add_subparsers(**kwargs, parser_class=YoutubeArgumentParser)
-
-
 def build_parser() -> argparse.ArgumentParser:
     """Assemble the top-level parser and attach command handlers as parser defaults."""
     parser = YoutubeArgumentParser(
         prog="youtube", description="Transcript-first YouTube toolkit."
     )
-    subparsers = add_command_subparsers(parser, dest="command", required=True)
+    subparsers = parser.add_subparsers(
+        dest="command", required=True, parser_class=YoutubeArgumentParser
+    )
     VideoCommandParser.add_to(subparsers)
     SearchCommandParser.add_to(subparsers)
     ChannelCommandParser.add_to(subparsers)
@@ -58,21 +52,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 class VideoCommandParser:
-    """Parser group for retrieving video metadata, transcripts, and visual context."""
+    """Register top-level metadata, transcript, and vision commands with their existing retrieval handlers."""
 
     @staticmethod
     def add_to(subparsers: argparse._SubParsersAction) -> None:
-        video_parser = subparsers.add_parser(
-            "video", help="Fetch video metadata, transcripts, or visual context"
-        )
-        video_subparsers = add_command_subparsers(
-            video_parser,
-            dest="video_command",
-            required=True,
-            metavar="{metadata,transcript,vision}",
-        )
-
-        metadata_parser = video_subparsers.add_parser(
+        metadata_parser = subparsers.add_parser(
             "metadata", help="Fetch video metadata JSON"
         )
         metadata_parser.add_argument(
@@ -80,7 +64,7 @@ class VideoCommandParser:
         )
         metadata_parser.set_defaults(handler=VideoCommands.metadata)
 
-        transcript_parser = video_subparsers.add_parser(
+        transcript_parser = subparsers.add_parser(
             "transcript", help="Fetch a normalized transcript"
         )
         transcript_parser.add_argument(
@@ -103,7 +87,7 @@ class VideoCommandParser:
         )
         transcript_parser.set_defaults(handler=VideoCommands.transcript)
 
-        vision_parser = video_subparsers.add_parser(
+        vision_parser = subparsers.add_parser(
             "vision", help="Generate timestamped visual-context collages"
         )
         vision_parser.add_argument(
@@ -205,28 +189,23 @@ class ChannelCommandParser:
     @staticmethod
     def add_to(subparsers: argparse._SubParsersAction) -> None:
         channel_parser = subparsers.add_parser(
-            "channel", help="Work with YouTube channels"
+            "channel", help="List recent videos from a YouTube channel"
         )
-        channel_subparsers = add_command_subparsers(
-            channel_parser, dest="channel_command", required=True, metavar="{videos}"
+        channel_parser.add_argument(
+            "channel_ref",
+            metavar="channel",
+            help="YouTube channel URL, handle, or channel ID",
         )
-
-        videos_parser = channel_subparsers.add_parser(
-            "videos", help="List recent videos from a YouTube channel"
-        )
-        videos_parser.add_argument(
-            "channel_ref", help="YouTube channel URL, handle, or channel ID"
-        )
-        videos_parser.add_argument(
+        channel_parser.add_argument(
             "--last",
             type=int,
             default=DEFAULT_LAST_VIDEOS,
             help="Return the latest N videos",
         )
-        videos_parser.add_argument(
+        channel_parser.add_argument(
             "--days", type=int, help="Return videos uploaded in the last N days"
         )
-        videos_parser.set_defaults(handler=ChannelCommands.videos)
+        channel_parser.set_defaults(handler=ChannelCommands.videos)
 
 
 def add_doctor_parser(subparsers: argparse._SubParsersAction) -> None:

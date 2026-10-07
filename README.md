@@ -25,16 +25,16 @@ The installer replaces the installed `youtube` tool. To run the checkout directl
 ```bash
 youtube search "langgraph tutorial" --limit 5 --max-duration 20:00
 youtube search "reasoning models" --source channel --channels @OpenAI --channels @Anthropic --uploaded-within-days 30 --sort recency
-youtube channel videos @OpenAI --last 5
-youtube video metadata <url-or-id>
-youtube video transcript <url-or-id>
-youtube video transcript <url-or-id> --timestamps
-youtube video transcript <url-or-id> --export
-youtube video vision <url-or-id>
+youtube channel @OpenAI --last 5
+youtube metadata <url-or-id>
+youtube transcript <url-or-id>
+youtube transcript <url-or-id> --timestamps
+youtube transcript <url-or-id> --export
+youtube vision <url-or-id>
 youtube doctor
 ```
 
-Commands return JSON, except `doctor`, which prints a short readiness report. `video metadata` includes the description, thumbnail URL, and chapters with titles, `start_seconds`, and optional `end_seconds`; videos without chapter metadata return an empty chapter list. Transcript output is a text string by default, or timed chunks with `--timestamps`. `--export` writes metadata and transcript to `<normalized-title>_<normalized-channel>.txt` in the working directory; use `--force` to replace an existing export.
+Commands return JSON, except `doctor`, which prints a short readiness report. `metadata` includes the description, thumbnail URL, and chapters with titles, `start_seconds`, and optional `end_seconds`; videos without chapter metadata return an empty chapter list. Transcript output is a text string by default, or timed chunks with `--timestamps`. `--export` writes metadata and transcript to `<normalized-title>_<normalized-channel>.txt` in the working directory; use `--force` to replace an existing export.
 
 CLI search defaults to at least 10,000 views and a duration between 3 minutes and 8 hours, with 10 results for YouTube or 30 for channel-only searches. These defaults live in `config.py`; the existing search flags override them per invocation.
 

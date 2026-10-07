@@ -351,8 +351,8 @@ def test_vision_subprocess_start_failures_become_user_facing_runtime_errors(
 
 
 def test_video_vision_cli_routes_to_public_extraction(monkeypatch) -> None:
-    """The video vision command returns the public operation's JSON-ready result."""
-    args = build_parser().parse_args(["video", "vision", VIDEO_ID])
+    """The vision command returns the public operation's JSON-ready result."""
+    args = build_parser().parse_args(["vision", VIDEO_ID])
     expected = {
         "video_id": VIDEO_ID,
         "frame_count": 1,

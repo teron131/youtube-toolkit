@@ -17,7 +17,6 @@ def test_parser_normalizes_string_arguments_before_handlers() -> None:
     """CLI string hygiene applies to every parsed argument value before command handlers run."""
     video_args = build_parser().parse_args(
         [
-            "video",
             "transcript",
             "'https://www.youtube.com/watch?v=JpSHyEIZ_bo'",
         ]
@@ -185,7 +184,7 @@ def test_video_transcript_export_writes_metadata_and_plain_transcript(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(commands, "fetch_transcript", lambda _video_ref: document)
 
-    assert main(["video", "transcript", "JpSHyEIZ_bo", "--export"]) == 0
+    assert main(["transcript", "JpSHyEIZ_bo", "--export"]) == 0
 
     export_path = tmp_path / "What_is_DARKMATTER_Example_Channel.txt"
     assert json.loads(capsys.readouterr().out) == {
@@ -253,10 +252,10 @@ def test_video_transcript_force_requires_export(monkeypatch) -> None:
     ("args", "usage"),
     [
         (
-            ["video", "transcript", "--help"],
-            "usage: youtube video transcript [-h] [--timestamps] [--export] [--force] url",
+            ["transcript", "--help"],
+            "usage: youtube transcript [-h] [--timestamps] [--export] [--force] url",
         ),
-        (["video", "metadata", "--help"], "usage: youtube video metadata [-h] url"),
+        (["metadata", "--help"], "usage: youtube metadata [-h] url"),
     ],
 )
 def test_reference_help_names_positionals_url(
@@ -480,8 +479,10 @@ def test_emit_json_truncates_long_text_fields(capsys, monkeypatch) -> None:
     assert json.loads(capsys.readouterr().out) == "z" * 20
 
 
-@pytest.mark.parametrize("command", ["db", "watchlist", "blacklist", "index", "setup"])
-def test_collection_commands_are_removed(command: str) -> None:
+@pytest.mark.parametrize(
+    "command", ["db", "watchlist", "blacklist", "index", "setup", "video"]
+)
+def test_superseded_commands_are_removed(command: str) -> None:
     with pytest.raises(SystemExit):
         build_parser().parse_args([command])
 
@@ -508,9 +509,28 @@ def test_doctor_reports_local_cache_without_creating_it(
 
 def test_vision_requires_capability_before_fetch(monkeypatch, capsys) -> None:
     def reject(capability: str, feature: str) -> None:
-        assert (capability, feature) == ("vision", "video vision")
+        assert (capability, feature) == ("vision", "vision")
         raise RuntimeError("Vision dependencies missing")
 
     monkeypatch.setattr(commands, "require_capability", reject)
-    assert main(["video", "vision", "JpSHyEIZ_bo"]) == 1
+    assert main(["vision", "JpSHyEIZ_bo"]) == 1
     assert "Vision dependencies missing" in capsys.readouterr().err
+
+
+def test_channel_command_dispatches_listing_without_subcommand(
+    monkeypatch, capsys
+) -> None:
+    """The channel command keeps listing limits and JSON output after removing the videos tier."""
+    calls = []
+
+    def fetch(channel_ref, *, options):
+        calls.append((channel_ref, options.last, options.days))
+        return {"entries": [{"id": "JpSHyEIZ_bo"}]}
+
+    monkeypatch.setattr(commands, "fetch_channel_videos", fetch)
+    assert main(["channel", "'@OpenAI'", "--last", "5", "--days", "7"]) == 0
+    assert calls == [("@OpenAI", 5, 7)]
+    assert json.loads(capsys.readouterr().out) == {"entries": [{"id": "JpSHyEIZ_bo"}]}
+    assert build_parser().parse_args(["channel", "@OpenAI"]).last == 10
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["channel", "videos", "@OpenAI"])
