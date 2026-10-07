@@ -69,7 +69,7 @@ class YouTubeRefs:
         return [normalize_youtube_url(video_ref) for video_ref in self.values]
 
     def channel_identities(self) -> list[ChannelIdentity]:
-        """Resolve every reference into the channel identity shape used by storage."""
+        """Resolve every reference into the channel identity shape used by channel search."""
         return [parse_channel_ref(channel_ref) for channel_ref in self.values]
 
 
@@ -162,7 +162,9 @@ def parse_channel_ref(channel_ref: ChannelRef) -> ChannelIdentity:
     stripped_channel_ref = channel_ref.strip()
     if stripped_channel_ref.startswith(("http://", "https://")):
         parsed_url = urlparse(stripped_channel_ref)
-        path_parts = [path_part for path_part in parsed_url.path.split("/") if path_part]
+        path_parts = [
+            path_part for path_part in parsed_url.path.split("/") if path_part
+        ]
         if len(path_parts) >= 2 and path_parts[0] == "channel":
             return ChannelIdentity(
                 youtube_channel_id=extract_channel_id(path_parts[1]),

@@ -14,6 +14,7 @@ from typing import Any
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from ..cache import cache_root
 from ..identity import VideoRef, require_video_id
 from .client import VISION_FFMPEG_THREADS, YtDlpClient
 
@@ -78,21 +79,29 @@ def sample_vision(
     metadata = client.metadata(video_ref)
     fetched_video_id = require_video_id(str(metadata.get("id") or ""))
     if fetched_video_id != video_id:
-        raise ValueError(f"yt-dlp returned video {fetched_video_id} for requested video {video_id}")
+        raise ValueError(
+            f"yt-dlp returned video {fetched_video_id} for requested video {video_id}"
+        )
     duration = metadata.get("duration")
     if not isinstance(duration, int | float) or duration <= 0:
         raise ValueError(f"Missing valid duration for {video_id}")
     if duration > MAX_VIDEO_DURATION_SECONDS:
-        raise ValueError(f"Video is longer than {MAX_VIDEO_DURATION_SECONDS // 3600} hours")
+        raise ValueError(
+            f"Video is longer than {MAX_VIDEO_DURATION_SECONDS // 3600} hours"
+        )
     heatmap = heatmap_bins(metadata.get("heatmap"))
 
-    destination = (output_dir or Path.cwd() / ".cache" / "vision" / video_id).expanduser().resolve()
+    destination = (
+        (output_dir or cache_root() / "vision" / video_id).expanduser().resolve()
+    )
     try:
         destination.mkdir(parents=True, exist_ok=True)
         with TemporaryDirectory(prefix="work-", dir=destination) as work_dir_name:
             work_dir = Path(work_dir_name)
             video_path = work_dir / f"{video_id}.mp4"
-            client.download_video_for_vision(video_ref, video_path, max_bytes=MAX_VIDEO_BYTES)
+            client.download_video_for_vision(
+                video_ref, video_path, max_bytes=MAX_VIDEO_BYTES
+            )
             selected = select_frames(video_path, heatmap, ffmpeg_path)
             staged_collages = render_timestamped_collages(
                 video_path,
@@ -102,7 +111,9 @@ def sample_vision(
             )
             collage_paths = publish_collages(staged_collages, destination, video_id)
     except OSError as error:
-        raise RuntimeError(f"Vision artifact filesystem error under {destination}: {error}") from error
+        raise RuntimeError(
+            f"Vision artifact filesystem error under {destination}: {error}"
+        ) from error
 
     return {
         "video_id": video_id,
@@ -155,11 +166,15 @@ def select_frames(
         raise ValueError("FFmpeg produced no one-FPS scene frames")
     frame_blur_scores = blur_scores(video_path, ffmpeg_path)
     if len(frame_blur_scores) != len(frames):
-        raise ValueError(f"Scene/blur frame count mismatch: {len(frames)} != {len(frame_blur_scores)}")
+        raise ValueError(
+            f"Scene/blur frame count mismatch: {len(frames)} != {len(frame_blur_scores)}"
+        )
     thumbnails = extract_thumbnails(video_path, len(frames), ffmpeg_path)
 
     scene_changes = select_strong_scene_changes(frames)
-    sharp_valleys = discard_motion_blur(relocate_to_valleys(frames, scene_changes), frame_blur_scores)
+    sharp_valleys = discard_motion_blur(
+        relocate_to_valleys(frames, scene_changes), frame_blur_scores
+    )
     selected = add_distinct_candidates(
         [],
         sharp_valleys,
@@ -183,8 +198,14 @@ def select_frames(
         SUPPLEMENT_DEDUP_THRESHOLD,
     )
     if not selected:
-        finite_frames = [frame for frame in frames if math.isfinite(frame_blur_scores[frame.index])]
-        selected = [min(finite_frames, key=lambda frame: frame_blur_scores[frame.index])] if finite_frames else [frames[len(frames) // 2]]
+        finite_frames = [
+            frame for frame in frames if math.isfinite(frame_blur_scores[frame.index])
+        ]
+        selected = (
+            [min(finite_frames, key=lambda frame: frame_blur_scores[frame.index])]
+            if finite_frames
+            else [frames[len(frames) // 2]]
+        )
     return limit_frames(selected)
 
 
@@ -196,7 +217,17 @@ def scene_scores(
     metadata = parse_frame_metadata(
         run_ffmpeg(
             ffmpeg_path,
-            ["-i", str(video_path), "-vf", "fps=1,select='gte(scene,0)',metadata=print:file=-", "-fps_mode", "vfr", "-f", "null", "-"],
+            [
+                "-i",
+                str(video_path),
+                "-vf",
+                "fps=1,select='gte(scene,0)',metadata=print:file=-",
+                "-fps_mode",
+                "vfr",
+                "-f",
+                "null",
+                "-",
+            ],
         ),
         "lavfi.scene_score",
     )
@@ -218,7 +249,17 @@ def blur_scores(
     metadata = parse_frame_metadata(
         run_ffmpeg(
             ffmpeg_path,
-            ["-i", str(video_path), "-vf", "fps=1,blurdetect,metadata=print:file=-", "-fps_mode", "vfr", "-f", "null", "-"],
+            [
+                "-i",
+                str(video_path),
+                "-vf",
+                "fps=1,blurdetect,metadata=print:file=-",
+                "-fps_mode",
+                "vfr",
+                "-f",
+                "null",
+                "-",
+            ],
         ),
         "lavfi.blur",
     )
@@ -263,7 +304,9 @@ def stationary_midpoints(
             "-i",
             str(video_path),
             "-vf",
-            (f"fps=1,scale={THUMBNAIL_WIDTH}:{THUMBNAIL_HEIGHT}:flags=area,format=gray,gblur=sigma=1,freezedetect=n=0.001:d={STATIONARY_DURATION_SECONDS},metadata=print:file=-"),
+            (
+                f"fps=1,scale={THUMBNAIL_WIDTH}:{THUMBNAIL_HEIGHT}:flags=area,format=gray,gblur=sigma=1,freezedetect=n=0.001:d={STATIONARY_DURATION_SECONDS},metadata=print:file=-"
+            ),
             "-fps_mode",
             "vfr",
             "-f",
@@ -276,14 +319,21 @@ def stationary_midpoints(
     for line in output.splitlines():
         if line.startswith("lavfi.freezedetect.freeze_start="):
             start_seconds = float(line.split("=", 1)[1])
-        elif line.startswith("lavfi.freezedetect.freeze_end=") and start_seconds is not None:
+        elif (
+            line.startswith("lavfi.freezedetect.freeze_end=")
+            and start_seconds is not None
+        ):
             end_seconds = float(line.split("=", 1)[1])
             midpoint = (start_seconds + end_seconds) / 2
-            midpoints.append(min(frames, key=lambda frame: abs(frame.timestamp_seconds - midpoint)))
+            midpoints.append(
+                min(frames, key=lambda frame: abs(frame.timestamp_seconds - midpoint))
+            )
             start_seconds = None
     if start_seconds is not None:
         midpoint = (start_seconds + frames[-1].timestamp_seconds) / 2
-        midpoints.append(min(frames, key=lambda frame: abs(frame.timestamp_seconds - midpoint)))
+        midpoints.append(
+            min(frames, key=lambda frame: abs(frame.timestamp_seconds - midpoint))
+        )
     return midpoints
 
 
@@ -312,17 +362,25 @@ def extract_thumbnails(
     thumbnails = np.frombuffer(output, dtype=np.uint8)
     expected_size = frame_count * THUMBNAIL_HEIGHT * THUMBNAIL_WIDTH
     if thumbnails.size != expected_size:
-        raise ValueError(f"Expected {expected_size} thumbnail bytes, received {thumbnails.size}")
+        raise ValueError(
+            f"Expected {expected_size} thumbnail bytes, received {thumbnails.size}"
+        )
     return thumbnails.reshape(-1, THUMBNAIL_HEIGHT, THUMBNAIL_WIDTH)
 
 
 def select_strong_scene_changes(frames: list[ScoredFrame]) -> list[ScoredFrame]:
     """Keep the strongest five-percent scene changes with temporal suppression."""
     candidate_count = math.ceil((len(frames) - 1) * SCENE_CHANGE_FRACTION)
-    candidates = sorted(frames[1:], key=lambda frame: (-frame.score, frame.timestamp_seconds))[:candidate_count]
+    candidates = sorted(
+        frames[1:], key=lambda frame: (-frame.score, frame.timestamp_seconds)
+    )[:candidate_count]
     selected: list[ScoredFrame] = []
     for candidate in candidates:
-        if all(abs(candidate.timestamp_seconds - retained.timestamp_seconds) >= MIN_SCENE_CHANGE_SPACING_SECONDS for retained in selected):
+        if all(
+            abs(candidate.timestamp_seconds - retained.timestamp_seconds)
+            >= MIN_SCENE_CHANGE_SPACING_SECONDS
+            for retained in selected
+        ):
             selected.append(candidate)
     return sorted(selected, key=lambda frame: frame.timestamp_seconds)
 
@@ -334,17 +392,34 @@ def relocate_to_valleys(
     """Move strong scene changes to the first stable local minimum after each transition."""
     valleys: list[ScoredFrame] = []
     for change_number, scene_change in enumerate(scene_changes):
-        stop = scene_changes[change_number + 1].index if change_number + 1 < len(scene_changes) else len(frames)
+        stop = (
+            scene_changes[change_number + 1].index
+            if change_number + 1 < len(scene_changes)
+            else len(frames)
+        )
         centers = list(range(scene_change.index + 2, stop - 1))
         if not centers:
             valleys.append(scene_change)
             continue
-        rolling_scores = {center: sum(frames[index].score for index in range(center - 1, center + 2)) / 3 for center in centers}
+        rolling_scores = {
+            center: sum(frames[index].score for index in range(center - 1, center + 2))
+            / 3
+            for center in centers
+        }
         local_minimum = next(
-            (center for center in centers[1:-1] if rolling_scores[center] <= rolling_scores[center - 1] and rolling_scores[center] <= rolling_scores[center + 1]),
+            (
+                center
+                for center in centers[1:-1]
+                if rolling_scores[center] <= rolling_scores[center - 1]
+                and rolling_scores[center] <= rolling_scores[center + 1]
+            ),
             None,
         )
-        valley_index = local_minimum if local_minimum is not None else min(centers, key=rolling_scores.get)
+        valley_index = (
+            local_minimum
+            if local_minimum is not None
+            else min(centers, key=rolling_scores.get)
+        )
         valleys.append(frames[valley_index])
     return valleys
 
@@ -353,11 +428,19 @@ def select_replay_regions(bins: list[HeatmapBin]) -> list[tuple[float, float]]:
     """Keep local replay maxima above the per-video 75th percentile."""
     if not bins:
         return []
-    threshold = float(np.percentile([item.value for item in bins], REPLAY_PEAK_PERCENTILE))
+    threshold = float(
+        np.percentile([item.value for item in bins], REPLAY_PEAK_PERCENTILE)
+    )
     peak_indexes = [
-        index for index in range(1, len(bins) - 1) if bins[index].value > bins[index - 1].value and bins[index].value >= bins[index + 1].value and bins[index].value >= threshold
+        index
+        for index in range(1, len(bins) - 1)
+        if bins[index].value > bins[index - 1].value
+        and bins[index].value >= bins[index + 1].value
+        and bins[index].value >= threshold
     ]
-    return [(bins[index].start_seconds, bins[index].end_seconds) for index in peak_indexes]
+    return [
+        (bins[index].start_seconds, bins[index].end_seconds) for index in peak_indexes
+    ]
 
 
 def stable_replay_frames(
@@ -371,14 +454,23 @@ def stable_replay_frames(
         candidates = [
             frame
             for frame in frames
-            if midpoint - REPLAY_CENTER_RADIUS_SECONDS <= frame.timestamp_seconds <= midpoint + REPLAY_CENTER_RADIUS_SECONDS and 0 < frame.index < len(frames) - 1
+            if midpoint - REPLAY_CENTER_RADIUS_SECONDS
+            <= frame.timestamp_seconds
+            <= midpoint + REPLAY_CENTER_RADIUS_SECONDS
+            and 0 < frame.index < len(frames) - 1
         ]
         if not candidates:
             continue
         selected.append(
             min(
                 candidates,
-                key=lambda frame: sum(frames[index].score for index in range(frame.index - 1, frame.index + 2)) / 3,
+                key=lambda frame: (
+                    sum(
+                        frames[index].score
+                        for index in range(frame.index - 1, frame.index + 2)
+                    )
+                    / 3
+                ),
             )
         )
     return selected
@@ -393,7 +485,10 @@ def discard_motion_blur(
     for frame in frames:
         start = max(0, frame.index - BLUR_NEIGHBOR_RADIUS)
         stop = min(len(frame_blur_scores), frame.index + BLUR_NEIGHBOR_RADIUS + 1)
-        neighbors = frame_blur_scores[start : frame.index] + frame_blur_scores[frame.index + 1 : stop]
+        neighbors = (
+            frame_blur_scores[start : frame.index]
+            + frame_blur_scores[frame.index + 1 : stop]
+        )
         if not neighbors:
             selected.append(frame)
             continue
@@ -421,19 +516,34 @@ def block_ssim(
     """Approximate FFmpeg SSIM over non-overlapping eight-pixel blocks."""
     usable_height = THUMBNAIL_HEIGHT - THUMBNAIL_HEIGHT % 8
     usable_width = THUMBNAIL_WIDTH - THUMBNAIL_WIDTH % 8
-    left_blocks = left[:usable_height, :usable_width].reshape(usable_height // 8, 8, usable_width // 8, 8).transpose(0, 2, 1, 3).reshape(-1, 64)
-    right_blocks = right[:usable_height, :usable_width].reshape(usable_height // 8, 8, usable_width // 8, 8).transpose(0, 2, 1, 3).reshape(-1, 64)
+    left_blocks = (
+        left[:usable_height, :usable_width]
+        .reshape(usable_height // 8, 8, usable_width // 8, 8)
+        .transpose(0, 2, 1, 3)
+        .reshape(-1, 64)
+    )
+    right_blocks = (
+        right[:usable_height, :usable_width]
+        .reshape(usable_height // 8, 8, usable_width // 8, 8)
+        .transpose(0, 2, 1, 3)
+        .reshape(-1, 64)
+    )
     left_mean = left_blocks.mean(axis=1)
     right_mean = right_blocks.mean(axis=1)
     left_variance = left_blocks.var(axis=1)
     right_variance = right_blocks.var(axis=1)
-    covariance = ((left_blocks - left_mean[:, None]) * (right_blocks - right_mean[:, None])).mean(axis=1)
+    covariance = (
+        (left_blocks - left_mean[:, None]) * (right_blocks - right_mean[:, None])
+    ).mean(axis=1)
     luminance_constant = (0.01 * 255) ** 2
     structure_constant = (0.03 * 255) ** 2
     similarity = (
         (2 * left_mean * right_mean + luminance_constant)
         * (2 * covariance + structure_constant)
-        / ((left_mean**2 + right_mean**2 + luminance_constant) * (left_variance + right_variance + structure_constant))
+        / (
+            (left_mean**2 + right_mean**2 + luminance_constant)
+            * (left_variance + right_variance + structure_constant)
+        )
     )
     return float(similarity.mean())
 
@@ -452,7 +562,10 @@ def add_distinct_candidates(
         if frame.index in selected_indexes:
             continue
         thumbnail = thumbnails[frame.index]
-        if any(block_ssim(thumbnail, kept) >= similarity_threshold for kept in retained_thumbnails):
+        if any(
+            block_ssim(thumbnail, kept) >= similarity_threshold
+            for kept in retained_thumbnails
+        ):
             continue
         combined.append(frame)
         retained_thumbnails.append(thumbnail)
@@ -483,7 +596,9 @@ def add_timestamp_footer(
     timestamp_seconds: float,
 ) -> np.ndarray:
     """Append a Pillow-rendered timestamp without covering frame content."""
-    footer = np.full((TIMESTAMP_FOOTER_HEIGHT, frame.shape[1], 3), (15, 17, 21), dtype=np.uint8)
+    footer = np.full(
+        (TIMESTAMP_FOOTER_HEIGHT, frame.shape[1], 3), (15, 17, 21), dtype=np.uint8
+    )
     footer[0] = (47, 52, 61)
     text = format_timestamp(timestamp_seconds)
     image = Image.fromarray(footer)
@@ -507,7 +622,9 @@ def render_timestamped_collages(
     """Decode selected frames once and stage timestamped 2x3 JPEG pages."""
     if not frames:
         return []
-    decode_frames = sorted({frame.index: frame for frame in frames}.values(), key=lambda frame: frame.index)
+    decode_frames = sorted(
+        {frame.index: frame for frame in frames}.values(), key=lambda frame: frame.index
+    )
     selection = "+".join(f"eq(n,{frame.index})" for frame in decode_frames)
     output = run_ffmpeg(
         ffmpeg_path,
@@ -532,17 +649,31 @@ def render_timestamped_collages(
     pixels = np.frombuffer(output, dtype=np.uint8)
     expected_size = len(decode_frames) * FRAME_HEIGHT * FRAME_WIDTH * 3
     if pixels.size != expected_size:
-        raise ValueError(f"Expected {expected_size} frame bytes, received {pixels.size}")
+        raise ValueError(
+            f"Expected {expected_size} frame bytes, received {pixels.size}"
+        )
     decoded = pixels.reshape(-1, FRAME_HEIGHT, FRAME_WIDTH, 3)
-    decoded_by_index = {selected.index: frame for selected, frame in zip(decode_frames, decoded, strict=True)}
-    tiles = [add_timestamp_footer(decoded_by_index[selected.index], selected.timestamp_seconds) for selected in frames]
+    decoded_by_index = {
+        selected.index: frame
+        for selected, frame in zip(decode_frames, decoded, strict=True)
+    }
+    tiles = [
+        add_timestamp_footer(
+            decoded_by_index[selected.index], selected.timestamp_seconds
+        )
+        for selected in frames
+    ]
 
     tile_height = FRAME_HEIGHT + TIMESTAMP_FOOTER_HEIGHT
-    collage_width = FRAME_WIDTH * COLLAGE_COLUMNS + COLLAGE_PADDING * (COLLAGE_COLUMNS + 1)
+    collage_width = FRAME_WIDTH * COLLAGE_COLUMNS + COLLAGE_PADDING * (
+        COLLAGE_COLUMNS + 1
+    )
     collage_height = tile_height * COLLAGE_ROWS + COLLAGE_PADDING * (COLLAGE_ROWS + 1)
     output_paths: list[Path] = []
     for page, offset in enumerate(range(0, len(tiles), FRAMES_PER_COLLAGE), start=1):
-        collage = np.full((collage_height, collage_width, 3), (10, 12, 15), dtype=np.uint8)
+        collage = np.full(
+            (collage_height, collage_width, 3), (10, 12, 15), dtype=np.uint8
+        )
         for index, tile in enumerate(tiles[offset : offset + FRAMES_PER_COLLAGE]):
             row, column = divmod(index, COLLAGE_COLUMNS)
             x = COLLAGE_PADDING + column * (FRAME_WIDTH + COLLAGE_PADDING)
@@ -587,16 +718,31 @@ def run_ffmpeg(
     """Run one bounded FFmpeg operation and preserve its diagnostic failure."""
     try:
         result = subprocess.run(  # noqa: S603 - executable is resolved from the local PATH and arguments are internally assembled.
-            [ffmpeg_path, "-hide_banner", "-loglevel", "error", "-threads", str(VISION_FFMPEG_THREADS), "-y", *arguments],
+            [
+                ffmpeg_path,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-threads",
+                str(VISION_FFMPEG_THREADS),
+                "-y",
+                *arguments,
+            ],
             input=input_bytes,
             capture_output=True,
             check=False,
             timeout=FFMPEG_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired as error:
-        raise RuntimeError(f"FFmpeg vision processing timed out after {FFMPEG_TIMEOUT_SECONDS} seconds") from error
+        raise RuntimeError(
+            f"FFmpeg vision processing timed out after {FFMPEG_TIMEOUT_SECONDS} seconds"
+        ) from error
     except OSError as error:
-        raise RuntimeError(f"Could not start FFmpeg vision processing: {error}") from error
+        raise RuntimeError(
+            f"Could not start FFmpeg vision processing: {error}"
+        ) from error
     if result.returncode:
-        raise RuntimeError(result.stderr.decode().strip() or "FFmpeg vision processing failed")
+        raise RuntimeError(
+            result.stderr.decode().strip() or "FFmpeg vision processing failed"
+        )
     return result.stdout

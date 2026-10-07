@@ -1,4 +1,4 @@
-"""Search request contracts validate caller policy before workflows touch YouTube, storage, or embeddings."""
+"""Search request contracts validate caller policy before workflows touch YouTube or embeddings."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Literal, get_args
 
 from ..identity import ChannelRef, is_channel_id, parse_channel_ref
 
-SearchSource = Literal["youtube", "channel", "db"]
+SearchSource = Literal["youtube", "channel"]
 SearchMode = Literal["native", "semantic"]
 SearchReturnType = Literal["video", "chunk"]
 SearchSort = Literal["relevance", "recency", "popularity"]
@@ -47,7 +47,9 @@ class ChannelTarget:
         if not is_exact_channel_ref(channel_ref):
             channel_name = channel_ref.strip()
             if not channel_name:
-                raise ValueError("channel target must include a name, handle, URL, or channel ID")
+                raise ValueError(
+                    "channel target must include a name, handle, URL, or channel ID"
+                )
             return cls(channel_name=channel_name)
         identity = parse_channel_ref(channel_ref)
         return cls(
@@ -64,13 +66,19 @@ class ChannelTarget:
             return self.youtube_channel_id
         if self.exact_ref is not None:
             return self.exact_ref
-        raise ValueError("channel target must include a channel ID, handle, URL, or resolved name")
+        raise ValueError(
+            "channel target must include a channel ID, handle, URL, or resolved name"
+        )
 
 
 def is_exact_channel_ref(channel_ref: ChannelRef) -> bool:
     stripped_ref = channel_ref.strip()
     stripped_path = stripped_ref.lstrip("/")
-    return stripped_ref.startswith(("@", "http://", "https://")) or stripped_path.startswith(("channel/", "user/", "c/")) or is_channel_id(stripped_path)
+    return (
+        stripped_ref.startswith(("@", "http://", "https://"))
+        or stripped_path.startswith(("channel/", "user/", "c/"))
+        or is_channel_id(stripped_path)
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,18 +156,20 @@ def resolve_sort(request: SearchRequest) -> SearchSort:
 
 
 def validate_request(request: SearchRequest) -> None:
-    """Validate the public search contract before any network, storage, or embedding work starts."""
+    """Validate the public search contract before any network or embedding work starts."""
     if any(source not in get_args(SearchSource) for source in request.sources):
-        raise ValueError("search source must be one of: youtube, channel, db")
+        raise ValueError("search source must be one of: youtube, channel")
     if len(set(request.sources)) != len(request.sources):
         raise ValueError("search sources must not contain duplicates")
     if request.mode not in get_args(SearchMode):
         raise ValueError("search mode must be one of: native, semantic")
-    if request.return_type is not None and request.return_type not in get_args(SearchReturnType):
+    if request.return_type is not None and request.return_type not in get_args(
+        SearchReturnType
+    ):
         raise ValueError("search return type must be one of: video, chunk")
     if request.sort is not None and request.sort not in get_args(SearchSort):
         raise ValueError("search sort must be one of: relevance, recency, popularity")
-    query_required = request.mode == "semantic" or any(source in ("youtube", "db") for source in request.sources)
+    query_required = request.mode == "semantic" or "youtube" in request.sources
     if query_required and not request.query.strip():
         raise ValueError("search query must be non-empty")
     if request.limit <= 0:
@@ -168,7 +178,11 @@ def validate_request(request: SearchRequest) -> None:
         raise ValueError("--min-views cannot be negative")
     min_duration_seconds = parse_duration(request.min_duration)
     max_duration_seconds = parse_duration(request.max_duration)
-    if min_duration_seconds is not None and max_duration_seconds is not None and min_duration_seconds > max_duration_seconds:
+    if (
+        min_duration_seconds is not None
+        and max_duration_seconds is not None
+        and min_duration_seconds > max_duration_seconds
+    ):
         raise ValueError("--min-duration cannot be greater than --max-duration")
     if request.title_prefilter_factor <= 0:
         raise ValueError("title prefilter factor must be greater than 0")
@@ -200,7 +214,11 @@ def validate_request(request: SearchRequest) -> None:
         raise ValueError("--channels requires --source channel")
     if "channel" in request.sources and not request.channels:
         raise ValueError("channel source requires at least one --channels value")
-    if request.mode == "native" and request.sources == ("youtube",) and request.sort == "recency":
+    if (
+        request.mode == "native"
+        and request.sources == ("youtube",)
+        and request.sort == "recency"
+    ):
         raise ValueError("native YouTube search does not support --sort recency")
 
 

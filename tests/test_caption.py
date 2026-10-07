@@ -6,7 +6,6 @@ import urllib.error
 import pytest
 
 from youtube_toolkit.schemas import TranscriptChunk
-from youtube_toolkit.storage import get_connection, get_stored_video, upsert_video
 from youtube_toolkit.stt import SpeechTranscription
 from youtube_toolkit.youtube.caption import (
     DEFAULT_TRANSCRIPT_LANGUAGES,
@@ -30,76 +29,6 @@ def test_remove_sponsorblock_chunks_drops_overlapping_chunks() -> None:
         TranscriptChunk(start_seconds=0, end_seconds=5, text="main"),
         TranscriptChunk(start_seconds=10, end_seconds=15, text="more"),
     ]
-
-
-def test_fetch_transcript_returns_stored_transcript_without_client(
-    monkeypatch,
-    tmp_path,
-) -> None:
-    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
-
-    with get_connection() as connection:
-        upsert_video(
-            connection,
-            {
-                "id": "JpSHyEIZ_bo",
-                "title": "Stored title",
-                "upload_date": "20260621",
-                "duration": 125.5,
-                "view_count": 42_000,
-                "like_count": 1_200,
-            },
-            transcript="Stored transcript.",
-        )
-
-    class FailingClient:
-        def metadata(self, video_ref: str) -> dict:
-            raise AssertionError("metadata should not be fetched")
-
-    document = fetch_transcript(
-        "https://www.youtube.com/watch?v=JpSHyEIZ_bo",
-        client=FailingClient(),
-        auto_index=False,
-    )
-
-    assert document.metadata.video_id == "JpSHyEIZ_bo"
-    assert document.metadata.title == "Stored title"
-    assert document.metadata.duration_seconds == 125.5
-    assert document.metadata.view_count == 42_000
-    assert document.metadata.like_count == 1_200
-    assert document.language == "stored"
-    assert document.source == "database"
-    assert document.text == "Stored transcript."
-    assert document.sections[0].text == "Stored transcript."
-
-
-def test_fetch_transcript_does_not_use_stored_transcript_for_custom_options(
-    monkeypatch,
-    tmp_path,
-) -> None:
-    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
-
-    with get_connection() as connection:
-        upsert_video(
-            connection,
-            {
-                "id": "JpSHyEIZ_bo",
-                "title": "Stored title",
-            },
-            transcript="Stored transcript.",
-        )
-
-    class FailingClient:
-        def metadata(self, video_ref: str) -> dict:
-            raise AssertionError("metadata fetched")
-
-    with pytest.raises(AssertionError, match="metadata fetched"):
-        fetch_transcript(
-            "https://www.youtube.com/watch?v=JpSHyEIZ_bo",
-            options=TranscriptOptions(languages=("zh",)),
-            client=FailingClient(),
-            auto_index=False,
-        )
 
 
 def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
@@ -131,13 +60,15 @@ def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
             language="zh",
         )
 
-    monkeypatch.setenv("YOUTUBE_TOOLKIT_STORAGE_HOME", str(tmp_path / "state"))
-    monkeypatch.setattr("youtube_toolkit.youtube.caption.transcribe_audio_details", fake_transcribe_audio_details)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "youtube_toolkit.youtube.caption.transcribe_audio_details",
+        fake_transcribe_audio_details,
+    )
 
     document = fetch_transcript(
         "JpSHyEIZ_bo",
         client=FakeClient(),
-        auto_index=False,
     )
 
     assert document.metadata.video_id == "JpSHyEIZ_bo"
@@ -147,15 +78,9 @@ def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
     assert document.text == "數據庫"
     assert not audio_path.exists()
 
-    with get_connection() as connection:
-        stored_video = get_stored_video(connection, "JpSHyEIZ_bo")
-    assert stored_video is not None
-    assert stored_video["title"] == "No captions"
-    assert stored_video["transcript"] == "數據庫"
 
-
-def test_fetch_transcript_uses_live_path_without_storage(monkeypatch) -> None:
-    """Public transcript retrieval stays stateless when storage is not installed."""
+def test_fetch_transcript_fetches_and_caches_captions(monkeypatch, tmp_path) -> None:
+    """Public transcript retrieval fetches captions into the current directory cache."""
 
     class FakeClient:
         def metadata(self, video_ref: str) -> dict:
@@ -184,7 +109,7 @@ def test_fetch_transcript_uses_live_path_without_storage(monkeypatch) -> None:
             ]
         },
     )
-    monkeypatch.setattr("youtube_toolkit.transcript.capability_available", lambda _capability: False)
+    monkeypatch.chdir(tmp_path)
 
     document = fetch_transcript("JpSHyEIZ_bo", client=FakeClient())
 
@@ -248,10 +173,14 @@ def test_fetch_caption_payload_retries_transient_network_failures(monkeypatch) -
             raise urllib.error.URLError("temporary outage")
         return FakeResponse()
 
-    monkeypatch.setattr("youtube_toolkit.youtube.caption.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        "youtube_toolkit.youtube.caption.urllib.request.urlopen", fake_urlopen
+    )
     monkeypatch.setattr("youtube_toolkit.youtube.caption.time.sleep", delays.append)
 
-    assert fetch_caption_payload("https://www.youtube.com/api/timedtext?v=example") == {"events": []}
+    assert fetch_caption_payload("https://www.youtube.com/api/timedtext?v=example") == {
+        "events": []
+    }
     assert attempts == 3
     assert delays == [0.25, 0.5]
 
@@ -291,7 +220,9 @@ def test_default_languages_include_chinese_caption_fallbacks() -> None:
         },
     }
 
-    assert select_caption_track(metadata, list(DEFAULT_TRANSCRIPT_LANGUAGES), "any") == (
+    assert select_caption_track(
+        metadata, list(DEFAULT_TRANSCRIPT_LANGUAGES), "any"
+    ) == (
         "https://www.youtube.com/api/timedtext?v=example&lang=zh-Hant",
         "zh-Hant",
         "subtitles",
@@ -318,7 +249,9 @@ def test_default_languages_prefer_hong_kong_and_cantonese_before_simplified() ->
         },
     }
 
-    assert select_caption_track(metadata, list(DEFAULT_TRANSCRIPT_LANGUAGES), "any") == (
+    assert select_caption_track(
+        metadata, list(DEFAULT_TRANSCRIPT_LANGUAGES), "any"
+    ) == (
         "https://www.youtube.com/api/timedtext?v=example&lang=yue-HK",
         "yue-HK",
         "subtitles",
@@ -346,8 +279,70 @@ def test_default_languages_prefer_manual_english_before_automatic_chinese() -> N
         },
     }
 
-    assert select_caption_track(metadata, list(DEFAULT_TRANSCRIPT_LANGUAGES), "any") == (
+    assert select_caption_track(
+        metadata, list(DEFAULT_TRANSCRIPT_LANGUAGES), "any"
+    ) == (
         "https://www.youtube.com/api/timedtext?v=example&lang=en",
         "en",
         "subtitles",
     )
+
+
+@pytest.mark.parametrize(
+    "options",
+    [TranscriptOptions(languages=("zh",)), TranscriptOptions(source="manual")],
+)
+def test_transcript_cache_preserves_timing_and_separates_caption_options(
+    monkeypatch, tmp_path, options
+) -> None:
+    """Equivalent video URLs reuse documents while different language/source policies fetch independently."""
+    from youtube_toolkit.schemas import (
+        TranscriptDocument,
+        TranscriptSection,
+        VideoMetadata,
+    )
+
+    monkeypatch.chdir(tmp_path)
+    calls = []
+    expected = TranscriptDocument(
+        metadata=VideoMetadata(
+            video_id="JpSHyEIZ_bo",
+            url="https://www.youtube.com/watch?v=JpSHyEIZ_bo",
+            title="Example",
+        ),
+        language="en",
+        source="manual",
+        chunks=[
+            TranscriptChunk(start_seconds=1.5, end_seconds=4.0, text="An example.")
+        ],
+        sections=[
+            TranscriptSection(
+                title="Opening", start_seconds=1.5, end_seconds=4.0, text="An example."
+            )
+        ],
+    )
+
+    def fetch(video_ref, *, options, client):
+        calls.append(options)
+        return expected
+
+    monkeypatch.setattr("youtube_toolkit.transcript.fetch_live_transcript", fetch)
+    assert fetch_transcript("JpSHyEIZ_bo") == expected
+    assert fetch_transcript("https://youtu.be/JpSHyEIZ_bo") == expected
+    assert len(calls) == 1
+    assert fetch_transcript("JpSHyEIZ_bo", options=options) == expected
+    assert len(calls) == 2
+    assert (
+        len(list((tmp_path / ".cache/youtube-toolkit/transcripts").glob("*.json"))) == 2
+    )
+
+    for path in (tmp_path / ".cache/youtube-toolkit/transcripts").glob("*.json"):
+        path.write_text("broken JSON", encoding="utf-8")
+    assert fetch_transcript("JpSHyEIZ_bo") == expected
+    assert len(calls) == 3
+
+    other = tmp_path / "other-task"
+    other.mkdir()
+    monkeypatch.chdir(other)
+    assert fetch_transcript("JpSHyEIZ_bo") == expected
+    assert len(calls) == 4
