@@ -37,7 +37,7 @@ SpeechToTextProvider = Literal["xai", "elevenlabs"]
 
 @dataclass(frozen=True, slots=True)
 class SpeechTranscription:
-    """Provider-neutral speech-to-text result used by storage and plain-text STT callers."""
+    """Provider-neutral speech-to-text result used by transcript documents and plain-text STT callers."""
 
     text: str
     language: str | None = None
@@ -103,7 +103,7 @@ def transcribe_audio_details(
     *,
     options: SpeechToTextOptions | None = None,
 ) -> SpeechTranscription:
-    """Preserve normalized provider metadata for storage and transcript-document workflows."""
+    """Preserve normalized provider metadata for transcript-document workflows."""
     if not audio_path.is_file():
         raise ValueError(f"audio file does not exist: {audio_path}")
     options = options or SpeechToTextOptions()
@@ -191,11 +191,17 @@ def run_json_request(
         )
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace").strip()
-        raise RuntimeError(f"{provider_name} STT request failed ({error.code}): {detail}") from error
+        raise RuntimeError(
+            f"{provider_name} STT request failed ({error.code}): {detail}"
+        ) from error
     except urllib.error.URLError as error:
-        raise RuntimeError(f"{provider_name} STT request failed: {error.reason}") from error
+        raise RuntimeError(
+            f"{provider_name} STT request failed: {error.reason}"
+        ) from error
     except json.JSONDecodeError as error:
-        raise RuntimeError(f"{provider_name} STT response was not valid JSON") from error
+        raise RuntimeError(
+            f"{provider_name} STT response was not valid JSON"
+        ) from error
 
 
 def encode_multipart_form(

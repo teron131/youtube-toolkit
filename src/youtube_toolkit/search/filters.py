@@ -7,7 +7,6 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from ..identity import extract_video_id
-from ..schemas import ChannelIdentity, extract_channel_identity
 from .request import (
     VIDEO_RESULT_KEYS,
     SearchRequest,
@@ -17,7 +16,9 @@ from .request import (
 )
 
 
-def interlace_relevance(candidate_lists: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
+def interlace_relevance(
+    candidate_lists: list[list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
     """Merge multiple relevance-ranked lists fairly while deduping by video ID."""
     merged: list[dict[str, Any]] = []
     seen_video_ids: set[str] = set()
@@ -48,23 +49,6 @@ def dedupe_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return merged
 
 
-def stored_candidate(video: dict[str, Any]) -> dict[str, Any]:
-    """Translate stored-video payloads into the candidate shape consumed by search ranking."""
-    video_id = video["youtube_video_id"] if "youtube_video_id" in video else video["video_id"]
-    return {
-        "id": video_id,
-        "title": video["title"],
-        "upload_date": video["upload_date"],
-        "duration": video["duration"],
-        "view_count": video["view_count"],
-        "like_count": video["like_count"],
-        "channel_id": video["channel_id"],
-        "channel_handle": video["channel_handle"],
-        "metadata_fetched_at": video["metadata_fetched_at"],
-        "transcript_fetched_at": video["transcript_fetched_at"],
-    }
-
-
 def candidate_ids(candidates: list[dict[str, Any]]) -> list[str]:
     video_ids: list[str] = []
     seen_video_ids: set[str] = set()
@@ -77,7 +61,7 @@ def candidate_ids(candidates: list[dict[str, Any]]) -> list[str]:
 
 
 def candidate_id(candidate: dict[str, Any]) -> str | None:
-    """Resolve a candidate's video ID from the known yt-dlp, stored, and URL fields."""
+    """Resolve a candidate's video ID from the known yt-dlp and URL fields."""
     for key in ("id", "video_id", "url", "webpage_url"):
         value = candidate.get(key)
         if isinstance(value, str):
@@ -87,38 +71,22 @@ def candidate_id(candidate: dict[str, Any]) -> str | None:
     return None
 
 
-def is_blacklisted_channel(
-    candidate: dict[str, Any],
-    blacklisted_channels: tuple[ChannelIdentity, ...],
-) -> bool:
-    """Return whether a candidate's channel identity matches the local blacklist."""
-    if not blacklisted_channels:
-        return False
-    candidate_channel = extract_channel_identity(candidate)
-    if not candidate_channel.has_identity():
-        return False
-    for blacklisted_channel in blacklisted_channels:
-        same_channel_id = candidate_channel.youtube_channel_id is not None and candidate_channel.youtube_channel_id == blacklisted_channel.youtube_channel_id
-        same_channel_handle = candidate_channel.channel_handle is not None and candidate_channel.channel_handle == blacklisted_channel.channel_handle
-        if same_channel_id or same_channel_handle:
-            return True
-    return False
-
-
 def chunk_result(
     row: dict[str, Any],
     video: dict[str, Any] | None,
     *,
     warnings: list[str] | None,
 ) -> dict[str, Any]:
-    """Semantic chunk results keep video metadata optional because chunk indexing can outlive video projection."""
+    """Semantic chunk results keep video metadata optional for incomplete provider responses."""
     result = {
         "type": "chunk",
         "video_id": row["video_id"],
         "chunk_index": row["chunk_index"],
         "text": row["text"],
         "score": float(row["similarity"]),
-        "video": None if video is None else {key: video.get(key) for key in VIDEO_RESULT_KEYS},
+        "video": None
+        if video is None
+        else {key: video.get(key) for key in VIDEO_RESULT_KEYS},
     }
     if warnings:
         result["warnings"] = warnings
@@ -174,7 +142,10 @@ def sortable(value: Any) -> SortableValue | None:
     if isinstance(value, int | float):
         return value
     if isinstance(value, tuple):
-        if all(isinstance(item, int | float) and not isinstance(item, bool) for item in value):
+        if all(
+            isinstance(item, int | float) and not isinstance(item, bool)
+            for item in value
+        ):
             return value
         return None
     if isinstance(value, str):
@@ -203,24 +174,17 @@ def filter_candidates(
     candidates: list[dict[str, Any]],
     request: SearchRequest,
     *,
-    blacklisted_channels: tuple[ChannelIdentity, ...] | None = None,
     include_upload_date: bool = True,
 ) -> list[dict[str, Any]]:
-    """Apply local filters with either an explicit blacklist or the current stored blacklist."""
+    """Apply the request's metadata filters without persistent state."""
     if not candidates:
         return []
-    if blacklisted_channels is None:
-        from ..storage import get_connection, list_blacklist_channel_identities
-
-        with get_connection() as connection:
-            blacklisted_channels = tuple(list_blacklist_channel_identities(connection))
     return [
         candidate
         for candidate in candidates
         if passes_filters(
             candidate,
             request,
-            blacklisted_channels,
             include_upload_date=include_upload_date,
         )
     ]
@@ -229,26 +193,29 @@ def filter_candidates(
 def passes_filters(
     candidate: dict[str, Any],
     request: SearchRequest,
-    blacklisted_channels: tuple[ChannelIdentity, ...],
     *,
     include_upload_date: bool = True,
 ) -> bool:
-    """Evaluate all local metadata and blacklist filters for a single candidate."""
+    """Evaluate all local metadata filters for a single candidate."""
     if candidate_id(candidate) is None:
-        return False
-    if is_blacklisted_channel(candidate, blacklisted_channels):
         return False
 
     view_count = candidate.get("view_count")
-    if request.min_views is not None and (not isinstance(view_count, int) or view_count < request.min_views):
+    if request.min_views is not None and (
+        not isinstance(view_count, int) or view_count < request.min_views
+    ):
         return False
 
     duration = candidate.get("duration")
     min_duration_seconds = parse_duration(request.min_duration)
     max_duration_seconds = parse_duration(request.max_duration)
-    if min_duration_seconds is not None and (not isinstance(duration, int | float) or duration < min_duration_seconds):
+    if min_duration_seconds is not None and (
+        not isinstance(duration, int | float) or duration < min_duration_seconds
+    ):
         return False
-    if max_duration_seconds is not None and (not isinstance(duration, int | float) or duration > max_duration_seconds):
+    if max_duration_seconds is not None and (
+        not isinstance(duration, int | float) or duration > max_duration_seconds
+    ):
         return False
 
     cutoff = upload_cutoff(request)
@@ -258,14 +225,22 @@ def passes_filters(
             return False
 
     channel = channel_text(candidate)
-    if not text_matches(channel, request.include_channel) or text_excluded(channel, request.exclude_channel):
+    if not text_matches(channel, request.include_channel) or text_excluded(
+        channel, request.exclude_channel
+    ):
         return False
 
     title = candidate.get("title")
-    if not text_matches(title, request.include_title) or text_excluded(title, request.exclude_title):
+    if not text_matches(title, request.include_title) or text_excluded(
+        title, request.exclude_title
+    ):
         return False
 
-    if request.mode == "native" and candidate.get("source") == "channel" and request.query.strip():
+    if (
+        request.mode == "native"
+        and candidate.get("source") == "channel"
+        and request.query.strip()
+    ):
         return text_matches(title, (request.query,))
     return True
 
@@ -312,127 +287,23 @@ def text_excluded(
     return any(needle.casefold() in haystack for needle in needles)
 
 
-def db_chunk_filter(
-    request: SearchRequest,
-    blacklisted_channels: tuple[ChannelIdentity, ...],
-) -> str | None:
-    """Translate DB-applicable search filters into a SQL fragment for chunk search."""
-    from ..storage.connection import filter_in_values
-
-    clauses = db_metadata_filter_clauses(request)
-
-    blacklisted_channel_ids = [channel.youtube_channel_id for channel in blacklisted_channels if channel.youtube_channel_id is not None]
-    if blacklisted_channel_ids:
-        clauses.append(f"(channel_id IS NULL OR channel_id NOT IN ({filter_in_values(blacklisted_channel_ids)}))")
-
-    blacklisted_handles = [channel.channel_handle for channel in blacklisted_channels if channel.channel_handle is not None]
-    if blacklisted_handles:
-        clauses.append(f"(channel_handle IS NULL OR channel_handle NOT IN ({filter_in_values(blacklisted_handles)}))")
-
-    add_text_filter_clauses(
-        clauses,
-        columns=(
-            "channel_id",
-            "channel_handle",
-        ),
-        include=request.include_channel,
-        exclude=request.exclude_channel,
-        channel_aliases=True,
-    )
-
-    if not clauses:
-        return None
-    return " AND ".join(f"({clause})" for clause in clauses)
-
-
-def db_video_filter(
-    request: SearchRequest,
-    blacklisted_channels: tuple[ChannelIdentity, ...],
-) -> str | None:
-    """Translate filters owned by stored video columns into a native LanceDB predicate."""
-    from ..storage.connection import filter_in_values
-
-    clauses = db_metadata_filter_clauses(request)
-
-    blacklisted_channel_ids = [channel.youtube_channel_id for channel in blacklisted_channels if channel.youtube_channel_id is not None]
-    if blacklisted_channel_ids:
-        clauses.append(f"(channel_id IS NULL OR channel_id NOT IN ({filter_in_values(blacklisted_channel_ids)}))")
-
-    if not clauses:
-        return None
-    return " AND ".join(f"({clause})" for clause in clauses)
-
-
-def db_metadata_filter_clauses(request: SearchRequest) -> list[str]:
-    """Build native numeric, date, and title clauses shared by stored DB searches."""
-    from ..storage.connection import filter_literal
-
-    clauses: list[str] = []
-    if request.min_views is not None:
-        clauses.append(f"view_count >= {request.min_views}")
-
-    min_duration_seconds = parse_duration(request.min_duration)
-    max_duration_seconds = parse_duration(request.max_duration)
-    if min_duration_seconds is not None:
-        clauses.append(f"duration >= {min_duration_seconds}")
-    if max_duration_seconds is not None:
-        clauses.append(f"duration <= {max_duration_seconds}")
-
-    cutoff = upload_cutoff(request)
-    if cutoff is not None:
-        clauses.append(f"upload_date >= {filter_literal(cutoff)}")
-
-    add_text_filter_clauses(
-        clauses,
-        columns=("title",),
-        include=request.include_title,
-        exclude=request.exclude_title,
-    )
-    return clauses
-
-
-def add_text_filter_clauses(
-    clauses: list[str],
-    *,
-    columns: tuple[str, ...],
-    include: tuple[str, ...],
-    exclude: tuple[str, ...],
-    channel_aliases: bool = False,
-) -> None:
-    """Append native all-include and any-exclude substring rules for trusted columns."""
-    for needle in include:
-        clauses.append(text_filter_clause(columns, needle, channel_aliases=channel_aliases))
-    for needle in exclude:
-        clauses.append(f"NOT ({text_filter_clause(columns, needle, channel_aliases=channel_aliases)})")
-
-
-def text_filter_clause(
-    columns: tuple[str, ...],
-    needle: str,
-    *,
-    channel_aliases: bool,
-) -> str:
-    """Build one case-insensitive substring rule across equivalent stored text columns."""
-    from ..storage.connection import filter_contains_case_insensitive
-
-    predicates = [filter_contains_case_insensitive(column_name, needle) for column_name in columns]
-    if channel_aliases and needle.startswith("@") and len(needle) > 1:
-        predicates.extend(filter_contains_case_insensitive(column_name, needle[1:]) for column_name in columns)
-    return " OR ".join(f"({predicate})" for predicate in predicates)
-
-
 def upload_cutoff(request: SearchRequest) -> str | None:
     """Resolve the strictest upload-date cutoff from absolute and relative filters."""
     cutoffs: list[str] = []
     if request.uploaded_after is not None:
         cutoffs.append(normalize_filter_date(request.uploaded_after))
     if request.uploaded_within_days is not None:
-        cutoffs.append((datetime.now(UTC).astimezone().date() - timedelta(days=request.uploaded_within_days)).isoformat())
+        cutoffs.append(
+            (
+                datetime.now(UTC).astimezone().date()
+                - timedelta(days=request.uploaded_within_days)
+            ).isoformat()
+        )
     return max(cutoffs) if cutoffs else None
 
 
 def normalized_upload_date(value: Any) -> str | None:
-    """Normalize candidate upload dates from yt-dlp or stored ISO text for comparisons."""
+    """Normalize candidate upload dates from yt-dlp or ISO text for comparisons."""
     if not isinstance(value, str):
         return None
     stripped_value = value.strip()

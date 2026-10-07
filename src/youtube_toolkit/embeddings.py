@@ -1,10 +1,10 @@
-"""Configured embedding API client shared by stateless search and storage indexing."""
+"""Environment-configured embedding API client for in-memory semantic search."""
 
 from __future__ import annotations
 
-from typing import Any
 import json
 import time
+from typing import Any
 import urllib.error
 import urllib.request
 
@@ -41,7 +41,9 @@ def embed_text(
     )
     data = response.get("data")
     first_embedding = data[0] if isinstance(data, list) and data else {}
-    values = first_embedding.get("embedding") if isinstance(first_embedding, dict) else None
+    values = (
+        first_embedding.get("embedding") if isinstance(first_embedding, dict) else None
+    )
     if values is None:
         values = response.get("embedding")
     if not isinstance(values, list):
@@ -71,7 +73,9 @@ def post_embedding_json(
         with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310
             response_payload = json.loads(response.read().decode("utf-8"))
         if not isinstance(response_payload, dict):
-            raise json.JSONDecodeError("Embedding response was not a JSON object", "", 0)
+            raise json.JSONDecodeError(
+                "Embedding response was not a JSON object", "", 0
+            )
         return response_payload
 
     try:
@@ -83,8 +87,12 @@ def post_embedding_json(
             sleep=time.sleep,
         )
     except urllib.error.HTTPError as error:
-        message = compact_embedding_error(error.read().decode("utf-8", errors="replace"))
-        raise EmbeddingError(message or f"Embedding request HTTP {error.code}") from error
+        message = compact_embedding_error(
+            error.read().decode("utf-8", errors="replace")
+        )
+        raise EmbeddingError(
+            message or f"Embedding request HTTP {error.code}"
+        ) from error
     except (OSError, json.JSONDecodeError) as error:
         raise EmbeddingError(str(error)) from error
 

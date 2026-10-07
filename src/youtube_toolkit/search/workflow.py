@@ -1,6 +1,6 @@
 """Search workflow orchestration for mixable source, mode, and return-type choices.
 
-Sources discover candidate videos from YouTube, channel listings, stored rows, or any combination of those.
+Sources discover candidate videos from YouTube, channel listings, or their combination.
 Native mode stays metadata-first and returns video objects after local filters, ranking, and limits.
 Semantic mode runs title, transcript, chunk-index, and scoring stages, then returns chunks by default.
 Full transcript output remains an explicit transcript command rather than a search side effect.
@@ -9,12 +9,10 @@ Full transcript output remains an explicit transcript command rather than a sear
 from __future__ import annotations
 
 from typing import Any
-from uuid import uuid4
 
-from ..capabilities import capability_available, require_capability
 from ..identity import parse_channel_ref
 from ..schemas import ChannelIdentity, extract_channel_identity
-from ..youtube.channels import ChannelOptions, fetch_channel_metadata
+from ..youtube.channels import ChannelOptions, fetch_channel_videos
 from ..youtube.client import YtDlpClient
 from .filters import (
     candidate_id,
@@ -50,26 +48,12 @@ from .semantic import (
 
 
 def search(request: SearchRequest) -> list[dict[str, Any]]:
-    """Run the public search workflow across configured sources, filters, persistence, and result shapes."""
+    """Run the public search workflow across configured sources, filters, and result shapes."""
     validate_request(request)
-    if "db" in request.sources:
-        require_capability("storage", "database search")
-        from .database import search_db_chunks, search_db_videos
-
     limit = request.limit
     return_type = resolve_return_type(request)
     sort = resolve_sort(request)
-    if request.sources == ("db",) and return_type == "chunk":
-        return search_db_chunks(
-            request,
-            limit=limit,
-        )
-    if request.sources == ("db",) and request.mode == "semantic":
-        return search_db_videos(
-            request,
-            limit=limit,
-        )
-    semantic_state = SemanticSearchState(database_available=capability_available("storage")) if request.mode == "semantic" else None
+    semantic_state = SemanticSearchState() if request.mode == "semantic" else None
 
     candidates = dedupe_candidates(
         collect_sources(
@@ -77,24 +61,11 @@ def search(request: SearchRequest) -> list[dict[str, Any]]:
             limit,
         )
     )
-    storage_warnings: list[str] = []
     if upload_cutoff(request) is not None:
-        candidates, warnings = filter_search_candidates(
-            candidates,
-            request,
-            semantic_state=semantic_state,
-            include_upload_date=False,
-        )
-        storage_warnings.extend(warning for warning in warnings if warning not in storage_warnings)
+        candidates = filter_candidates(candidates, request, include_upload_date=False)
         candidates = fetch_metadata_for_date_filters(candidates, request)
-    candidates, warnings = filter_search_candidates(
-        candidates,
-        request,
-        semantic_state=semantic_state,
-    )
-    storage_warnings.extend(warning for warning in warnings if warning not in storage_warnings)
+    candidates = filter_candidates(candidates, request)
     if semantic_state is not None:
-        semantic_state.warnings.extend(warning for warning in storage_warnings if warning not in semantic_state.warnings)
         candidates = [
             {
                 **candidate,
@@ -102,21 +73,15 @@ def search(request: SearchRequest) -> list[dict[str, Any]]:
             }
             for candidate in candidates
         ]
-        session_id = uuid4().hex
         candidates = prefilter_by_title_semantics(
             request,
             candidates,
             semantic_state,
-            session_id=session_id,
         )
-        documents, transcript_failures = fetch_semantic_transcripts(
-            candidates,
-            semantic_state,
-        )
+        documents, transcript_failures = fetch_semantic_transcripts(candidates)
         semantic_index = prepare_semantic_index(
             candidates,
             documents,
-            semantic_state,
         )
         ensure_semantic_index(
             semantic_index,
@@ -124,10 +89,8 @@ def search(request: SearchRequest) -> list[dict[str, Any]]:
         )
         scores = score_semantic_index(
             request,
-            candidates,
             semantic_index,
             semantic_state,
-            return_type=return_type,
         )
         return project_semantic_results(
             request,
@@ -138,84 +101,21 @@ def search(request: SearchRequest) -> list[dict[str, Any]]:
             transcript_failures,
             return_type=return_type,
         )
-    session_id = uuid4().hex
-    stage_search_candidates(
-        request,
-        session_id,
-        candidates,
-    )
-    if request.mode == "native" and sort == "recency":
+    if sort == "recency":
         candidates = rank_by_value(
             candidates,
             value=lambda candidate: candidate.get("upload_date"),
         )
-    elif request.mode == "native" and sort == "popularity":
+    elif sort == "popularity":
         candidates = rank_by_value(
             candidates,
             value=popularity,
         )
 
-    candidates = candidates[:limit]
-    persist_metadata(candidates)
-    warnings_by_video_id = {}
-    return [video_result(candidate, warnings_by_video_id=warnings_by_video_id) for candidate in candidates[:limit]]
-
-
-def filter_search_candidates(
-    candidates: list[dict[str, Any]],
-    request: SearchRequest,
-    *,
-    semantic_state: SemanticSearchState | None = None,
-    include_upload_date: bool = True,
-) -> tuple[list[dict[str, Any]], tuple[str, ...]]:
-    """Let fresh semantic search continue without stored blacklist state when DB access is denied."""
-    if not capability_available("storage"):
-        return (
-            filter_candidates(
-                candidates,
-                request,
-                blacklisted_channels=(),
-                include_upload_date=include_upload_date,
-            ),
-            (),
-        )
-    if semantic_state is not None and not semantic_state.database_available:
-        return (
-            filter_candidates(
-                candidates,
-                request,
-                blacklisted_channels=(),
-                include_upload_date=include_upload_date,
-            ),
-            (),
-        )
-    try:
-        return (
-            filter_candidates(
-                candidates,
-                request,
-                include_upload_date=include_upload_date,
-            ),
-            (),
-        )
-    except Exception as error:
-        from ..storage.connection import is_database_write_permission_error
-
-        if not is_database_write_permission_error(error):
-            raise
-        if request.mode != "semantic" or "db" in request.sources:
-            raise
-        if semantic_state is not None:
-            semantic_state.database_available = False
-        return (
-            filter_candidates(
-                candidates,
-                request,
-                blacklisted_channels=(),
-                include_upload_date=include_upload_date,
-            ),
-            ("Database unavailable; stored blacklist was not applied",),
-        )
+    return [
+        video_result(candidate, warnings_by_video_id={})
+        for candidate in candidates[:limit]
+    ]
 
 
 def collect_sources(
@@ -232,7 +132,9 @@ def collect_sources(
             candidates.extend(
                 youtube_candidates(
                     request,
-                    fetch_limit=date_fetch_limit if upload_cutoff(request) is not None else source_fetch_limit,
+                    fetch_limit=date_fetch_limit
+                    if upload_cutoff(request) is not None
+                    else source_fetch_limit,
                     sort=sort,
                 )
             )
@@ -240,20 +142,9 @@ def collect_sources(
             candidates.extend(
                 channel_candidates(
                     request,
-                    limit=date_fetch_limit if upload_cutoff(request) is not None else limit,
-                )
-            )
-        elif source == "db":
-            from .database import db_candidates, db_semantic_candidates
-
-            if request.mode == "semantic":
-                candidates.extend(db_semantic_candidates(request))
-                continue
-            candidates.extend(
-                db_candidates(
-                    request,
-                    limit=date_fetch_limit if upload_cutoff(request) is not None else source_fetch_limit,
-                    sort=sort,
+                    limit=date_fetch_limit
+                    if upload_cutoff(request) is not None
+                    else limit,
                 )
             )
         else:
@@ -271,7 +162,10 @@ def fetch_metadata_for_date_filters(
     client = YtDlpClient()
     enriched_candidates: list[dict[str, Any]] = []
     for candidate in candidates:
-        if candidate.get("source") != "youtube" or candidate.get("upload_date") is not None:
+        if (
+            candidate.get("source") != "youtube"
+            or candidate.get("upload_date") is not None
+        ):
             enriched_candidates.append(candidate)
             continue
         video_id = candidate_id(candidate)
@@ -319,7 +213,9 @@ def youtube_candidates(
             }
             for candidate in interlace_relevance(candidate_lists)
         ]
-    candidates = [candidate for candidates in candidate_lists for candidate in candidates]
+    candidates = [
+        candidate for candidates in candidate_lists for candidate in candidates
+    ]
     return [
         {
             **candidate,
@@ -354,7 +250,7 @@ def channel_candidates(
     candidates: list[dict[str, Any]] = []
     for selection in request.channels:
         channel_ref, channel_identity = resolve_channel_listing(selection)
-        metadata = fetch_channel_metadata(
+        metadata = fetch_channel_videos(
             channel_ref,
             options=ChannelOptions(last=limit),
         )
@@ -382,13 +278,20 @@ def resolve_channel_listing(selection: ChannelTarget) -> tuple[str, ChannelIdent
             parse_channel_ref(channel_ref),
         )
     wanted_name = normalized_channel_name(selection.channel_name)
-    for query in (selection.channel_name, f"{selection.channel_name} official YouTube channel"):
+    for query in (
+        selection.channel_name,
+        f"{selection.channel_name} official YouTube channel",
+    ):
         for match in youtube_search(
             query,
             fetch_limit=CHANNEL_NAME_SEARCH_LIMIT,
             sort="relevance",
         ):
-            if not any(normalized_channel_name(value) == wanted_name for value in (match.get("channel"), match.get("uploader")) if isinstance(value, str)):
+            if not any(
+                normalized_channel_name(value) == wanted_name
+                for value in (match.get("channel"), match.get("uploader"))
+                if isinstance(value, str)
+            ):
                 continue
             identity = extract_channel_identity(match)
             channel_ref = identity.youtube_channel_id or identity.channel_handle
@@ -397,7 +300,9 @@ def resolve_channel_listing(selection: ChannelTarget) -> tuple[str, ChannelIdent
                     channel_ref,
                     identity,
                 )
-    raise ValueError(f"Could not resolve YouTube channel name: {selection.channel_name}")
+    raise ValueError(
+        f"Could not resolve YouTube channel name: {selection.channel_name}"
+    )
 
 
 def normalized_channel_name(value: str) -> str:
@@ -419,39 +324,11 @@ def channel_entries(
     return [
         {
             **entry,
-            "channel_id": entry.get("channel_id") or channel_identity.youtube_channel_id,
-            "channel_handle": entry.get("channel_handle") or channel_identity.channel_handle,
+            "channel_id": entry.get("channel_id")
+            or channel_identity.youtube_channel_id,
+            "channel_handle": entry.get("channel_handle")
+            or channel_identity.channel_handle,
         }
         for entry in metadata.get("entries") or []
         if isinstance(entry, dict)
     ]
-
-
-def persist_metadata(candidates: list[dict[str, Any]]) -> None:
-    """Persist candidate metadata so future transcript, summary, and DB searches share one catalog."""
-    if not candidates or not capability_available("storage"):
-        return
-    from ..storage import get_connection, upsert_video
-
-    with get_connection() as connection:
-        for candidate in candidates:
-            upsert_video(connection, candidate)
-
-
-def stage_search_candidates(
-    request: SearchRequest,
-    session_id: str,
-    candidates: list[dict[str, Any]],
-) -> None:
-    """Persist non-DB search candidates for title-embedding prefiltering within this search session."""
-    if not capability_available("storage") or not any(candidate.get("source") != "db" for candidate in candidates):
-        return
-    from ..storage import get_connection, store_search_candidates
-
-    with get_connection() as connection:
-        store_search_candidates(
-            connection,
-            session_id,
-            request.query,
-            candidates,
-        )

@@ -1,21 +1,14 @@
-"""Model clients read validated API configuration from environment first, then installed-app settings."""
+"""Optional semantic search reads embedding API configuration from the process environment."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 import os
-from pathlib import Path
 from urllib.parse import urlparse
 
-from .capabilities import capability_available, require_capability
-
-APP_STATE_DIRNAME = "youtube-toolkit"
-CONFIG_FILENAME = "config.env"
 EMBEDDING_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
 DEFAULT_EMBEDDING_DIMENSIONALITY = 1536
-DEFAULT_EMBEDDING_AUTO_INDEX = True
 DEFAULT_EMBEDDING_CONCURRENCY = 16
 MAX_EMBEDDING_CONCURRENCY = 50
 MODEL_CONFIG_KEYS = (
@@ -23,22 +16,13 @@ MODEL_CONFIG_KEYS = (
     "EMBEDDING_BASE_URL",
     "EMBEDDING_MODEL",
     "EMBEDDING_DIMENSIONS",
-    "EMBEDDING_AUTO_INDEX",
     "EMBEDDING_CONCURRENCY",
-    "LLM_API_KEY",
-    "LLM_BASE_URL",
-    "LLM_MODEL",
-)
-LLM_REQUIRED_CONFIG = (
-    ("LLM_API_KEY", "API key"),
-    ("LLM_BASE_URL", "base URL"),
-    ("LLM_MODEL", "model"),
 )
 
 
 @dataclass(frozen=True, slots=True)
 class ModelConfig:
-    """Validated model API endpoint configuration shared by LLM and embedding clients."""
+    """Validated model API endpoint configuration for embedding requests."""
 
     model: str
     api_key: str
@@ -90,18 +74,16 @@ def embedding_config_from_env(
         model=model or config_value("EMBEDDING_MODEL") or DEFAULT_EMBEDDING_MODEL,
         api_key=api_key,
         base_url=base_url or config_value("EMBEDDING_BASE_URL") or EMBEDDING_BASE_URL,
-        output_dimensionality=output_dimensionality or config_int_value("EMBEDDING_DIMENSIONS", DEFAULT_EMBEDDING_DIMENSIONALITY),
+        output_dimensionality=output_dimensionality
+        or config_int_value("EMBEDDING_DIMENSIONS", DEFAULT_EMBEDDING_DIMENSIONALITY),
     )
-
-
-def embedding_auto_index_enabled() -> bool:
-    """Write workflows use this as the best-effort embedding maintenance policy."""
-    return config_bool_value("EMBEDDING_AUTO_INDEX", DEFAULT_EMBEDDING_AUTO_INDEX)
 
 
 def embedding_concurrency(job_count: int) -> int:
     """Clamp embedding worker count to the configured limit and the amount of pending work."""
-    configured_concurrency = config_int_value("EMBEDDING_CONCURRENCY", DEFAULT_EMBEDDING_CONCURRENCY)
+    configured_concurrency = config_int_value(
+        "EMBEDDING_CONCURRENCY", DEFAULT_EMBEDDING_CONCURRENCY
+    )
     return min(
         job_count,
         max(
@@ -111,23 +93,12 @@ def embedding_concurrency(job_count: int) -> int:
     )
 
 
-def llm_config_from_env() -> ModelConfig:
-    """LLM callers require all config values because summarization has no local fallback."""
-    return ModelConfig(
-        model=required_config_value("LLM_MODEL"),
-        api_key=required_config_value("LLM_API_KEY"),
-        base_url=required_config_value("LLM_BASE_URL"),
-    )
-
-
 def config_value(name: str) -> str | None:
-    """Read one supported model setting from environment first, then app-local config."""
+    """Read one supported embedding setting from the process environment."""
     if name not in MODEL_CONFIG_KEYS:
         raise ValueError(f"Unsupported model config key: {name}")
     value = os.environ.get(name, "").strip()
-    if value:
-        return value
-    return app_config_values().get(name)
+    return value or None
 
 
 def required_config_value(name: str) -> str:
@@ -149,68 +120,3 @@ def config_int_value(
     if not value.isdigit():
         raise ValueError(f"Model config value must be a positive integer: {name}")
     return int(value)
-
-
-def config_bool_value(
-    name: str,
-    default: bool,
-) -> bool:
-    """Read a boolean model setting using the accepted CLI-style truthy and falsy strings."""
-    value = config_value(name)
-    if value is None:
-        return default
-    normalized = value.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    raise ValueError(f"Model config value must be a boolean: {name}")
-
-
-def app_config_path() -> Path:
-    """Installed CLI config uses the platform data directory so tool installs do not depend on repo checkouts."""
-    require_capability("storage", "persistent model configuration")
-    from platformdirs import user_data_path
-
-    return user_data_path(APP_STATE_DIRNAME) / CONFIG_FILENAME
-
-
-def app_config_values() -> dict[str, str]:
-    """Read persisted app-local model settings without consulting the environment."""
-    if not capability_available("storage"):
-        return {}
-    file_path = app_config_path()
-    if not file_path.exists():
-        return {}
-    values: dict[str, str] = {}
-    for line in file_path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, raw_value = stripped.split("=", 1)
-        value = raw_value.strip().strip("'\"")
-        if key.strip():
-            values[key.strip()] = value
-    return values
-
-
-def write_model_config(updates: Mapping[str, str | int | None]) -> Path:
-    """Persist supported model settings while preserving unset keys and secure file permissions."""
-    values = app_config_values()
-    for key, raw_value in updates.items():
-        if key not in MODEL_CONFIG_KEYS:
-            raise ValueError(f"Unsupported model config key: {key}")
-        value = str(raw_value).strip() if raw_value is not None else ""
-        if "\n" in value or "\r" in value:
-            raise ValueError(f"Model config value cannot contain newlines: {key}")
-        if value:
-            values[key] = value
-        else:
-            values.pop(key, None)
-
-    file_path = app_config_path()
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    text = "".join(f"{key}={values[key]}\n" for key in MODEL_CONFIG_KEYS if values.get(key))
-    file_path.write_text(text, encoding="utf-8")
-    file_path.chmod(0o600)
-    return file_path

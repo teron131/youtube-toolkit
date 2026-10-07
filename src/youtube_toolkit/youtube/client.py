@@ -11,13 +11,19 @@ from typing import Any
 from urllib.parse import urlencode
 from uuid import uuid4
 
-from ..identity import ALLOWED_VIDEO_HOSTS, VideoRef, normalize_youtube_url, require_video_id, validate_url
+from ..cache import REQUEST_MAX_AGE_SECONDS, cache_root, read_cache, write_cache
+from ..identity import (
+    ALLOWED_VIDEO_HOSTS,
+    VideoRef,
+    normalize_youtube_url,
+    require_video_id,
+    validate_url,
+)
 
 SEARCH_SORT_PARAMS = {
     "relevance": "EgIQAQ==",  # boolean "true"
     "popularity": "CAMSAhAB",  # sort search results by view count in descending order
 }
-DEFAULT_AUDIO_DIR = Path(".cache/audio")
 STT_AUDIO_FORMAT_SELECTOR = "bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio[ext=aac]"
 # Budget one quarter of the host for each job while capping low-resolution codec parallelism.
 VISION_FFMPEG_THREADS = max(1, min(4, (os.process_cpu_count() or 1) // 4))
@@ -31,7 +37,7 @@ class YtDlpClient:
 
     def command_prefix(self) -> list[str]:
         """Return the Python-module command prefix used to invoke yt-dlp from this environment."""
-        return [sys.executable, "-m", "yt_dlp"]
+        return [sys.executable, "-m", "yt_dlp", "--no-cache-dir"]
 
     def metadata(self, video_ref: VideoRef) -> dict[str, Any]:
         """Fetch full yt-dlp metadata for one validated YouTube video reference."""
@@ -110,7 +116,7 @@ class YtDlpClient:
         video_id = require_video_id(video_ref)
         url = normalize_youtube_url(video_ref)
         validate_url(url, allowed_hosts=ALLOWED_VIDEO_HOSTS)
-        output_stem = DEFAULT_AUDIO_DIR / f"{video_id}-{uuid4().hex}"
+        output_stem = cache_root() / "audio" / f"{video_id}-{uuid4().hex}"
         output_stem.parent.mkdir(parents=True, exist_ok=True)
         command = [
             *self.command_prefix(),
@@ -132,7 +138,11 @@ class YtDlpClient:
         if result.returncode != 0:
             detail = result.stderr.strip() or "yt-dlp audio download failed"
             raise RuntimeError(detail)
-        candidates = [path for path in output_stem.parent.glob(f"{output_stem.name}.*") if path.is_file()]
+        candidates = [
+            path
+            for path in output_stem.parent.glob(f"{output_stem.name}.*")
+            if path.is_file()
+        ]
         if candidates:
             return max(
                 candidates,
@@ -174,9 +184,13 @@ class YtDlpClient:
                 timeout=VISION_VIDEO_DOWNLOAD_TIMEOUT_SECONDS,
             )
         except subprocess.TimeoutExpired as error:
-            raise RuntimeError(f"yt-dlp video download for vision timed out after {VISION_VIDEO_DOWNLOAD_TIMEOUT_SECONDS} seconds") from error
+            raise RuntimeError(
+                f"yt-dlp video download for vision timed out after {VISION_VIDEO_DOWNLOAD_TIMEOUT_SECONDS} seconds"
+            ) from error
         except OSError as error:
-            raise RuntimeError(f"Could not start yt-dlp video download for vision: {error}") from error
+            raise RuntimeError(
+                f"Could not start yt-dlp video download for vision: {error}"
+            ) from error
         if result.returncode != 0:
             detail = result.stderr.strip() or "yt-dlp video download for vision failed"
             raise RuntimeError(detail)
@@ -184,7 +198,9 @@ class YtDlpClient:
             raise RuntimeError(f"yt-dlp completed but did not create {output_path}")
         if output_path.stat().st_size > max_bytes:
             output_path.unlink()
-            raise RuntimeError(f"yt-dlp video download for vision exceeded {max_bytes} bytes")
+            raise RuntimeError(
+                f"yt-dlp video download for vision exceeded {max_bytes} bytes"
+            )
         return output_path
 
     def _json(
@@ -193,7 +209,11 @@ class YtDlpClient:
         *,
         error_message: str,
     ) -> dict[str, Any]:
-        """Run a yt-dlp command expected to emit one JSON object."""
+        """Reuse recent metadata/listings locally; expired signed caption URLs are fetched again after 15 minutes."""
+        key = {"arguments": command[len(self.command_prefix()) :]}
+        cached = read_cache("requests", key, max_age=REQUEST_MAX_AGE_SECONDS)
+        if cached is not None:
+            return cached
         try:
             result = subprocess.run(  # noqa: S603 - command is assembled from a fixed yt-dlp executable prefix and argument list.
                 command,
@@ -203,7 +223,9 @@ class YtDlpClient:
                 timeout=YTDLP_REQUEST_TIMEOUT_SECONDS,
             )
         except subprocess.TimeoutExpired as error:
-            raise RuntimeError(f"yt-dlp request timed out after {YTDLP_REQUEST_TIMEOUT_SECONDS} seconds") from error
+            raise RuntimeError(
+                f"yt-dlp request timed out after {YTDLP_REQUEST_TIMEOUT_SECONDS} seconds"
+            ) from error
         except OSError as error:
             raise RuntimeError(f"Could not start yt-dlp request: {error}") from error
         if result.returncode != 0:
@@ -215,4 +237,5 @@ class YtDlpClient:
             raise RuntimeError("yt-dlp did not return valid JSON") from exc
         if not isinstance(data, dict):
             raise RuntimeError("yt-dlp returned a non-object JSON payload")
+        write_cache("requests", key, data)
         return data

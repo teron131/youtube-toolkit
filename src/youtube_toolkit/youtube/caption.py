@@ -1,4 +1,4 @@
-"""Stored and stateless transcript retrieval share caption selection, STT fallback, and cleanup policy."""
+"""Transcript retrieval owns caption selection, STT fallback, and cleanup policy."""
 
 from __future__ import annotations
 
@@ -12,14 +12,30 @@ import urllib.error
 import urllib.request
 
 from ..convert_zh import convert_zh
-from ..identity import ALLOWED_CAPTION_HOST_SUFFIXES, VideoRef, validate_url
 from ..execution import retry_transient
-from ..schemas import TranscriptChunk, TranscriptDocument, TranscriptSection, VideoMetadata
+from ..identity import ALLOWED_CAPTION_HOST_SUFFIXES, VideoRef, validate_url
+from ..schemas import (
+    TranscriptChunk,
+    TranscriptDocument,
+    TranscriptSection,
+    VideoMetadata,
+)
 from ..stt import transcribe_audio_details
 from .client import YtDlpClient
 
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-DEFAULT_TRANSCRIPT_LANGUAGES = ("en-orig", "en", "zh-Hant", "zh-HK", "yue-HK", "yue", "zh-TW", "zh-Hans", "zh-CN", "zh")
+DEFAULT_TRANSCRIPT_LANGUAGES = (
+    "en-orig",
+    "en",
+    "zh-Hant",
+    "zh-HK",
+    "yue-HK",
+    "yue",
+    "zh-TW",
+    "zh-Hans",
+    "zh-CN",
+    "zh",
+)
 CAPTION_REQUEST_ATTEMPTS = 3
 CAPTION_RETRY_BACKOFF_SECONDS = 0.25
 
@@ -58,7 +74,7 @@ def fetch_live_transcript(
     options: TranscriptOptions | None = None,
     client: CaptionMetadataClient | None = None,
 ) -> TranscriptDocument:
-    """Fetch captions or STT without reading or writing persistent toolkit storage."""
+    """Fetch captions or STT from provider metadata, with request caching owned by the client."""
     options = options or TranscriptOptions()
     client = client or YtDlpClient()
     metadata_payload = client.metadata(video_ref)
@@ -107,7 +123,9 @@ def fetch_caption_transcript(
         extract_sponsorblock_intervals(metadata_payload),
     )
     if not chunks:
-        raise CaptionTranscriptUnavailable(f"Caption track resolved from {caption_source}:{language}, but no transcript text was found")
+        raise CaptionTranscriptUnavailable(
+            f"Caption track resolved from {caption_source}:{language}, but no transcript text was found"
+        )
 
     return TranscriptDocument(
         metadata=metadata,
@@ -123,7 +141,7 @@ def fetch_stt_transcript(
     *,
     client: SttAudioClient,
 ) -> TranscriptDocument:
-    """Download temporary audio, run STT, and return a transcript document without storage."""
+    """Download temporary audio, run STT, and return a complete transcript document."""
     metadata = VideoMetadata.from_yt_dlp(metadata_payload)
     audio_path = client.download_transcription_audio(metadata.video_id)
     try:
@@ -196,10 +214,14 @@ def select_caption_track(
                 if track.get("url"):
                     return track["url"], language, source_name
 
-    available_languages = sorted({language for _, caption_pool in caption_sources for language in caption_pool})
+    available_languages = sorted(
+        {language for _, caption_pool in caption_sources for language in caption_pool}
+    )
     available_summary = ", ".join(available_languages) or "none"
     requested = ", ".join(languages)
-    raise CaptionTranscriptUnavailable(f"No caption track found for requested languages [{requested}]. Available languages: {available_summary}")
+    raise CaptionTranscriptUnavailable(
+        f"No caption track found for requested languages [{requested}]. Available languages: {available_summary}"
+    )
 
 
 def fetch_caption_payload(url: str) -> dict:
@@ -227,9 +249,15 @@ def fetch_caption_payload(url: str) -> dict:
             sleep=time.sleep,
         )
     except urllib.error.HTTPError as error:
-        raise RuntimeError(f"Failed to download caption track ({error.code}): {error.reason}") from error
+        raise RuntimeError(
+            f"Failed to download caption track ({error.code}): {error.reason}"
+        ) from error
     except (urllib.error.URLError, json.JSONDecodeError) as error:
-        detail = "Caption track was not valid JSON" if isinstance(error, json.JSONDecodeError) else f"Failed to download caption track: {error}"
+        detail = (
+            "Caption track was not valid JSON"
+            if isinstance(error, json.JSONDecodeError)
+            else f"Failed to download caption track: {error}"
+        )
         raise RuntimeError(detail) from error
 
 
@@ -241,7 +269,9 @@ def extract_timed_chunks(caption_payload: dict) -> list[TranscriptChunk]:
         segments = event.get("segs") or []
         if not segments:
             continue
-        text = normalize_caption_chunk("".join(segment.get("utf8", "") for segment in segments))
+        text = normalize_caption_chunk(
+            "".join(segment.get("utf8", "") for segment in segments)
+        )
         if not text or text == last_chunk:
             continue
         start_seconds = float(event.get("tStartMs", 0)) / 1000
@@ -287,8 +317,15 @@ def remove_sponsorblock_chunks(
 
     filtered: list[TranscriptChunk] = []
     for chunk in chunks:
-        effective_end = chunk.end_seconds if chunk.end_seconds > chunk.start_seconds else chunk.start_seconds + 0.001
-        overlaps_skip = any(chunk.start_seconds < interval_end and effective_end > interval_start for interval_start, interval_end in intervals)
+        effective_end = (
+            chunk.end_seconds
+            if chunk.end_seconds > chunk.start_seconds
+            else chunk.start_seconds + 0.001
+        )
+        overlaps_skip = any(
+            chunk.start_seconds < interval_end and effective_end > interval_start
+            for interval_start, interval_end in intervals
+        )
         if not overlaps_skip:
             filtered.append(chunk)
     return filtered
@@ -313,8 +350,15 @@ def build_sections(
     sections: list[TranscriptSection] = []
     for chapter in chapters:
         start_time = float(chapter.get("start_time") or 0)
-        end_time = float(chapter["end_time"]) if chapter.get("end_time") is not None else None
-        section_chunks = [chunk.text for chunk in chunks if chunk.start_seconds >= start_time and (end_time is None or chunk.start_seconds < end_time)]
+        end_time = (
+            float(chapter["end_time"]) if chapter.get("end_time") is not None else None
+        )
+        section_chunks = [
+            chunk.text
+            for chunk in chunks
+            if chunk.start_seconds >= start_time
+            and (end_time is None or chunk.start_seconds < end_time)
+        ]
         sections.append(
             TranscriptSection(
                 title=str(chapter.get("title") or "Untitled chapter"),

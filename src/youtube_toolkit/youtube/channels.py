@@ -1,32 +1,16 @@
-"""Channel workflows own YouTube listing fetches, membership changes, watchlist sync, and transcript hydration."""
+"""Channel listing retrieval owns reference normalization, limits, and date-window expansion."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import Any, Protocol
 
-from ..capabilities import capability_available, require_capability
-from ..identity import ChannelRef, ChannelRefInput, YouTubeRefs, normalize_channel_url, parse_channel_ref
-from ..schemas import (
-    ChannelIdentity,
-    ChannelRemovalResult,
-    EmbeddingIndexResult,
-    TranscriptFetchResult,
-    WatchlistSyncResult,
-    extract_channel_identity,
-)
-from ..transcript import fetch_transcript
+from ..identity import ChannelRef, normalize_channel_url
 from .client import YtDlpClient
-
-if TYPE_CHECKING:
-    from ..storage.connection import LanceConnection
 
 DEFAULT_LAST_VIDEOS = 10
 MIN_DAYS_WINDOW = 10
-MAX_CONCURRENT_LIST_WORKERS = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,29 +39,7 @@ def fetch_channel_videos(
     options: ChannelOptions | None = None,
     client: ChannelVideosClient | None = None,
 ) -> dict[str, Any]:
-    """Fetch one channel listing and persist it only when storage is installed."""
-    metadata = fetch_channel_metadata(
-        channel_ref,
-        options=options,
-        client=client,
-    )
-    if not capability_available("storage"):
-        return metadata
-
-    from ..storage import get_connection, store_channel_listing
-
-    with get_connection() as connection:
-        store_channel_listing(connection, metadata)
-    return metadata
-
-
-def fetch_channel_metadata(
-    channel_ref: ChannelRef,
-    *,
-    options: ChannelOptions | None = None,
-    client: ChannelVideosClient | None = None,
-) -> dict[str, Any]:
-    """Fetch recent channel metadata from YouTube without directly mutating storage."""
+    """Resolve a channel and retrieve its listing under the requested limit or date window."""
     options = options or ChannelOptions()
     client = client or YtDlpClient()
     validate_channel_options(options)
@@ -120,7 +82,9 @@ def get_recent_channel_entries(
         entries = metadata.get("entries") or []
         dated_entries = collect_dated_entries(entries)
         cutoff_date = cutoff_date_for_days(options.days)
-        metadata["entries"] = [entry for entry, upload_date in dated_entries if upload_date >= cutoff_date]
+        metadata["entries"] = [
+            entry for entry, upload_date in dated_entries if upload_date >= cutoff_date
+        ]
         if not should_expand_window(
             entries,
             dated_entries,
@@ -145,7 +109,9 @@ def parse_upload_date(upload_date: str | None) -> date | None:
     )
 
 
-def collect_dated_entries(entries: list[dict[str, Any]]) -> list[tuple[dict[str, Any], date]]:
+def collect_dated_entries(
+    entries: list[dict[str, Any]],
+) -> list[tuple[dict[str, Any], date]]:
     """Keep listing entries that have parseable upload dates for window expansion."""
     dated_entries: list[tuple[dict[str, Any], date]] = []
     for entry in entries:
@@ -169,251 +135,3 @@ def should_expand_window(
         return False
     oldest_upload_date = min(upload_date for _, upload_date in dated_entries)
     return oldest_upload_date >= cutoff_date_for_days(days)
-
-
-def add_watchlist_channels(channel_refs: ChannelRefInput) -> list[str]:
-    """Resolve and add channels to the local watchlist membership."""
-    require_capability("storage", "watchlist membership")
-    from ..storage import upsert_watchlist_channel
-
-    return _add_channel_memberships(
-        channel_refs,
-        add_membership=upsert_watchlist_channel,
-    )
-
-
-def add_blacklist_channels(channel_refs: ChannelRefInput) -> list[str]:
-    """Resolve and add channels to the local search blacklist membership."""
-    require_capability("storage", "blacklist membership")
-    from ..storage import upsert_blacklist_channel
-
-    return _add_channel_memberships(
-        channel_refs,
-        add_membership=upsert_blacklist_channel,
-    )
-
-
-def list_watchlist_channels() -> list[str]:
-    """Return watched channels using the storage-owned display reference policy."""
-    require_capability("storage", "watchlist membership")
-    from ..storage import get_connection, list_watchlist_channel_refs
-
-    with get_connection() as connection:
-        return list_watchlist_channel_refs(connection)
-
-
-def _add_channel_memberships(
-    channel_refs: ChannelRefInput,
-    *,
-    add_membership: Callable[[LanceConnection, ChannelIdentity], str | None],
-) -> list[str]:
-    from ..storage import get_connection
-
-    fetched_channels = _map_concurrently(
-        list(YouTubeRefs.parse(channel_refs)),
-        lambda channel_ref: (
-            channel_ref,
-            fetch_channel_metadata(
-                channel_ref,
-                options=ChannelOptions(last=1),
-            ),
-        ),
-    )
-
-    channels: list[str] = []
-    for channel_ref, metadata in fetched_channels:
-        channel_identity = extract_channel_identity(metadata)
-        channel = channel_identity.channel_handle or channel_identity.youtube_channel_id or channel_ref
-        with get_connection() as connection:
-            add_membership(connection, channel_identity)
-        channels.append(channel)
-    return channels
-
-
-def remove_watchlist_channels(channel_refs: ChannelRefInput) -> list[ChannelRemovalResult]:
-    """Remove channels from the local watchlist without deleting catalog data."""
-    require_capability("storage", "watchlist membership")
-    from ..storage import delete_watchlist_channel
-
-    return _remove_channel_memberships(
-        channel_refs,
-        remove_membership=delete_watchlist_channel,
-    )
-
-
-def remove_blacklist_channels(channel_refs: ChannelRefInput) -> list[ChannelRemovalResult]:
-    """Remove channels from the local search blacklist without deleting catalog data."""
-    require_capability("storage", "blacklist membership")
-    from ..storage import delete_blacklist_channel
-
-    return _remove_channel_memberships(
-        channel_refs,
-        remove_membership=delete_blacklist_channel,
-    )
-
-
-def _remove_channel_memberships(
-    channel_refs: ChannelRefInput,
-    *,
-    remove_membership: Callable[[LanceConnection, ChannelIdentity], bool],
-) -> list[ChannelRemovalResult]:
-    from ..storage import get_connection
-
-    resolved_channels = _map_concurrently(
-        list(YouTubeRefs.parse(channel_refs)),
-        _resolve_channel_identity,
-    )
-
-    results: list[ChannelRemovalResult] = []
-    for channel_ref, channel_identity in resolved_channels:
-        channel = channel_identity.channel_handle or channel_identity.youtube_channel_id or channel_ref
-        with get_connection() as connection:
-            removed = remove_membership(connection, channel_identity)
-        results.append(
-            {
-                "channel": channel,
-                "removed": removed,
-            }
-        )
-    return results
-
-
-def _resolve_channel_identity(channel_ref: ChannelRef) -> tuple[ChannelRef, ChannelIdentity]:
-    channel_identity = parse_channel_ref(channel_ref)
-    if channel_identity.has_identity():
-        return channel_ref, channel_identity
-
-    metadata = fetch_channel_metadata(
-        channel_ref,
-        options=ChannelOptions(last=1),
-    )
-    return channel_ref, extract_channel_identity(metadata)
-
-
-def _map_concurrently[WorkItem, WorkResult](
-    items: list[WorkItem],
-    worker: Callable[[WorkItem], WorkResult],
-) -> list[WorkResult]:
-    if not items:
-        return []
-    with ThreadPoolExecutor(max_workers=min(MAX_CONCURRENT_LIST_WORKERS, len(items))) as executor:
-        return list(executor.map(worker, items))
-
-
-def sync_watchlist(
-    *,
-    options: ChannelOptions,
-) -> WatchlistSyncResult:
-    """Refresh watched channel listings, persist new videos, fetch transcripts, and maintain embeddings."""
-    require_capability("storage", "watchlist sync")
-    from ..storage import (
-        get_connection,
-        list_missing_watchlist_video_ids,
-        list_watchlist_channel_refs,
-        list_watchlist_video_ids_missing_embeddings,
-        store_watchlist_channel_listing,
-    )
-
-    with get_connection() as connection:
-        watched_channel_refs = list_watchlist_channel_refs(connection)
-
-    if not watched_channel_refs:
-        return {
-            "channels": [],
-            "new_videos": [],
-            "transcripts": [],
-            "embeddings": [],
-        }
-
-    fetched_channels = _map_concurrently(
-        watched_channel_refs,
-        lambda channel_ref: (
-            channel_ref,
-            fetch_channel_metadata(
-                channel_ref,
-                options=options,
-            ),
-        ),
-    )
-
-    new_video_ids: list[str] = []
-    for _channel_ref, metadata in fetched_channels:
-        with get_connection() as connection:
-            new_video_ids.extend(store_watchlist_channel_listing(connection, metadata))
-
-    with get_connection() as connection:
-        missing_video_ids = list_missing_watchlist_video_ids(connection)
-        missing_embedding_video_ids = list_watchlist_video_ids_missing_embeddings(connection)
-
-    transcripts = fetch_watchlist_transcripts(missing_video_ids)
-    embeddings = index_watchlist_embeddings(missing_embedding_video_ids)
-    embeddings.extend(transcript["embedding"] for transcript in transcripts if "embedding" in transcript)
-    return {
-        "channels": watched_channel_refs,
-        "new_videos": new_video_ids,
-        "transcripts": transcripts,
-        "embeddings": embeddings,
-    }
-
-
-def fetch_watchlist_transcripts(
-    video_ids: list[str],
-) -> list[TranscriptFetchResult]:
-    """Fetch and store missing watchlist transcripts with per-video failure reporting."""
-    from ..storage import auto_index_video_embedding, get_connection
-
-    def fetch(video_id: str) -> TranscriptFetchResult:
-        try:
-            document = fetch_transcript(
-                video_id,
-                auto_index=False,
-            )
-            with get_connection() as connection:
-                embedding = auto_index_video_embedding(
-                    connection,
-                    document.metadata.video_id,
-                )
-            return {
-                "status": "stored",
-                "video_id": document.metadata.video_id,
-                "embedding": embedding,
-            }
-        except Exception as exc:
-            return {
-                "status": "failed",
-                "video_id": video_id,
-                "error": str(exc),
-            }
-
-    return _map_concurrently(video_ids, fetch)
-
-
-def index_watchlist_embeddings(video_ids: list[str]) -> list[EmbeddingIndexResult]:
-    """Index missing watchlist video embeddings with per-video status reporting."""
-    from ..storage import auto_index_video_embedding, get_connection
-
-    def index(video_id: str) -> EmbeddingIndexResult:
-        with get_connection() as connection:
-            return auto_index_video_embedding(connection, video_id)
-
-    return _map_concurrently(video_ids, index)
-
-
-def list_recent_watchlist_videos(
-    *,
-    channel_refs: ChannelRefInput | None = None,
-    days: int,
-) -> list[dict[str, Any]]:
-    """Return recent stored watchlist videos, optionally narrowed to selected channels."""
-    require_capability("storage", "recent watchlist videos")
-    from ..storage import get_connection, list_recent_watchlist_video_payloads
-
-    if days <= 0:
-        raise ValueError("--days must be greater than 0")
-    channel_identities = YouTubeRefs.parse(channel_refs).channel_identities()
-    with get_connection() as connection:
-        return list_recent_watchlist_video_payloads(
-            connection,
-            cutoff_upload_date=cutoff_date_for_days(days).isoformat(),
-            channel_identities=channel_identities or None,
-        )

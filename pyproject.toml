@@ -1,6 +1,6 @@
 [project]
 name = "youtube-toolkit"
-version = "0.19.1"
+version = "0.20.0"
 description = "Transcript-first YouTube research toolkit for agents and local workflows"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -13,9 +13,7 @@ dev = ["pytest>=9.0.2", "ruff>=0.15.1"]
 youtube = "youtube_toolkit.cli.__main__:main"
 
 [project.optional-dependencies]
-storage = ["lancedb>=0.34.0", "platformdirs>=4.10.0", "tomlkit>=0.15.0"]
 vision = ["numpy>=2.4.0", "pillow>=11.0.0"]
-llm = ["langchain-core>=1.2.12", "langchain-openai>=1.1.9", "pydantic>=2.12.5"]
 
 [build-system]
 requires = ["hatchling"]
@@ -28,7 +26,8 @@ packages = ["src/youtube_toolkit"]
 pythonpath = ["src"]
 
 [tool.ruff]
-line-length = 180
+line-length = 88
+target-version = "py313"
 
 [tool.ruff.lint]
 select = [
@@ -51,7 +50,7 @@ select = [
   "PIE",
   "T20",
 ]
-ignore = ["B008", "S101", "S105", "S106", "G004", "T201", "S112", "E731", "S311", "I001", "S608"]
+ignore = ["B008", "S101", "S105", "S106", "G004", "T201", "S112", "E731", "S311", "I001"]
 unfixable = ["DTZ", "S"]
 
 [tool.ruff.lint.per-file-ignores]
@@ -61,6 +60,7 @@ unfixable = ["DTZ", "S"]
 "*.ipynb" = ["T20", "E402"]
 
 [tool.ruff.lint.isort]
+known-first-party = ["youtube_toolkit"]
 combine-as-imports = true
 force-sort-within-sections = true
 
