@@ -77,7 +77,7 @@ class VideoCommands:
     @staticmethod
     def vision(args: argparse.Namespace) -> dict[str, Any]:
         """Return bounded timestamped visual context and its local collage paths."""
-        require_capability("vision", "video vision")
+        require_capability("vision", "vision")
         from ..youtube.vision import sample_vision
 
         return sample_vision(args.video_ref)

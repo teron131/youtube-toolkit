@@ -10,13 +10,13 @@ Use the installed `youtube` CLI from the current task directory. Retrieval is ca
 ## Retrieval
 
 ```bash
-youtube video metadata <url-or-id>
-youtube video transcript <url-or-id>
-youtube video transcript <url-or-id> --timestamps
-youtube video transcript <url-or-id> --export
-youtube video vision <url-or-id>
-youtube channel videos @OpenAI --last 5
-youtube channel videos @OpenAI --days 7
+youtube metadata <url-or-id>
+youtube transcript <url-or-id>
+youtube transcript <url-or-id> --timestamps
+youtube transcript <url-or-id> --export
+youtube vision <url-or-id>
+youtube channel @OpenAI --last 5
+youtube channel @OpenAI --days 7
 youtube doctor
 ```
 
