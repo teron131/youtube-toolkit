@@ -1,14 +1,17 @@
 """Caption selection, transcript cache, and STT fallback tests."""
 
+from dataclasses import asdict
 from pathlib import Path
 import urllib.error
 
 import pytest
 
-from youtube_toolkit.schemas import TranscriptChunk
+from youtube_toolkit.cache import write_cache
+from youtube_toolkit.schemas import TranscriptChunk, TranscriptDocument, VideoMetadata
 from youtube_toolkit.stt import SpeechTranscription
 from youtube_toolkit.youtube.caption import (
     DEFAULT_TRANSCRIPT_LANGUAGES,
+    CaptionTranscriptUnavailable,
     TranscriptOptions,
     fetch_caption_payload,
     fetch_live_transcript,
@@ -411,3 +414,38 @@ def test_transcript_cache_upgrades_metadata_without_retranscribing(
     cached = read_cache("transcripts", key)
     assert cached is not None
     assert cached["metadata"]["chapters"][0]["title"] == "Opening"
+
+
+@pytest.mark.parametrize("cached_stt", [False, True])
+def test_caption_only_policy_never_uses_stt(monkeypatch, tmp_path, cached_stt) -> None:
+    """Vision can request captions without accepting untimed cached speech or triggering paid audio work."""
+    video_id = "JpSHyEIZ_bo"
+    monkeypatch.chdir(tmp_path)
+    if cached_stt:
+        document = TranscriptDocument(
+            VideoMetadata(video_id=video_id, url="https://youtu.be/" + video_id),
+            "speech-to-text",
+            "speech-to-text",
+            [TranscriptChunk(0, 0, "Untimed speech")],
+        )
+        write_cache(
+            "transcripts",
+            {
+                "video_id": video_id,
+                "languages": list(DEFAULT_TRANSCRIPT_LANGUAGES),
+                "source": "any",
+            },
+            asdict(document),
+        )
+
+    class FakeClient:
+        def metadata(self, _ref):
+            return {"id": video_id, "automatic_captions": {}, "subtitles": {}}
+
+        def download_transcription_audio(self, _ref):
+            pytest.fail("caption-only policy must not download STT audio")
+
+    with pytest.raises(CaptionTranscriptUnavailable):
+        fetch_transcript(
+            video_id, options=TranscriptOptions(allow_stt=False), client=FakeClient()
+        )

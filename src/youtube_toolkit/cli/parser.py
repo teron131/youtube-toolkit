@@ -8,6 +8,8 @@ from ..config import (
     DEFAULT_SEARCH_MAX_DURATION,
     DEFAULT_SEARCH_MIN_DURATION,
     DEFAULT_SEARCH_MIN_VIEWS,
+    DEFAULT_VISION_MAX_FRAMES,
+    MAX_VISION_FRAMES,
 )
 from ..youtube.channels import DEFAULT_LAST_VIDEOS
 from .commands import ChannelCommands, SearchCommands, VideoCommands
@@ -92,6 +94,12 @@ class VideoCommandParser:
         )
         vision_parser.add_argument(
             "video_ref", metavar="url", help="YouTube video URL or ID"
+        )
+        vision_parser.add_argument(
+            "--max-frames",
+            type=int,
+            default=DEFAULT_VISION_MAX_FRAMES,
+            help=f"Maximum screenshots (1-{MAX_VISION_FRAMES}; default: %(default)s)",
         )
         vision_parser.set_defaults(handler=VideoCommands.vision)
 

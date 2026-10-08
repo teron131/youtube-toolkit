@@ -14,7 +14,7 @@ youtube metadata <url-or-id>
 youtube transcript <url-or-id>
 youtube transcript <url-or-id> --timestamps
 youtube transcript <url-or-id> --export
-youtube vision <url-or-id>
+youtube vision <url-or-id> [--max-frames 6]
 youtube channel @OpenAI --last 5
 youtube channel @OpenAI --days 7
 youtube doctor
@@ -22,7 +22,9 @@ youtube doctor
 
 Metadata returns normalized video facts, including the description, thumbnail URL, and chapter titles with `start_seconds` and optional `end_seconds`. Chapters are an empty list when unavailable. Transcript retrieval uses cached normalized documents, then captions, then speech-to-text fallback. It returns one text string unless `--timestamps` requests timed chunks. `--export` writes metadata and transcript to `<normalized-title>_<normalized-channel>.txt` in the working directory; add `--force` to replace an existing export.
 
-Use vision when visual cues materially help. It requires the vision extra and `ffmpeg`, samples a bounded video-only download, and returns timestamps and absolute collage paths under `.cache/youtube-toolkit/vision/<video-id>/`. Sampled frames can miss important moments; read the transcript alongside them.
+Use vision when pictures add useful context. It requires the vision extra and `ffmpeg`, uses a bounded video-only download, and returns timestamps and absolute collage paths under `.cache/youtube-toolkit/vision/<video-id>/`. The baseline ranks timed transcript passages with chapter-local TF-IDF, then uses PySceneDetect and OpenCV for image-based selection in those windows. No transcript cue-phrase rules, LLM calls, or speech-to-text requests are used by vision. Missing usable captions falls back to visual sampling and is reported through `selection_mode` and `transcript_warning`.
+
+The default allowance is six screenshots; `--max-frames` accepts 1-96. Repetitive content can yield fewer. Collages retain two columns and three rows, in chronological order. Each item in `frames` includes its `transcript` passage (or null in fallback mode) and raw `visual_scores`: clarity, neighboring change, shot overlap duration, face area fraction, and similarity to earlier selections. Transcript `text_score` measures chapter relevance, not confidence. These measurements do not establish educational importance; inspect the collage alongside the transcript.
 
 ## Search
 

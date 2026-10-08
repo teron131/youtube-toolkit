@@ -78,9 +78,9 @@ class VideoCommands:
     def vision(args: argparse.Namespace) -> dict[str, Any]:
         """Return bounded timestamped visual context and its local collage paths."""
         require_capability("vision", "vision")
-        from ..youtube.vision import sample_vision
+        from ..vision import sample_vision
 
-        return sample_vision(args.video_ref)
+        return sample_vision(args.video_ref, max_frames=args.max_frames)
 
 
 def write_transcript_export(
