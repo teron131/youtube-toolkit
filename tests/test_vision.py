@@ -44,8 +44,9 @@ def chart(heights=(20, 30, 40, 50)) -> np.ndarray:
 
 
 @pytest.mark.parametrize("captions", [True, False])
+@pytest.mark.parametrize("explicit_output", [True, False])
 def test_sample_vision_returns_evidence_and_cleans_up(
-    monkeypatch, tmp_path, captions
+    monkeypatch, tmp_path, captions, explicit_output
 ) -> None:
     """Both caption-guided and fallback retrieval preserve artifact cleanup and explain selection."""
     window = TranscriptWindow(5, 25, "A diagram explains the circuit", 0.5, "Circuits")
@@ -83,14 +84,26 @@ def test_sample_vision_returns_evidence_and_cleans_up(
         workflow, "select_transcript_windows", lambda _doc, **_kw: [window]
     )
     monkeypatch.setattr(workflow, "select_frames", select)
-    result = workflow.sample_vision(VIDEO_ID, output_dir=tmp_path)
+    monkeypatch.chdir(tmp_path)
+    output_options = {"output_dir": tmp_path} if explicit_output else {}
+    result = workflow.sample_vision(VIDEO_ID, **output_options)
     assert result["selection_mode"] == ("transcript" if captions else "visual")
     assert bool(result["transcript_warning"]) is not captions
     assert result["frames"] == [selected.to_dict()]
     assert result["timestamps_seconds"] == [12]
     assert result["heatmap_available"] is True
     assert Path(result["collage_paths"][0]).is_file()
-    assert not list(tmp_path.glob("work-*"))
+    assert not list(Path(result["collage_paths"][0]).parent.glob("work-*"))
+    if not explicit_output:
+        first_collage = Path(result["collage_paths"][0])
+        first_contents = first_collage.read_bytes()
+        second = workflow.sample_vision(VIDEO_ID)
+        second_collage = Path(second["collage_paths"][0])
+        assert first_collage.parent != second_collage.parent
+        assert VIDEO_ID in first_collage.parent.name
+        assert VIDEO_ID in second_collage.parent.name
+        assert first_collage.read_bytes() == first_contents
+        assert second_collage.is_file()
 
 
 @pytest.mark.parametrize("limit", [0, 97, -1])

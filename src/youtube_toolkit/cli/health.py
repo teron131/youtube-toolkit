@@ -1,4 +1,4 @@
-"""Read-only runtime and environment checks for directory-cached retrieval."""
+"""Read-only runtime and environment checks for local retrieval artifacts."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import argparse
 import shutil
 from typing import Literal, TypedDict
 
-from ..cache import cache_root
+from ..artifacts import artifact_root
 from ..capabilities import capability_available
 from ..config import (
     DEFAULT_EMBEDDING_MODEL,
@@ -25,10 +25,10 @@ class ModelApiHealthResult(TypedDict):
 
 
 class DoctorReport(TypedDict):
-    """Runtime, cache location, and optional capability readiness for the doctor command."""
+    """Runtime, artifact location, and optional capability readiness for the doctor command."""
 
     yt_dlp_version: str
-    cache: str
+    artifacts: str
     vision: bool
     ffmpeg: bool
     embedding: ModelApiHealthResult
@@ -41,7 +41,7 @@ def run_doctor(args: argparse.Namespace) -> DoctorReport:
 
     return {
         "yt_dlp_version": yt_dlp.version.__version__,
-        "cache": str(cache_root()),
+        "artifacts": str(artifact_root()),
         "vision": capability_available("vision"),
         "ffmpeg": shutil.which("ffmpeg") is not None,
         "embedding": embedding_api_health(),

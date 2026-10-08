@@ -1,4 +1,4 @@
-"""CLI contracts for cached retrieval, exports, and native or semantic search."""
+"""CLI contracts for retrieval archives, exports, and native or semantic search."""
 
 import argparse
 import json
@@ -492,13 +492,13 @@ def test_database_search_source_is_removed() -> None:
         build_parser().parse_args(["search", "agents", "--source", "db"])
 
 
-def test_doctor_reports_local_cache_without_creating_it(
+def test_doctor_reports_local_artifacts_without_creating_them(
     monkeypatch, tmp_path, capsys
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("EMBEDDING_API_KEY", raising=False)
     payload = health.run_doctor(argparse.Namespace())
-    assert payload["cache"] == str(tmp_path / ".cache" / "youtube-toolkit")
+    assert payload["artifacts"] == str(tmp_path / ".cache" / "youtube-toolkit")
     assert payload["embedding"]["status"] == "missing"
     assert not (tmp_path / ".cache").exists()
     assert main(["doctor"]) == 0

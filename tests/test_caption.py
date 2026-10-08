@@ -1,4 +1,4 @@
-"""Caption selection, transcript cache, and STT fallback tests."""
+"""Caption selection, transcript archives, and STT fallback tests."""
 
 from dataclasses import asdict
 from pathlib import Path
@@ -6,7 +6,7 @@ import urllib.error
 
 import pytest
 
-from youtube_toolkit.cache import write_cache
+from youtube_toolkit.artifacts import write_artifact
 from youtube_toolkit.schemas import TranscriptChunk, TranscriptDocument, VideoMetadata
 from youtube_toolkit.stt import SpeechTranscription
 from youtube_toolkit.youtube.caption import (
@@ -82,8 +82,8 @@ def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
     assert not audio_path.exists()
 
 
-def test_fetch_transcript_fetches_and_caches_captions(monkeypatch, tmp_path) -> None:
-    """Public transcript retrieval fetches captions into the current directory cache."""
+def test_fetch_transcript_fetches_and_archives_captions(monkeypatch, tmp_path) -> None:
+    """Public transcript retrieval saves captions in the current directory archive."""
 
     class FakeClient:
         def metadata(self, video_ref: str) -> dict:
@@ -298,10 +298,10 @@ def test_default_languages_prefer_manual_english_before_automatic_chinese() -> N
     "options",
     [TranscriptOptions(languages=("zh",)), TranscriptOptions(source="manual")],
 )
-def test_transcript_cache_preserves_timing_and_separates_caption_options(
+def test_transcript_archives_preserve_timing_and_retrieval_options(
     monkeypatch, tmp_path, options
 ) -> None:
-    """Equivalent video URLs reuse documents while different language/source policies fetch independently."""
+    """Equivalent video URLs fetch fresh documents and preserve each retrieval policy."""
     from youtube_toolkit.schemas import TranscriptDocument, VideoChapter, VideoMetadata
 
     monkeypatch.chdir(tmp_path)
@@ -331,105 +331,54 @@ def test_transcript_cache_preserves_timing_and_separates_caption_options(
     monkeypatch.setattr("youtube_toolkit.transcript.fetch_live_transcript", fetch)
     assert fetch_transcript("JpSHyEIZ_bo") == expected
     assert fetch_transcript("https://youtu.be/JpSHyEIZ_bo") == expected
-    assert len(calls) == 1
-    assert fetch_transcript("JpSHyEIZ_bo", options=options) == expected
     assert len(calls) == 2
-    assert (
-        len(list((tmp_path / ".cache/youtube-toolkit/transcripts").glob("*.json"))) == 2
-    )
-
-    for path in (tmp_path / ".cache/youtube-toolkit/transcripts").glob("*.json"):
-        path.write_text("broken JSON", encoding="utf-8")
-    assert fetch_transcript("JpSHyEIZ_bo") == expected
+    assert fetch_transcript("JpSHyEIZ_bo", options=options) == expected
     assert len(calls) == 3
+    import json
+
+    paths = list((tmp_path / ".cache/youtube-toolkit/transcripts").glob("*.json"))
+    assert len(paths) == 3
+    assert all("JpSHyEIZ_bo" in path.name for path in paths)
+    entries = [json.loads(path.read_text(encoding="utf-8")) for path in paths]
+    assert all(entry["payload"] == asdict(expected) for entry in entries)
+    assert any(
+        entry["request"]["languages"] == list(options.languages)
+        and entry["request"]["source"] == options.source
+        for entry in entries
+    )
+    previous = {path: path.read_bytes() for path in paths}
+    old_artifact = paths[0].parent / "old-copy.json"
+    old_artifact.write_text("broken JSON", encoding="utf-8")
+    assert fetch_transcript("JpSHyEIZ_bo") == expected
+    assert len(calls) == 4
+    assert all(path.read_bytes() == content for path, content in previous.items())
+    assert old_artifact.read_text(encoding="utf-8") == "broken JSON"
 
     other = tmp_path / "other-task"
     other.mkdir()
     monkeypatch.chdir(other)
     assert fetch_transcript("JpSHyEIZ_bo") == expected
-    assert len(calls) == 4
+    assert len(calls) == 5
+    assert len(list((other / ".cache/youtube-toolkit/transcripts").glob("*.json"))) == 1
 
 
-@pytest.mark.parametrize("source", ["automatic_captions", "speech-to-text"])
-def test_transcript_cache_upgrades_metadata_without_retranscribing(
-    monkeypatch, tmp_path, source
+@pytest.mark.parametrize("archived_stt", [False, True])
+def test_caption_only_policy_never_uses_stt(
+    monkeypatch, tmp_path, archived_stt
 ) -> None:
-    """Old cache formats acquire chapters without replacing their saved transcript or invoking STT."""
-    from youtube_toolkit.cache import read_cache, write_cache
-    from youtube_toolkit.schemas import VideoChapter
-
-    monkeypatch.chdir(tmp_path)
-    key = {
-        "video_id": "JpSHyEIZ_bo",
-        "languages": list(TranscriptOptions().languages),
-        "source": "any",
-    }
-    metadata = {
-        "video_id": "JpSHyEIZ_bo",
-        "url": "https://www.youtube.com/watch?v=JpSHyEIZ_bo",
-    }
-    if source == "speech-to-text":
-        metadata.update(description="Old description", thumbnail=None)
-    write_cache(
-        "transcripts",
-        key,
-        {
-            "metadata": metadata,
-            "language": "en",
-            "source": source,
-            "chunks": [
-                {"start_seconds": 0, "end_seconds": 0, "text": "Saved transcript"}
-            ],
-        },
-    )
-    calls = []
-
-    class FakeClient:
-        def metadata(self, video_ref: str, /) -> dict:
-            calls.append(video_ref)
-            return {
-                "id": "JpSHyEIZ_bo",
-                "description": "Complete description",
-                "thumbnail": "https://example.com/thumb.jpg",
-                "chapters": [{"title": "Opening", "start_time": 0, "end_time": 10}],
-            }
-
-        def download_transcription_audio(self, video_ref: str, /) -> Path:
-            pytest.fail("A metadata upgrade must not download audio")
-
-    def fail_fetch(*args, **kwargs):
-        pytest.fail("A metadata upgrade must not fetch another transcript")
-
-    monkeypatch.setattr("youtube_toolkit.transcript.fetch_live_transcript", fail_fetch)
-    document = fetch_transcript("JpSHyEIZ_bo", client=FakeClient())
-    assert document.text == "Saved transcript"
-    assert document.source == source
-    assert document.metadata.description == "Complete description"
-    assert document.metadata.thumbnail == "https://example.com/thumb.jpg"
-    assert document.metadata.chapters == [
-        VideoChapter(title="Opening", start_seconds=0.0, end_seconds=10.0)
-    ]
-    assert fetch_transcript("JpSHyEIZ_bo", client=FakeClient()) == document
-    assert calls == ["JpSHyEIZ_bo"]
-    cached = read_cache("transcripts", key)
-    assert cached is not None
-    assert cached["metadata"]["chapters"][0]["title"] == "Opening"
-
-
-@pytest.mark.parametrize("cached_stt", [False, True])
-def test_caption_only_policy_never_uses_stt(monkeypatch, tmp_path, cached_stt) -> None:
-    """Vision can request captions without accepting untimed cached speech or triggering paid audio work."""
+    """Caption-only retrieval ignores saved speech transcripts and never triggers paid audio work."""
     video_id = "JpSHyEIZ_bo"
     monkeypatch.chdir(tmp_path)
-    if cached_stt:
+    if archived_stt:
         document = TranscriptDocument(
             VideoMetadata(video_id=video_id, url="https://youtu.be/" + video_id),
             "speech-to-text",
             "speech-to-text",
             [TranscriptChunk(0, 0, "Untimed speech")],
         )
-        write_cache(
+        write_artifact(
             "transcripts",
+            video_id,
             {
                 "video_id": video_id,
                 "languages": list(DEFAULT_TRANSCRIPT_LANGUAGES),
