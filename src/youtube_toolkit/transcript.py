@@ -43,7 +43,11 @@ def fetch_transcript(
         except (KeyError, TypeError, ValueError):
             pass  # A disposable cache entry can be rebuilt from the source.
         else:
-            if document.metadata.video_id == key["video_id"] and document.text:
+            if (
+                document.metadata.video_id == key["video_id"]
+                and document.text
+                and (options.allow_stt or document.source != "speech-to-text")
+            ):
                 if any(
                     name not in cached_metadata
                     for name in ("description", "thumbnail", "chapters")

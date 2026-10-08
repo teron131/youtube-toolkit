@@ -8,7 +8,7 @@ from typing import Literal
 Capability = Literal["vision"]
 
 CAPABILITY_MODULES: dict[Capability, tuple[str, ...]] = {
-    "vision": ("numpy", "PIL"),
+    "vision": ("numpy", "PIL", "cv2", "scenedetect"),
 }
 
 

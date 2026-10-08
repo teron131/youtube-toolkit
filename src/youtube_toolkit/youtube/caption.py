@@ -36,10 +36,11 @@ CAPTION_RETRY_BACKOFF_SECONDS = 0.25
 
 @dataclass(frozen=True, slots=True)
 class TranscriptOptions:
-    """Caller policy for caption language preference and manual-vs-auto caption source."""
+    """Caller policy for caption language, source, and permission to fall back to untimed STT."""
 
     languages: tuple[str, ...] = DEFAULT_TRANSCRIPT_LANGUAGES
     source: str = "any"
+    allow_stt: bool = True
 
 
 class CaptionTranscriptUnavailable(RuntimeError):
@@ -71,6 +72,8 @@ def fetch_live_transcript(
     try:
         return fetch_caption_transcript(metadata_payload, options=options)
     except CaptionTranscriptUnavailable:
+        if not options.allow_stt:
+            raise
         return fetch_stt_transcript(metadata_payload, client=client)
 
 
