@@ -11,7 +11,7 @@ from typing import Any
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from ..cache import cache_root
+from ..artifacts import create_artifact_directory
 from ..config import DEFAULT_VISION_MAX_FRAMES, MAX_VISION_FRAMES
 from ..identity import VideoRef, require_video_id
 from ..transcript import fetch_transcript
@@ -82,10 +82,13 @@ def sample_vision(
         transcript_warning = (
             f"Timed captions unavailable; using visual sampling: {error}"
         )
-    destination = (
-        (output_dir or cache_root() / "vision" / video_id).expanduser().resolve()
-    )
+    destination = output_dir
     try:
+        destination = (
+            (output_dir or create_artifact_directory("vision", video_id))
+            .expanduser()
+            .resolve()
+        )
         destination.mkdir(parents=True, exist_ok=True)
         with TemporaryDirectory(prefix="work-", dir=destination) as work_dir_name:
             work_dir = Path(work_dir_name)

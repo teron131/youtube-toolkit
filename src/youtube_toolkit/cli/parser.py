@@ -218,6 +218,6 @@ class ChannelCommandParser:
 
 def add_doctor_parser(subparsers: argparse._SubParsersAction) -> None:
     doctor_parser = subparsers.add_parser(
-        "doctor", help="Check runtime, cache path, and optional capabilities"
+        "doctor", help="Check runtime, artifact path, and optional capabilities"
     )
     doctor_parser.set_defaults(handler=run_doctor)

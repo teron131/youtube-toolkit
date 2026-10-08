@@ -50,7 +50,7 @@ class ScoredChunk:
 def search_transcripts(
     request: SearchRequest, candidates: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """Shortlist by title, fetch cached transcripts, embed chunks, and project chunk or video results.
+    """Shortlist by title, fetch fresh transcripts, embed chunks, and project chunk or video results.
 
     Partial title, transcript, or chunk-embedding failures become per-result warnings; the search fails only when no transcript chunk could be embedded.
     """
@@ -153,7 +153,7 @@ def shortlist_by_title(
 def fetch_semantic_transcripts(
     candidates: list[dict[str, Any]],
 ) -> tuple[dict[str, TranscriptDocument], dict[str, str]]:
-    """Fetch directory-cached transcripts concurrently while retaining per-video failures."""
+    """Fetch fresh transcripts concurrently while retaining per-video failures."""
     jobs = {
         video_id: video_id
         for candidate in candidates

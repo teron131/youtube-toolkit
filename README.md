@@ -1,6 +1,6 @@
 # YouTube Toolkit
 
-A directory-cached YouTube CLI for agents: search, read transcripts, inspect metadata, and extract visual context through yt-dlp.
+A YouTube CLI for agents with directory-local request archives: search, read transcripts, inspect metadata, and extract visual context through yt-dlp.
 
 ![Route map of the toolkit: each command is a line through the parts it uses. Every command except doctor reaches YouTube through yt-dlp; semantic search can also call an embedding API, and missing captions fall back to a speech-to-text API.](docs/architecture.svg)
 
@@ -41,10 +41,6 @@ Search defaults: at least 10,000 views, duration 3 minutes to 8 hours, and 10 re
 Vision returns up to six screenshots in timestamped 2-column × 3-row collages, plus per-frame measurements in JSON. Set `--max-frames 12` to change the limit (1-96). Timed captions choose where to look and local image analysis picks the frames; without timed captions it samples evenly. No model API or speech-to-text is used.
 
 ![How vision picks frames: caption passages choose where to look, only those windows are decoded at one frame per second, local image analysis picks one sharp, steady frame per window, and the result is timestamped collages with JSON measurements.](docs/vision-pipeline.svg)
-
-## Directory cache
-
-Run commands from the directory where you want the cache. Files are stored in `.cache/youtube-toolkit/`: metadata, search results, and listings expire after 15 minutes, while transcripts remain until deleted. Collages are saved under `vision/<video-id>/`. Delete the cache to start fresh.
 
 ## Semantic search
 

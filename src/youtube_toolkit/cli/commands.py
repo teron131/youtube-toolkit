@@ -1,51 +1,22 @@
-"""CLI command adapters for directory-cached video, search, and channel retrieval."""
+"""CLI command adapters for fresh video, search, and channel retrieval."""
 
 from __future__ import annotations
 
 import argparse
 from dataclasses import asdict
-from pathlib import Path
-import re
-from typing import Any, TypedDict, cast
-import unicodedata
+from typing import Any, cast
 
 from ..capabilities import require_capability
 from ..config import DEFAULT_CHANNEL_SEARCH_LIMIT, DEFAULT_YOUTUBE_SEARCH_LIMIT
-from ..schemas import TranscriptDocument, VideoMetadata
+from ..schemas import VideoMetadata
 from ..search.request import ChannelTarget, SearchRequest, SearchSource
-from ..transcript import fetch_transcript
+from ..transcript import (
+    TranscriptExportResult,
+    fetch_transcript,
+    write_transcript_export,
+)
 from ..youtube.channels import ChannelOptions, fetch_channel_videos
 from ..youtube.client import YtDlpClient
-
-
-class TranscriptExportResult(TypedDict):
-    """File created by an explicit transcript export request."""
-
-    video_id: str
-    path: str
-
-
-TRANSCRIPT_LANGUAGE_LABELS = {
-    "en-orig": "English",
-    "en": "English",
-    "zh-Hant": "Chinese (Traditional)",
-    "zh-HK": "Chinese (Hong Kong)",
-    "yue-HK": "Cantonese",
-    "yue": "Cantonese",
-    "zh-TW": "Chinese (Traditional)",
-    "zh-Hans": "Chinese (Simplified)",
-    "zh-CN": "Chinese (Simplified)",
-    "zh": "Chinese",
-}
-TRANSCRIPT_SOURCE_LABELS = {
-    "automatic_captions": "automatic captions",
-    "subtitles": "manual captions",
-    "auto": "automatic captions",
-    "manual": "manual captions",
-}
-UNSAFE_FILENAME_CHARACTERS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
-FILENAME_WHITESPACE = re.compile(r"\s+")
-REPEATED_UNDERSCORES = re.compile(r"_+")
 
 
 class VideoCommands:
@@ -81,98 +52,6 @@ class VideoCommands:
         from ..vision import sample_vision
 
         return sample_vision(args.video_ref, max_frames=args.max_frames)
-
-
-def write_transcript_export(
-    document: TranscriptDocument,
-    *,
-    timestamps: bool,
-    force: bool,
-) -> TranscriptExportResult:
-    """Write one deterministic UTF-8 transcript file without silently replacing an existing export."""
-    path = Path.cwd() / transcript_export_filename(document.metadata)
-    try:
-        with path.open(
-            "w" if force else "x", encoding="utf-8", newline="\n"
-        ) as export_file:
-            export_file.write(render_transcript_export(document, timestamps=timestamps))
-    except FileExistsError as error:
-        raise ValueError(
-            f"Transcript export already exists: {path}; use --force to replace it"
-        ) from error
-    except OSError as error:
-        raise RuntimeError(
-            f"Could not write transcript export {path}: {error}"
-        ) from error
-    return {
-        "video_id": document.metadata.video_id,
-        "path": str(path),
-    }
-
-
-def transcript_export_filename(metadata: VideoMetadata) -> str:
-    """Build a portable title-and-channel filename without exposing the video ID."""
-    title = normalize_filename_component(metadata.title or "") or "transcript"
-    channel = normalize_filename_component(metadata.channel or "")
-    stem = "_".join(part for part in (title, channel) if part)
-    return f"{stem}.txt"
-
-
-def normalize_filename_component(value: str) -> str:
-    """Normalize human-readable metadata for a portable filename component."""
-    normalized = unicodedata.normalize("NFKC", value)
-    normalized = UNSAFE_FILENAME_CHARACTERS.sub("", normalized)
-    normalized = FILENAME_WHITESPACE.sub("_", normalized)
-    normalized = REPEATED_UNDERSCORES.sub("_", normalized)
-    return normalized.strip(" ._")
-
-
-def render_transcript_export(
-    document: TranscriptDocument,
-    *,
-    timestamps: bool,
-) -> str:
-    """Render normalized metadata followed by plain or timestamped transcript text."""
-    metadata = document.metadata
-    lines = [f"Title: {metadata.title or metadata.video_id}"]
-    if metadata.channel:
-        lines.append(f"Author: {metadata.channel}")
-    channel = metadata.channel_handle or metadata.channel_id
-    if channel:
-        lines.append(f"Channel: {channel}")
-    if metadata.upload_date:
-        lines.append(f"Published: {metadata.upload_date}")
-    if metadata.duration_seconds is not None:
-        lines.append(f"Duration: {format_timestamp(metadata.duration_seconds)}")
-    if metadata.view_count is not None:
-        lines.append(f"Views: {metadata.view_count:,}")
-    if metadata.like_count is not None:
-        lines.append(f"Likes: {metadata.like_count:,}")
-    lines.append(f"URL: {metadata.url}")
-    language = TRANSCRIPT_LANGUAGE_LABELS.get(document.language, document.language)
-    if language == "speech-to-text":
-        language = None
-    if language:
-        lines.append(f"Language: {language}")
-    source = TRANSCRIPT_SOURCE_LABELS.get(document.source, document.source)
-    if source:
-        lines.append(f"Transcript source: {source}")
-
-    transcript = document.text
-    if timestamps:
-        transcript = "\n".join(
-            f"[{format_timestamp(chunk.start_seconds)}] {chunk.text}"
-            for chunk in document.chunks
-        )
-    return "\n".join([*lines, "", transcript]).rstrip() + "\n"
-
-
-def format_timestamp(seconds: float) -> str:
-    """Format a non-negative second offset as a stable HH:MM:SS timestamp."""
-    total_seconds = max(0, int(seconds))
-    hours, remainder = divmod(total_seconds, 3600)
-    minutes, remaining_seconds = divmod(remainder, 60)
-    return f"{hours:02d}:{minutes:02d}:{remaining_seconds:02d}"
 
 
 class ChannelCommands:

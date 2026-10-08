@@ -1,10 +1,10 @@
-"""Media download commands and directory-local request caching."""
+"""Media download commands and directory-local retrieval archives."""
 
 from pathlib import Path
 import subprocess
+from types import SimpleNamespace
 
 import pytest
-from types import SimpleNamespace
 
 from youtube_toolkit.youtube.client import STT_AUDIO_FORMAT_SELECTOR, YtDlpClient
 
@@ -17,7 +17,7 @@ def test_stt_audio_format_prefers_xai_and_elevenlabs_compatible_containers() -> 
     )
 
 
-def test_download_transcription_audio_uses_unique_cache_stem(
+def test_download_transcription_audio_uses_unique_artifact_stem(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -68,6 +68,8 @@ def test_channel_videos_omits_playlist_end_when_unlimited(monkeypatch) -> None:
         command,
         *,
         error_message,
+        namespace,
+        identifier,
     ):
         calls["command"] = command
         calls["error_message"] = error_message
@@ -84,38 +86,97 @@ def test_channel_videos_omits_playlist_end_when_unlimited(monkeypatch) -> None:
     assert calls["command"][-1] == "https://www.youtube.com/@OpenAI/videos"
 
 
-def test_request_cache_reuses_expires_and_recovers(monkeypatch, tmp_path) -> None:
-    """Search requests share only identical task-local results and refetch expired or deleted entries."""
-    from youtube_toolkit.cache import cache_root
-    from youtube_toolkit.youtube.client import REQUEST_MAX_AGE_SECONDS
+@pytest.mark.parametrize(
+    ("namespace", "identifier", "retrieve"),
+    [
+        ("metadata", "JpSHyEIZ_bo", lambda client: client.metadata("JpSHyEIZ_bo")),
+        (
+            "searches",
+            "agents",
+            lambda client: client.search("agents", fetch=5, sort="relevance"),
+        ),
+        (
+            "channels",
+            "OpenAI",
+            lambda client: client.channel_videos(
+                "https://www.youtube.com/@OpenAI/videos", last=5
+            ),
+        ),
+    ],
+)
+def test_identical_requests_refetch_and_preserve_history(
+    monkeypatch, tmp_path, namespace, identifier, retrieve
+) -> None:
+    """Every retrieval contacts yt-dlp and keeps earlier responses searchable by identifier."""
+    import json
+
+    from youtube_toolkit.artifacts import artifact_root
 
     monkeypatch.chdir(tmp_path)
-    now = [1000.0]
-    monkeypatch.setattr("youtube_toolkit.cache.time.time", lambda: now[0])
     calls = []
 
     def run(command, **kwargs):
         calls.append(command)
         assert "--no-cache-dir" in command
         return SimpleNamespace(
-            returncode=0, stdout='{"entries": [{"id": "JpSHyEIZ_bo"}]}'
+            returncode=0,
+            stdout=json.dumps({"id": "JpSHyEIZ_bo", "generation": len(calls)}),
         )
 
     monkeypatch.setattr("youtube_toolkit.youtube.client.subprocess.run", run)
     client = YtDlpClient()
-    expected = {"entries": [{"id": "JpSHyEIZ_bo"}]}
-    assert client.search("agents", fetch=5, sort="relevance") == expected
-    assert client.search("agents", fetch=5, sort="relevance") == expected
-    assert len(calls) == 1
-    client.search("agents", fetch=10, sort="relevance")
+    assert retrieve(client)["generation"] == 1
+    first_path = next((artifact_root() / namespace).glob("*.json"))
+    first_copy = first_path.read_bytes()
+    assert retrieve(client)["generation"] == 2
     assert len(calls) == 2
-    now[0] += REQUEST_MAX_AGE_SECONDS
-    client.search("agents", fetch=5, sort="relevance")
-    assert len(calls) == 3
-    for entry in (cache_root() / "requests").glob("*.json"):
-        entry.unlink()
-    client.search("agents", fetch=5, sort="relevance")
-    assert len(calls) == 4
+    paths = list((artifact_root() / namespace).glob("*.json"))
+    assert len(paths) == 2
+    assert all(identifier in path.name for path in paths)
+    assert first_path.read_bytes() == first_copy
+    entries = [json.loads(path.read_text(encoding="utf-8")) for path in paths]
+    assert sorted(entry["payload"]["generation"] for entry in entries) == [1, 2]
+    assert all(
+        entry["request"] and entry["fetched_at"].endswith("+00:00") for entry in entries
+    )
+
+
+def test_artifact_names_sanitize_identifiers_and_preserve_same_time_copies(
+    monkeypatch, tmp_path
+) -> None:
+    """Unsafe identifiers stay within their namespace and same-time writes keep every payload."""
+    from datetime import UTC, datetime
+    import json
+
+    from youtube_toolkit import artifacts
+
+    class FrozenDatetime:
+        @staticmethod
+        def now(tz):
+            assert tz is UTC
+            return datetime(2026, 10, 8, 14, 30, 12, 123456, tzinfo=UTC)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(artifacts, "datetime", FrozenDatetime)
+    paths = [
+        artifacts.write_artifact(
+            "searches",
+            "../agents / tools",
+            {"query": "agents / tools"},
+            {"generation": generation},
+        )
+        for generation in (1, 2)
+    ]
+    assert paths[0] != paths[1]
+    assert all(path.parent == artifacts.artifact_root() / "searches" for path in paths)
+    assert all(path.name.startswith("2026-10-08T143012.123456Z-") for path in paths)
+    assert all("agents" in path.name and "tools" in path.name for path in paths)
+    entries = [json.loads(path.read_text(encoding="utf-8")) for path in paths]
+    assert [entry["payload"]["generation"] for entry in entries] == [1, 2]
+    assert all(entry["request"] == {"query": "agents / tools"} for entry in entries)
+    assert all(
+        entry["fetched_at"] == "2026-10-08T14:30:12.123456+00:00" for entry in entries
+    )
 
 
 @pytest.mark.parametrize("timed_out", [False, True])
@@ -123,10 +184,10 @@ def test_failed_audio_download_cleans_only_its_own_partial_files(
     monkeypatch, tmp_path, timed_out
 ) -> None:
     """Failures and timeouts release this download's partial files without deleting other audio."""
-    from youtube_toolkit.cache import cache_root
+    from youtube_toolkit.artifacts import artifact_root
 
     monkeypatch.chdir(tmp_path)
-    audio_dir = cache_root() / "audio"
+    audio_dir = artifact_root() / "audio"
     audio_dir.mkdir(parents=True)
     unrelated = audio_dir / "keep.m4a"
     unrelated.write_bytes(b"existing audio")

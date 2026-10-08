@@ -7,10 +7,10 @@ from pathlib import Path
 import subprocess
 import sys
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import unquote, urlencode, urlparse
 from uuid import uuid4
 
-from ..cache import cache_root, read_cache, write_cache
+from ..artifacts import artifact_root, write_artifact
 from ..identity import VideoRef, normalize_youtube_url, require_video_id
 
 SEARCH_SORT_PARAMS = {
@@ -21,7 +21,6 @@ STT_AUDIO_FORMAT_SELECTOR = "bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio[ext
 VISION_VIDEO_FORMAT_SELECTOR = "bestvideo[height<=720][ext=mp4]/bestvideo[height<=720]"
 VISION_VIDEO_DOWNLOAD_TIMEOUT_SECONDS = 10 * 60
 YTDLP_REQUEST_TIMEOUT_SECONDS = 60
-REQUEST_MAX_AGE_SECONDS = 15 * 60
 AUDIO_DOWNLOAD_TIMEOUT_SECONDS = 30
 
 
@@ -43,6 +42,8 @@ class YtDlpClient:
                 "default",
                 normalize_youtube_url(video_ref),
             ],
+            namespace="metadata",
+            identifier=require_video_id(video_ref),
             error_message="yt-dlp metadata request failed",
         )
 
@@ -70,6 +71,8 @@ class YtDlpClient:
                 str(fetch),
                 search_url,
             ],
+            namespace="searches",
+            identifier=query,
             error_message="yt-dlp search query failed",
         )
 
@@ -97,15 +100,18 @@ class YtDlpClient:
                 ]
             )
         command.append(channel_url)
+        channel_path = urlparse(channel_url).path.rstrip("/").removesuffix("/videos")
         return self._json(
             command,
+            namespace="channels",
+            identifier=unquote(channel_path.rsplit("/", 1)[-1]),
             error_message="yt-dlp channel query failed",
         )
 
     def download_transcription_audio(self, video_ref: VideoRef) -> Path:
         """Bound STT audio acquisition and clean partial files; the caller owns the returned complete file."""
         video_id = require_video_id(video_ref)
-        output_stem = cache_root() / "audio" / f"{video_id}-{uuid4().hex}"
+        output_stem = artifact_root() / "audio" / f"{video_id}-{uuid4().hex}"
         output_stem.parent.mkdir(parents=True, exist_ok=True)
         command = [
             *self.command_prefix(),
@@ -183,13 +189,12 @@ class YtDlpClient:
         self,
         command: list[str],
         *,
+        namespace: str,
+        identifier: str,
         error_message: str,
     ) -> dict[str, Any]:
-        """Reuse recent metadata/listings locally; expired signed caption URLs are fetched again after 15 minutes."""
-        key = {"arguments": command[len(self.command_prefix()) :]}
-        cached = read_cache("requests", key, max_age=REQUEST_MAX_AGE_SECONDS)
-        if cached is not None:
-            return cached
+        """Fetch a fresh yt-dlp response and archive it without consulting previous requests."""
+        request = {"arguments": command[len(self.command_prefix()) :]}
         result = _run(
             command,
             action="request",
@@ -202,7 +207,7 @@ class YtDlpClient:
             raise RuntimeError("yt-dlp did not return valid JSON") from exc
         if not isinstance(data, dict):
             raise RuntimeError("yt-dlp returned a non-object JSON payload")
-        write_cache("requests", key, data)
+        write_artifact(namespace, identifier, request, data)
         return data
 
 

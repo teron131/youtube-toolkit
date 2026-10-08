@@ -65,7 +65,7 @@ def fetch_live_transcript(
     options: TranscriptOptions | None = None,
     client: TranscriptClient | None = None,
 ) -> TranscriptDocument:
-    """Prefer captions under the requested policy and fall back to STT; request caching is owned by the client."""
+    """Prefer captions under the requested policy and fall back to STT; request archiving is owned by the client."""
     options = options or TranscriptOptions()
     client = client or YtDlpClient()
     metadata_payload = client.metadata(video_ref)

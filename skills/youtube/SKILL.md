@@ -1,11 +1,11 @@
 ---
 name: youtube
-description: Use the YouTube toolkit for directory-cached search, transcripts, metadata, and visual context.
+description: Use the YouTube toolkit for search with directory-local request archives, transcripts, metadata, and visual context.
 ---
 
 # YouTube
 
-Use the installed `youtube` CLI from the current task directory. Retrieval is cached under `.cache/youtube-toolkit/` there. Use `uv run youtube` when intentionally testing this checkout.
+Use the installed `youtube` CLI from the current task directory. Every retrieval fetches fresh data and saves a timestamped copy under `.cache/youtube-toolkit/` there, preserving earlier copies. Use `uv run youtube` when intentionally testing this checkout.
 
 ## Retrieval
 
@@ -20,9 +20,9 @@ youtube channel @OpenAI --days 7
 youtube doctor
 ```
 
-Metadata returns normalized video facts, including the description, thumbnail URL, and chapter titles with `start_seconds` and optional `end_seconds`. Chapters are an empty list when unavailable. Transcript retrieval uses cached normalized documents, then captions, then speech-to-text fallback. It returns one text string unless `--timestamps` requests timed chunks. `--export` writes metadata and transcript to `<normalized-title>_<normalized-channel>.txt` in the working directory; add `--force` to replace an existing export.
+Metadata returns normalized video facts, including the description, thumbnail URL, and chapter titles with `start_seconds` and optional `end_seconds`. Chapters are an empty list when unavailable. Transcript retrieval fetches captions, then uses speech-to-text fallback when needed, and archives the normalized document. It returns one text string unless `--timestamps` requests timed chunks. `--export` writes metadata and transcript to `<normalized-title>_<normalized-channel>.txt` in the working directory; add `--force` to replace an existing export.
 
-Use vision when pictures add useful context. It requires the vision extra and `ffmpeg`, uses a bounded video-only download, and returns timestamps and absolute collage paths under `.cache/youtube-toolkit/vision/<video-id>/`. The baseline ranks timed transcript passages with chapter-local TF-IDF, then uses PySceneDetect and OpenCV for image-based selection in those windows. No transcript cue-phrase rules, LLM calls, or speech-to-text requests are used by vision. Missing usable captions falls back to visual sampling and is reported through `selection_mode` and `transcript_warning`.
+Use vision when pictures add useful context. It requires the vision extra and `ffmpeg`, uses a bounded video-only download, and returns timestamps and absolute collage paths under `.cache/youtube-toolkit/vision/<datetime>-<video-id>/`. The baseline ranks timed transcript passages with chapter-local TF-IDF, then uses PySceneDetect and OpenCV for image-based selection in those windows. No transcript cue-phrase rules, LLM calls, or speech-to-text requests are used by vision. Missing usable captions falls back to visual sampling and is reported through `selection_mode` and `transcript_warning`.
 
 The default allowance is six screenshots; `--max-frames` accepts 1-96. Repetitive content can yield fewer. Collages retain two columns and three rows, in chronological order. Each item in `frames` includes its `transcript` passage (or null in fallback mode) and raw `visual_scores`: clarity, neighboring change, shot overlap duration, face area fraction, and similarity to earlier selections. Transcript `text_score` measures chapter relevance, not confidence. These measurements do not establish educational importance; inspect the collage alongside the transcript.
 
@@ -40,8 +40,8 @@ YouTube is the default source. CLI defaults require at least 10,000 views and a 
 
 Semantic search uses environment-configured embeddings to rank titles and transcript passages during the invocation. Set `EMBEDDING_API_KEY`; optional configuration is `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL`, and `EMBEDDING_DIMENSIONS`. Results are chunks by default, or ranked videos with `--return video`. No persistent embedding index is maintained.
 
-## Cache and installation
+## Artifacts and installation
 
-Metadata, search, and channel listing caches expire after 15 minutes. Transcript documents are cached by video and retrieval options until removed. Delete the disposable cache to refresh retrieval. Run `youtube doctor` to see the effective cache path and optional capabilities without creating files.
+Metadata, search results, channel listings, and transcripts are saved as separate JSON artifacts for every fresh retrieval. Filenames contain a UTC datetime and video ID, query slug, or channel identifier; the JSON records request details, `fetched_at`, and the response payload. Saved copies are never automatically reused or expired. Delete artifacts when they are no longer needed. Run `youtube doctor` to see the effective artifact path and optional capabilities without creating files.
 
 Install with `uv run python scripts/install.py`; add `--vision` for visual extraction dependencies. There is no database, collection administration, watchlist, scheduled sync, or persistent model setup. Existing user data and old schedules remain untouched. The calling agent owns synthesis; summarize when the user requests analysis or a summary.
