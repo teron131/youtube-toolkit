@@ -1,21 +1,23 @@
-"""Read-only runtime and environment checks for local retrieval artifacts."""
+"""CLI readiness checks, optional dependency guards, and local environment reporting."""
 
 from __future__ import annotations
 
 import argparse
+from importlib.util import find_spec
 import shutil
 from typing import Literal, TypedDict
 
 from ..artifacts import artifact_root
-from ..capabilities import capability_available
 from ..config import (
     DEFAULT_EMBEDDING_MODEL,
     config_value,
     embedding_config_from_env,
 )
 
+VISION_MODULES = ("numpy", "PIL", "cv2", "scenedetect")
 
-class ModelApiHealthResult(TypedDict):
+
+class EmbeddingHealthResult(TypedDict):
     """Embedding readiness without exposing secrets or sending API requests."""
 
     ok: bool
@@ -31,7 +33,7 @@ class DoctorReport(TypedDict):
     artifacts: str
     vision: bool
     ffmpeg: bool
-    embedding: ModelApiHealthResult
+    embedding: EmbeddingHealthResult
 
 
 def run_doctor(args: argparse.Namespace) -> DoctorReport:
@@ -42,13 +44,13 @@ def run_doctor(args: argparse.Namespace) -> DoctorReport:
     return {
         "yt_dlp_version": yt_dlp.version.__version__,
         "artifacts": str(artifact_root()),
-        "vision": capability_available("vision"),
+        "vision": vision_available(),
         "ffmpeg": shutil.which("ffmpeg") is not None,
         "embedding": embedding_api_health(),
     }
 
 
-def embedding_api_health() -> ModelApiHealthResult:
+def embedding_api_health() -> EmbeddingHealthResult:
     """Validate environment configuration for optional semantic search."""
     model = config_value("EMBEDDING_MODEL") or DEFAULT_EMBEDDING_MODEL
     if config_value("EMBEDDING_API_KEY") is None:
@@ -68,3 +70,20 @@ def embedding_api_health() -> ModelApiHealthResult:
         "status": "configured",
         "detail": f"Configured ({model})",
     }
+
+
+def vision_available() -> bool:
+    """Check that every vision dependency can be located without loading the packages."""
+    try:
+        return all(find_spec(module) is not None for module in VISION_MODULES)
+    except (ImportError, ValueError):
+        return False
+
+
+def require_vision() -> None:
+    """Stop the vision command with installation guidance when dependencies are missing."""
+    if vision_available():
+        return
+    raise RuntimeError(
+        "vision requires the vision capability. Install youtube-toolkit[vision]."
+    )

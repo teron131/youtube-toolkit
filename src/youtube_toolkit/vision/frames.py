@@ -315,11 +315,11 @@ def _candidate(
 
 @dataclass(frozen=True, slots=True)
 class _ThumbnailStats:
-    """Retain per-block moments once for each thumbnail reused during duplicate rejection."""
+    """Prepare block moments and centered pixels once for repeated duplicate comparisons."""
 
     mean: np.ndarray
     variance: np.ndarray
-    blocks: np.ndarray
+    centered_blocks: np.ndarray
 
     @classmethod
     def from_image(cls, image: np.ndarray) -> _ThumbnailStats:
@@ -332,13 +332,15 @@ class _ThumbnailStats:
             .reshape(-1, 64)
         )
         mean = blocks.mean(axis=1)
-        return cls(mean=mean, variance=blocks.var(axis=1), blocks=blocks)
+        return cls(
+            mean=mean,
+            variance=blocks.var(axis=1),
+            centered_blocks=blocks - mean[:, None],
+        )
 
     def similarity(self, other: _ThumbnailStats) -> float:
         """Approximate FFmpeg SSIM over non-overlapping eight-pixel blocks from prepared moments."""
-        covariance = (
-            (self.blocks - self.mean[:, None]) * (other.blocks - other.mean[:, None])
-        ).mean(axis=1)
+        covariance = (self.centered_blocks * other.centered_blocks).mean(axis=1)
         luminance_constant = (0.01 * 255) ** 2
         structure_constant = (0.03 * 255) ** 2
         similarity = (

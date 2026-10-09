@@ -13,6 +13,7 @@ import pytest
 from youtube_toolkit.cli import commands
 from youtube_toolkit.cli.parser import build_parser
 from youtube_toolkit import vision
+from youtube_toolkit.schemas import TranscriptChunk, TranscriptDocument, VideoMetadata
 from youtube_toolkit.vision import frames as frame_selection, workflow
 from youtube_toolkit.youtube.caption import CaptionTranscriptUnavailable
 from youtube_toolkit.youtube.client import VISION_VIDEO_FORMAT_SELECTOR, YtDlpClient
@@ -55,8 +56,11 @@ def test_sample_vision_returns_evidence_and_cleans_up(
         12, selected.image, window if captions else None, selected.visual_scores
     )
 
+    metadata_calls = []
+
     class FakeClient:
         def metadata(self, _ref):
+            metadata_calls.append(_ref)
             return {"id": VIDEO_ID, "duration": 120, "heatmap": [{"value": 1}]}
 
         def download_video_for_vision(self, _ref, path, *, max_bytes):
@@ -64,11 +68,16 @@ def test_sample_vision_returns_evidence_and_cleans_up(
             path.write_bytes(b"video")
             return path
 
-    def transcript(_ref, *, options, client):
+    def transcript(metadata, *, options):
         assert not options.allow_stt
         if not captions:
             raise CaptionTranscriptUnavailable("No captions")
-        return object()
+        return TranscriptDocument(
+            VideoMetadata.from_yt_dlp(metadata),
+            "en",
+            "subtitles",
+            [TranscriptChunk(5, 25, "A diagram explains the circuit")],
+        )
 
     def select(path, windows, ffmpeg, *, duration, max_frames):
         assert path.exists()
@@ -79,7 +88,9 @@ def test_sample_vision_returns_evidence_and_cleans_up(
 
     monkeypatch.setattr(workflow, "YtDlpClient", FakeClient)
     monkeypatch.setattr(workflow.shutil, "which", lambda _: "ffmpeg")
-    monkeypatch.setattr(workflow, "fetch_transcript", transcript)
+    monkeypatch.setattr(
+        "youtube_toolkit.youtube.caption.fetch_caption_transcript", transcript
+    )
     monkeypatch.setattr(
         workflow, "select_transcript_windows", lambda _doc, **_kw: [window]
     )
@@ -87,6 +98,7 @@ def test_sample_vision_returns_evidence_and_cleans_up(
     monkeypatch.chdir(tmp_path)
     output_options = {"output_dir": tmp_path} if explicit_output else {}
     result = workflow.sample_vision(VIDEO_ID, **output_options)
+    assert metadata_calls == [VIDEO_ID]
     assert result["selection_mode"] == ("transcript" if captions else "visual")
     assert bool(result["transcript_warning"]) is not captions
     assert result["frames"] == [selected.to_dict()]
@@ -98,6 +110,7 @@ def test_sample_vision_returns_evidence_and_cleans_up(
         first_collage = Path(result["collage_paths"][0])
         first_contents = first_collage.read_bytes()
         second = workflow.sample_vision(VIDEO_ID)
+        assert metadata_calls == [VIDEO_ID, VIDEO_ID]
         second_collage = Path(second["collage_paths"][0])
         assert first_collage.parent != second_collage.parent
         assert VIDEO_ID in first_collage.parent.name

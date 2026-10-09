@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from pathlib import Path
 import re
-from typing import TypedDict
+from typing import Any, TypedDict
 import unicodedata
 
 from .artifacts import write_artifact
@@ -49,8 +49,9 @@ def fetch_transcript(
     *,
     options: TranscriptOptions | None = None,
     client: TranscriptClient | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> TranscriptDocument:
-    """Fetch captions or STT afresh and preserve the complete document as a new local artifact."""
+    """Fetch captions or STT and archive a new document, reusing metadata only when supplied by the current operation."""
     options = options or TranscriptOptions()
     video_id = require_video_id(video_ref)
     request = {
@@ -59,7 +60,9 @@ def fetch_transcript(
         "source": options.source,
         "allow_stt": options.allow_stt,
     }
-    document = fetch_live_transcript(video_ref, options=options, client=client)
+    document = fetch_live_transcript(
+        video_ref, options=options, client=client, metadata=metadata
+    )
     write_artifact("transcripts", video_id, request, asdict(document))
     return document
 

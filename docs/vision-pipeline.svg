@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="1068" viewBox="0 0 1120 1068" role="img" aria-labelledby="title desc">
   <title id="title">How youtube vision picks frames</title>
-  <desc id="desc">An 18-minute example video with six chapters, including a sponsor chapter. Step 1: timed caption passages are scored by how well they represent their chapter; the sponsor chapter is skipped, and every other chapter contributes its best passage before any contributes a second, up to six windows. Step 2: only those windows are decoded, one frame per second, from 2 seconds before to 5 seconds after each passage, about 3 of 18 minutes. Step 3: in one zoomed window, cuts split the samples into shots; a close-up face shot is a last resort, a one-frame flash is too short, and a screen-recording shot wins because it overlaps the caption passage longest; its sharp, steady, most typical frame at 8:35 is chosen. Step 4: chosen frames are published as timestamped two-column collages under .cache/youtube-toolkit/vision/&lt;video-id&gt;/ with JSON measurements for each frame, and the downloaded video is deleted. Without usable timed captions, evenly spaced 30-second windows replace step 1. No model API or speech-to-text is used.</desc>
+  <desc id="desc">An 18-minute example video with six chapters, including a sponsor chapter. Step 1: timed caption passages are scored by how well they represent their chapter; the sponsor chapter is skipped, and every other chapter contributes its best passage before any contributes a second, up to six windows. Step 2: only those windows are decoded, one frame per second, from 2 seconds before to 5 seconds after each passage, about 3 of 18 minutes. Step 3: in one zoomed window, cuts split the samples into shots; a close-up face shot is a last resort, a one-frame flash is too short, and a screen-recording shot wins because it overlaps the caption passage longest; its sharp, steady, most typical frame at 8:35 is chosen. Step 4: chosen frames are published as timestamped two-column collages under .cache/youtube-toolkit/vision/&lt;datetime&gt;-&lt;video-id&gt;/ with JSON measurements for each frame, and the downloaded video is deleted. Without usable timed captions, evenly spaced 30-second windows replace step 1. No model API or speech-to-text is used.</desc>
   <defs>
     <style>
       /* Barlow (c) 2017 The Barlow Project Authors, SIL Open Font License 1.1; Basic Latin subset. */
@@ -269,7 +269,7 @@
     <rect x="472" y="984" width="128" height="20" fill="#0F1115"/>
     <line x1="472" y1="984.5" x2="600" y2="984.5" stroke="#2F343D" stroke-width="1"/>
     <text x="480" y="999" class="stamp">16:42</text>
-    <text x="332" y="1036" class="note">.cache/youtube-toolkit/vision/&lt;video-id&gt;/</text>
+    <text x="332" y="1036" class="note">.cache/youtube-toolkit/vision/&lt;datetime&gt;-&lt;video-id&gt;/</text>
     <rect x="646" y="710" width="430" height="300" fill="#FFFFFF" rx="8" stroke="#D6DAE2" stroke-width="1"/>
     <text x="666" y="740.2" class="code" xml:space="preserve">{</text>
     <text x="666" y="757.2" class="code" xml:space="preserve"><tspan class="key">  &quot;timestamp_seconds&quot;: </tspan><tspan fill="#E5302A">515.0</tspan>,</text>

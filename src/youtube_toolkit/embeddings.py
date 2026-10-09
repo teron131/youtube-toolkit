@@ -1,17 +1,10 @@
-"""Environment-configured embedding API client for in-memory semantic search."""
+"""Generate embedding vectors from the configured endpoint and translate failures for semantic search."""
 
 from __future__ import annotations
 
-import json
-from typing import Any
-import urllib.error
-import urllib.request
+from openai import APIError, OpenAI
 
 from .config import EmbeddingConfig, embedding_config_from_env
-from .execution import retry_transient
-
-EMBEDDING_REQUEST_ATTEMPTS = 3
-EMBEDDING_RETRY_BACKOFF_SECONDS = 0.25
 
 
 class EmbeddingError(RuntimeError):
@@ -23,84 +16,24 @@ def embed_text(
     *,
     config: EmbeddingConfig | None = None,
 ) -> list[float]:
-    """Call the configured embedding endpoint and return the numeric vector."""
+    """Request float embeddings with a 60-second timeout and two retries."""
     try:
-        resolved_config = config or embedding_config_from_env()
-    except ValueError as error:
-        raise EmbeddingError(str(error)) from error
-    payload = {
-        "model": resolved_config.model,
-        "input": text,
-        "dimensions": resolved_config.output_dimensionality,
-    }
-    response = post_embedding_json(
-        f"{resolved_config.base_url}/embeddings",
-        resolved_config,
-        payload,
-    )
-    data = response.get("data")
-    first_embedding = data[0] if isinstance(data, list) and data else {}
-    values = (
-        first_embedding.get("embedding") if isinstance(first_embedding, dict) else None
-    )
-    if values is None:
-        values = response.get("embedding")
-    if not isinstance(values, list):
-        raise EmbeddingError("Embedding response did not include values")
-    return [float(value) for value in values]
-
-
-def post_embedding_json(
-    url: str,
-    config: EmbeddingConfig,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    """POST one embedding request with bounded retries for transient provider failures."""
-    request = urllib.request.Request(  # noqa: S310 - URL is built from the validated http(s) base URL.
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {config.api_key}",
-        },
-        method="POST",
-    )
-
-    def request_payload() -> dict[str, Any]:
-        with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310
-            response_payload = json.loads(response.read().decode("utf-8"))
-        if not isinstance(response_payload, dict):
-            raise json.JSONDecodeError(
-                "Embedding response was not a JSON object", "", 0
+        config = config or embedding_config_from_env()
+        with OpenAI(
+            api_key=config.api_key,
+            base_url=config.base_url,
+            timeout=60,
+            max_retries=2,
+        ) as client:
+            response = client.embeddings.create(
+                model=config.model,
+                input=text,
+                dimensions=config.output_dimensionality,
+                encoding_format="float",
             )
-        return response_payload
-
-    try:
-        return retry_transient(
-            request_payload,
-            attempts=EMBEDDING_REQUEST_ATTEMPTS,
-            backoff_seconds=EMBEDDING_RETRY_BACKOFF_SECONDS,
-            retryable_errors=(OSError, json.JSONDecodeError),
-        )
-    except urllib.error.HTTPError as error:
-        message = compact_embedding_error(
-            error.read().decode("utf-8", errors="replace")
-        )
-        raise EmbeddingError(
-            message or f"Embedding request HTTP {error.code}"
-        ) from error
-    except (OSError, json.JSONDecodeError) as error:
+        values = response.data[0].embedding if response.data else None
+        if not isinstance(values, list):
+            raise EmbeddingError("Embedding response did not include values")
+        return [float(value) for value in values]
+    except (APIError, ValueError) as error:
         raise EmbeddingError(str(error)) from error
-
-
-def compact_embedding_error(text: str) -> str:
-    """Extract a short useful message from an embedding API error payload."""
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError:
-        return " ".join(text.split())[:500]
-    if isinstance(payload, dict):
-        error = payload.get("error")
-        if isinstance(error, dict):
-            return " ".join(str(error.get("message", "")).split())[:500]
-    return ""

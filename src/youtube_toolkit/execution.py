@@ -48,7 +48,7 @@ def _retry_delay_seconds(
     attempt: int,
     backoff_seconds: float,
 ) -> float:
-    """Honor numeric Retry-After responses before bounded exponential backoff."""
+    """Honor numeric Retry-After responses before linear backoff."""
     if isinstance(error, urllib.error.HTTPError):
         retry_after = (
             error.headers.get("Retry-After") if error.headers is not None else None
@@ -58,7 +58,7 @@ def _retry_delay_seconds(
                 return max(0.0, float(retry_after))
             except ValueError:
                 pass
-    return backoff_seconds * (2 ** (attempt - 1))
+    return backoff_seconds * attempt
 
 
 def collect_concurrently[JobKey, Job, Result](
