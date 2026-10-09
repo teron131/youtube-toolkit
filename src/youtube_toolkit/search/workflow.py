@@ -24,16 +24,15 @@ from .filters import (
     video_result,
 )
 from .request import (
-    DATE_FILTER_SOURCE_OVERSAMPLE_FACTOR,
-    SOURCE_OVERSAMPLE_FACTOR,
     SearchRequest,
     SearchSort,
     resolve_sort,
     validate_request,
 )
-from .semantic import search_transcripts
 
 MAX_CONCURRENT_METADATA_FETCHES = 8
+SOURCE_OVERSAMPLE_FACTOR = 3
+DATE_FILTER_SOURCE_OVERSAMPLE_FACTOR = 12
 
 
 def search(request: SearchRequest) -> list[dict[str, Any]]:
@@ -48,6 +47,8 @@ def search(request: SearchRequest) -> list[dict[str, Any]]:
         cutoff=cutoff,
     )
     if request.mode == "semantic":
+        from .semantic import search_transcripts
+
         return search_transcripts(request, candidates)
     if sort == "recency":
         candidates = rank_by_value(

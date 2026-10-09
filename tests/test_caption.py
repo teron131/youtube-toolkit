@@ -188,7 +188,7 @@ def test_fetch_caption_payload_retries_transient_network_failures(monkeypatch) -
         "events": []
     }
     assert attempts == 3
-    assert delays == [0.25, 0.5]
+    assert delays == [1.0, 2.0]
 
 
 def test_any_caption_source_falls_back_to_manual_subtitles() -> None:
@@ -324,7 +324,7 @@ def test_transcript_archives_preserve_timing_and_retrieval_options(
         ],
     )
 
-    def fetch(video_ref, *, options, client):
+    def fetch(video_ref, *, options, client, metadata=None):
         calls.append(options)
         return expected
 
@@ -398,3 +398,13 @@ def test_caption_only_policy_never_uses_stt(
         fetch_transcript(
             video_id, options=TranscriptOptions(allow_stt=False), client=FakeClient()
         )
+
+
+def test_supplied_transcript_metadata_must_match_video(monkeypatch, tmp_path) -> None:
+    """A caller cannot archive another video's captions under the requested video ID."""
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(
+        ValueError, match="Supplied metadata does not match requested video"
+    ):
+        fetch_transcript("JpSHyEIZ_bo", metadata={"id": "abcdefghijk"})
+    assert not (tmp_path / ".cache/youtube-toolkit/transcripts").exists()

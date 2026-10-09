@@ -427,6 +427,9 @@ def test_search_command_builds_channel_request(monkeypatch) -> None:
         argparse.Namespace(
             query="agents",
             source=["channel"],
+            extra_queries=[],
+            uploaded_after=None,
+            uploaded_within_days=None,
             mode="native",
             return_type=None,
             channels=["@OpenAI", "UC123"],
@@ -507,12 +510,11 @@ def test_doctor_reports_local_artifacts_without_creating_them(
     assert "database" not in report
 
 
-def test_vision_requires_capability_before_fetch(monkeypatch, capsys) -> None:
-    def reject(capability: str, feature: str) -> None:
-        assert (capability, feature) == ("vision", "vision")
+def test_vision_requires_dependencies_before_fetch(monkeypatch, capsys) -> None:
+    def reject() -> None:
         raise RuntimeError("Vision dependencies missing")
 
-    monkeypatch.setattr(commands, "require_capability", reject)
+    monkeypatch.setattr(commands, "require_vision", reject)
     assert main(["vision", "JpSHyEIZ_bo"]) == 1
     assert "Vision dependencies missing" in capsys.readouterr().err
 

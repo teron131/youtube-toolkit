@@ -12,7 +12,7 @@ from uuid import uuid4
 from ..execution import retry_transient
 
 STT_REQUEST_ATTEMPTS = 3
-STT_RETRY_BACKOFF_SECONDS = 0.5
+STT_RETRY_BACKOFF_SECONDS = 1.0
 AUDIO_CONTENT_TYPES = {
     ".aac": "audio/aac",
     ".flac": "audio/flac",

@@ -1,6 +1,10 @@
 """Embedding transport, environment configuration, and transcript chunking contracts."""
 
-import urllib.error
+import json
+
+import httpx2
+from openai import OpenAI
+import pytest
 
 from youtube_toolkit.config import (
     DEFAULT_EMBEDDING_CONCURRENCY,
@@ -8,7 +12,7 @@ from youtube_toolkit.config import (
     EmbeddingConfig,
     embedding_concurrency,
 )
-from youtube_toolkit.embeddings import embed_text, post_embedding_json
+from youtube_toolkit.embeddings import EmbeddingError, embed_text
 from youtube_toolkit.search.semantic import split_transcript_chunks
 
 
@@ -28,13 +32,21 @@ def test_split_transcript_chunks_uses_overlap() -> None:
 
 
 def test_embed_text_uses_embedding_config(monkeypatch) -> None:
-    calls = {}
+    """The real SDK sends configured credentials, endpoint, dimensions, and float encoding."""
+    requests = []
 
-    def fake_post_embedding_json(url, config, payload):
-        calls["url"] = url
-        calls["config"] = config
-        calls["payload"] = payload
-        return {"data": [{"embedding": [0.25, 0.75]}]}
+    def respond(request):
+        requests.append(request)
+        return httpx2.Response(200, json={"data": [{"embedding": [0.25, 0.75]}]})
+
+    clients = []
+
+    def create_client(**kwargs):
+        client = OpenAI(
+            **kwargs, http_client=httpx2.Client(transport=httpx2.MockTransport(respond))
+        )
+        clients.append(client)
+        return client
 
     config = EmbeddingConfig(
         model="text-embedding-test",
@@ -42,67 +54,68 @@ def test_embed_text_uses_embedding_config(monkeypatch) -> None:
         base_url="https://embedding.example/v1/",
         output_dimensionality=512,
     )
-    monkeypatch.setattr(
-        "youtube_toolkit.embeddings.post_embedding_json", fake_post_embedding_json
-    )
+    monkeypatch.setattr("youtube_toolkit.embeddings.OpenAI", create_client)
 
     assert embed_text("hello", config=config) == [0.25, 0.75]
-    assert calls == {
-        "url": "https://embedding.example/v1/embeddings",
-        "config": config,
-        "payload": {
-            "model": "text-embedding-test",
-            "input": "hello",
-            "dimensions": 512,
-        },
+    assert str(requests[0].url) == "https://embedding.example/v1/embeddings"
+    assert requests[0].headers["Authorization"] == "Bearer embedding-key"
+    assert json.loads(requests[0].content) == {
+        "model": "text-embedding-test",
+        "input": "hello",
+        "dimensions": 512,
+        "encoding_format": "float",
     }
+    assert clients[0].timeout == 60
+    assert clients[0].max_retries == 2
+    assert clients[0].is_closed()
 
 
 def test_embedding_request_retries_transient_network_failures(monkeypatch) -> None:
-    """Embedding requests should isolate transient failures behind three total attempts."""
+    """SDK retries retain three total attempts and close the client after recovery."""
     attempts = 0
-    delays: list[float] = []
 
-    class FakeResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def read(self) -> bytes:
-            return b'{"data": [{"embedding": [1.0, 0.0]}]}'
-
-    def fake_urlopen(_request, *, timeout: int):
+    def respond(request):
         nonlocal attempts
-        assert timeout == 60
         attempts += 1
         if attempts < 3:
-            raise urllib.error.URLError("temporary outage")
-        return FakeResponse()
+            raise httpx2.ConnectError("temporary outage", request=request)
+        return httpx2.Response(200, json={"data": [{"embedding": [1.0, 0.0]}]})
 
+    def create_client(**kwargs):
+        return OpenAI(
+            **kwargs, http_client=httpx2.Client(transport=httpx2.MockTransport(respond))
+        )
+
+    monkeypatch.setattr("youtube_toolkit.embeddings.OpenAI", create_client)
+    monkeypatch.setattr("openai._base_client.time.sleep", lambda _delay: None)
     config = EmbeddingConfig(
-        model="text-embedding-test",
-        api_key="embedding-key",
-        base_url="https://embedding.example/v1/",
-        output_dimensionality=2,
+        "text-embedding-test", "embedding-key", "https://embedding.example/v1", 2
     )
-    monkeypatch.setattr(
-        "youtube_toolkit.embeddings.urllib.request.urlopen", fake_urlopen
-    )
-    monkeypatch.setattr("youtube_toolkit.execution.time.sleep", delays.append)
-
-    assert post_embedding_json(
-        "https://embedding.example/v1/embeddings",
-        config,
-        {
-            "model": config.model,
-            "input": "hello",
-            "dimensions": 2,
-        },
-    ) == {"data": [{"embedding": [1.0, 0.0]}]}
+    assert embed_text("hello", config=config) == [1.0, 0.0]
     assert attempts == 3
-    assert delays == [0.25, 0.5]
+
+
+@pytest.mark.parametrize(
+    ("status", "payload"),
+    [(401, {"error": {"message": "Invalid key"}}), (200, {"data": []})],
+)
+def test_embedding_failures_remain_search_errors(monkeypatch, status, payload) -> None:
+    """API rejection and missing vectors stay within the caller's existing error contract."""
+
+    def create_client(**kwargs):
+        return OpenAI(
+            **kwargs,
+            http_client=httpx2.Client(
+                transport=httpx2.MockTransport(
+                    lambda _request: httpx2.Response(status, json=payload)
+                )
+            ),
+        )
+
+    monkeypatch.setattr("youtube_toolkit.embeddings.OpenAI", create_client)
+    config = EmbeddingConfig("test", "embedding-key", "https://embedding.example/v1")
+    with pytest.raises(EmbeddingError, match=r"Invalid key|did not include values"):
+        embed_text("hello", config=config)
 
 
 def test_embedding_config_normalizes_values() -> None:

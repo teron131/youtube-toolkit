@@ -6,10 +6,10 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol
 
+from ..config import DEFAULT_LAST_VIDEOS
 from ..identity import ChannelRef, normalize_channel_url
 from .client import YtDlpClient
 
-DEFAULT_LAST_VIDEOS = 10
 MIN_DAYS_WINDOW = 10
 
 
@@ -39,33 +39,11 @@ def fetch_channel_videos(
     options: ChannelOptions | None = None,
     client: ChannelVideosClient | None = None,
 ) -> dict[str, Any]:
-    """Resolve a channel and retrieve its listing under the requested limit or date window."""
+    """Resolve and validate a channel request, expanding date-window fetches until the listing crosses the cutoff."""
     options = options or ChannelOptions()
     client = client or YtDlpClient()
     validate_channel_options(options)
     channel_url = normalize_channel_url(channel_ref)
-    return get_recent_channel_entries(
-        client,
-        channel_url,
-        options=options,
-    )
-
-
-def validate_channel_options(options: ChannelOptions) -> None:
-    """Validate channel listing limits before any YouTube request is made."""
-    if options.last is not None and options.last <= 0:
-        raise ValueError("--last must be greater than 0")
-    if options.days is not None and options.days <= 0:
-        raise ValueError("--days must be greater than 0")
-
-
-def get_recent_channel_entries(
-    client: ChannelVideosClient,
-    channel_url: str,
-    *,
-    options: ChannelOptions,
-) -> dict[str, Any]:
-    """Expand days-based channel fetches until the listing can prove it crossed the cutoff."""
     if options.days is None:
         return client.channel_videos(
             channel_url,
@@ -93,6 +71,14 @@ def get_recent_channel_entries(
         ):
             return metadata
         window_size *= 2
+
+
+def validate_channel_options(options: ChannelOptions) -> None:
+    """Validate channel listing limits before any YouTube request is made."""
+    if options.last is not None and options.last <= 0:
+        raise ValueError("--last must be greater than 0")
+    if options.days is not None and options.days <= 0:
+        raise ValueError("--days must be greater than 0")
 
 
 def cutoff_date_for_days(days: int) -> date:

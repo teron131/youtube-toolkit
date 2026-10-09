@@ -156,7 +156,7 @@ def test_stt_request_retries_transient_network_failures(monkeypatch) -> None:
 
     assert result == {"text": "transcript", "language": "en"}
     assert attempts == 3
-    assert delays == [0.5, 1.0]
+    assert delays == [1.0, 2.0]
 
 
 def test_stt_request_does_not_retry_permanent_client_failure(monkeypatch) -> None:

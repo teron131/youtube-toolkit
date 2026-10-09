@@ -6,7 +6,6 @@ import argparse
 from dataclasses import asdict
 from typing import Any, cast
 
-from ..capabilities import require_capability
 from ..config import DEFAULT_CHANNEL_SEARCH_LIMIT, DEFAULT_YOUTUBE_SEARCH_LIMIT
 from ..schemas import VideoMetadata
 from ..search.request import ChannelTarget, SearchRequest, SearchSource
@@ -17,6 +16,7 @@ from ..transcript import (
 )
 from ..youtube.channels import ChannelOptions, fetch_channel_videos
 from ..youtube.client import YtDlpClient
+from .health import require_vision
 
 
 class VideoCommands:
@@ -48,7 +48,7 @@ class VideoCommands:
     @staticmethod
     def vision(args: argparse.Namespace) -> dict[str, Any]:
         """Return bounded timestamped visual context and its local collage paths."""
-        require_capability("vision", "vision")
+        require_vision()
         from ..vision import sample_vision
 
         return sample_vision(args.video_ref, max_frames=args.max_frames)
@@ -59,6 +59,7 @@ class ChannelCommands:
 
     @staticmethod
     def videos(args: argparse.Namespace) -> dict[str, Any]:
+        """Request a channel listing with the parsed count or date window."""
         return fetch_channel_videos(
             args.channel_ref, options=ChannelOptions(last=args.last, days=args.days)
         )
@@ -72,19 +73,20 @@ class SearchCommands:
         """Translate parsed CLI arguments into the public search request contract."""
         from ..search.workflow import search
 
-        raw_sources = tuple(dict.fromkeys(args.source or ["youtube"]))
+        sources = cast(
+            tuple[SearchSource, ...], tuple(dict.fromkeys(args.source or ["youtube"]))
+        )
         limit = args.limit
         if limit is None:
             limit = (
                 DEFAULT_CHANNEL_SEARCH_LIMIT
-                if raw_sources == ("channel",)
+                if sources == ("channel",)
                 else DEFAULT_YOUTUBE_SEARCH_LIMIT
             )
-        sources = cast(tuple[SearchSource, ...], raw_sources)
         return search(
             SearchRequest(
                 query=args.query,
-                extra_queries=tuple(getattr(args, "extra_queries", [])),
+                extra_queries=tuple(args.extra_queries),
                 sources=sources,
                 mode=args.mode,
                 return_type=args.return_type,
@@ -96,8 +98,8 @@ class SearchCommands:
                 min_views=args.min_views,
                 min_duration=args.min_duration,
                 max_duration=args.max_duration,
-                uploaded_after=getattr(args, "uploaded_after", None),
-                uploaded_within_days=getattr(args, "uploaded_within_days", None),
+                uploaded_after=args.uploaded_after,
+                uploaded_within_days=args.uploaded_within_days,
                 include_channel=tuple(args.include_channel),
                 exclude_channel=tuple(args.exclude_channel),
                 include_title=tuple(args.include_title),

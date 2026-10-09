@@ -12,7 +12,6 @@ from youtube_toolkit.identity import (
 from youtube_toolkit.youtube.channels import (
     ChannelOptions,
     fetch_channel_videos,
-    get_recent_channel_entries,
     validate_channel_options,
 )
 
@@ -103,10 +102,10 @@ def test_unlimited_days_window_uses_bounded_first_fetch(monkeypatch) -> None:
                 ]
             }
 
-    metadata = get_recent_channel_entries(
-        FakeClient(),
+    metadata = fetch_channel_videos(
         "https://www.youtube.com/@OpenAI/videos",
         options=ChannelOptions(last=None, days=3),
+        client=FakeClient(),
     )
 
     assert calls == [("https://www.youtube.com/@OpenAI/videos", 10, False)]

@@ -5,13 +5,13 @@ from __future__ import annotations
 import argparse
 
 from ..config import (
+    DEFAULT_LAST_VIDEOS,
     DEFAULT_SEARCH_MAX_DURATION,
     DEFAULT_SEARCH_MIN_DURATION,
     DEFAULT_SEARCH_MIN_VIEWS,
     DEFAULT_VISION_MAX_FRAMES,
     MAX_VISION_FRAMES,
 )
-from ..youtube.channels import DEFAULT_LAST_VIDEOS
 from .commands import ChannelCommands, SearchCommands, VideoCommands
 from .health import run_doctor
 
@@ -49,7 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
     VideoCommandParser.add_to(subparsers)
     SearchCommandParser.add_to(subparsers)
     ChannelCommandParser.add_to(subparsers)
-    add_doctor_parser(subparsers)
+    _add_doctor_command(subparsers)
     return parser
 
 
@@ -216,7 +216,8 @@ class ChannelCommandParser:
         channel_parser.set_defaults(handler=ChannelCommands.videos)
 
 
-def add_doctor_parser(subparsers: argparse._SubParsersAction) -> None:
+def _add_doctor_command(subparsers: argparse._SubParsersAction) -> None:
+    """Register the local readiness report without triggering retrieval."""
     doctor_parser = subparsers.add_parser(
         "doctor", help="Check runtime, artifact path, and optional capabilities"
     )

@@ -70,7 +70,10 @@ def sample_vision(
     transcript_warning = None
     try:
         document = fetch_transcript(
-            video_ref, options=TranscriptOptions(allow_stt=False), client=client
+            video_ref,
+            options=TranscriptOptions(allow_stt=False),
+            client=client,
+            metadata=metadata,
         )
         windows = select_transcript_windows(document, max_windows=max_frames)
         if not windows:

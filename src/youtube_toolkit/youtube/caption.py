@@ -12,7 +12,12 @@ import urllib.request
 
 from ..convert_zh import convert_zh
 from ..execution import retry_transient
-from ..identity import ALLOWED_CAPTION_HOST_SUFFIXES, VideoRef, validate_url
+from ..identity import (
+    ALLOWED_CAPTION_HOST_SUFFIXES,
+    VideoRef,
+    require_video_id,
+    validate_url,
+)
 from ..schemas import TranscriptChunk, TranscriptDocument, VideoMetadata
 from ..stt import transcribe_audio_details
 from .client import YtDlpClient
@@ -31,7 +36,7 @@ DEFAULT_TRANSCRIPT_LANGUAGES = (
     "zh",
 )
 CAPTION_REQUEST_ATTEMPTS = 3
-CAPTION_RETRY_BACKOFF_SECONDS = 0.25
+CAPTION_RETRY_BACKOFF_SECONDS = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,11 +69,14 @@ def fetch_live_transcript(
     *,
     options: TranscriptOptions | None = None,
     client: TranscriptClient | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> TranscriptDocument:
-    """Prefer captions under the requested policy and fall back to STT; request archiving is owned by the client."""
+    """Prefer captions and fall back to STT, using a matching metadata response already fetched by the caller when available."""
     options = options or TranscriptOptions()
     client = client or YtDlpClient()
-    metadata_payload = client.metadata(video_ref)
+    if metadata is not None and metadata.get("id") != require_video_id(video_ref):
+        raise ValueError("Supplied metadata does not match requested video")
+    metadata_payload = client.metadata(video_ref) if metadata is None else metadata
     try:
         return fetch_caption_transcript(metadata_payload, options=options)
     except CaptionTranscriptUnavailable:

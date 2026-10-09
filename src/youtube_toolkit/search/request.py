@@ -12,8 +12,6 @@ SearchSource = Literal["youtube", "channel"]
 SearchMode = Literal["native", "semantic"]
 SearchReturnType = Literal["video", "chunk"]
 SearchSort = Literal["relevance", "recency", "popularity"]
-SOURCE_OVERSAMPLE_FACTOR = 3
-DATE_FILTER_SOURCE_OVERSAMPLE_FACTOR = 12
 
 
 @dataclass(frozen=True, slots=True)
