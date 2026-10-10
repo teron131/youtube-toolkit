@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict
-from typing import Any, cast
+from typing import Any
 
 from ..config import DEFAULT_CHANNEL_SEARCH_LIMIT, DEFAULT_YOUTUBE_SEARCH_LIMIT
 from ..schemas import VideoMetadata
-from ..search.request import ChannelTarget, SearchRequest, SearchSource
+from ..search.preprocessing import ChunkResult, VideoResult
+from ..search.request import ChannelTarget, SearchRequest
 from ..transcript import (
     TranscriptExportResult,
     fetch_transcript,
@@ -57,24 +58,20 @@ def channel(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
-def search(args: argparse.Namespace) -> list[dict[str, Any]]:
+def search(args: argparse.Namespace) -> list[VideoResult] | list[ChunkResult]:
     """Translate parsed CLI arguments into the public search request contract."""
     from ..search import workflow
 
-    sources = cast(
-        tuple[SearchSource, ...], tuple(dict.fromkeys(args.source or ["youtube"]))
-    )
     limit = args.limit
     if limit is None:
         limit = (
             DEFAULT_CHANNEL_SEARCH_LIMIT
-            if sources == ("channel",)
+            if args.channels
             else DEFAULT_YOUTUBE_SEARCH_LIMIT
         )
     return workflow.search(
         SearchRequest(
             queries=tuple(query for query in args.queries if query),
-            sources=sources,
             mode=args.mode,
             return_type=args.return_type,
             channels=tuple(

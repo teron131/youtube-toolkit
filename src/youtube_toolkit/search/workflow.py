@@ -1,6 +1,6 @@
-"""Search workflow orchestration for mixable source, mode, and return-type choices.
+"""Search workflow orchestration for channel scope, mode, and return-type choices.
 
-Sources discover candidate videos from YouTube, channel listings, or their combination.
+Candidate videos come from YouTube search, or from channel listings when the request names channels.
 Native mode stays metadata-first and returns video objects after local filters, ranking, and limits.
 Relevance order is delegated to YouTube: each query's results keep YouTube's ranking, and several queries are interleaved rather than rescored.
 Semantic mode runs title, transcript, chunk-index, and scoring stages, then returns chunks by default.
@@ -14,49 +14,41 @@ from typing import Any
 from ..config import MAX_CONCURRENT_METADATA_FETCHES
 from ..execution import collect_concurrently
 from ..youtube.client import YtDlpClient
-from .discovery import channel_listings, youtube_candidates
-from .filters import (
+from .preprocessing import (
+    ChunkResult,
+    VideoResult,
     candidate_id,
     dedupe_candidates,
     filter_candidates,
     normalized_upload_date,
     popularity,
     rank_by_value,
-    upload_cutoff,
     video_result,
 )
-from .request import (
-    SearchRequest,
-    SearchSort,
-    resolve_sort,
-    validate_request,
-)
+from .discovery import channel_listings, youtube_candidates
+from .request import ResolvedRequest, SearchRequest, resolve_request
 
-SOURCE_OVERSAMPLE_FACTOR = 3
-DATE_FILTER_SOURCE_OVERSAMPLE_FACTOR = 12
+YOUTUBE_OVERSAMPLE_FACTOR = 3
+DATE_FILTER_OVERSAMPLE_FACTOR = 12
 
 
-def search(request: SearchRequest) -> list[dict[str, Any]]:
-    """Run the public search workflow across configured sources, filters, and result shapes."""
-    validate_request(request)
-    sort = resolve_sort(request)
-    cutoff = upload_cutoff(request)
+def search(request: SearchRequest) -> list[VideoResult] | list[ChunkResult]:
+    """Run the public search workflow across the requested channel scope, filters, and result shapes."""
+    resolved = resolve_request(request)
 
-    candidates = filter_candidates(
-        dedupe_candidates(collect_sources(request, sort=sort, cutoff=cutoff)),
-        request,
-        cutoff=cutoff,
-    )
+    candidates = collect_candidates(resolved)
+    candidates = dedupe_candidates(candidates)
+    candidates = filter_candidates(candidates, resolved)
     if request.mode == "semantic":
         from .semantic import search_transcripts
 
-        return search_transcripts(request, candidates)
-    if sort == "recency":
+        return search_transcripts(resolved, candidates)
+    if resolved.sort == "recency":
         candidates = rank_by_value(
             candidates,
             value=lambda candidate: candidate.get("upload_date"),
         )
-    elif sort == "popularity":
+    elif resolved.sort == "popularity":
         candidates = rank_by_value(
             candidates,
             value=popularity,
@@ -65,75 +57,56 @@ def search(request: SearchRequest) -> list[dict[str, Any]]:
     return [video_result(candidate) for candidate in candidates[: request.limit]]
 
 
-def collect_sources(
-    request: SearchRequest,
-    *,
-    sort: SearchSort,
-    cutoff: str | None,
-) -> list[dict[str, Any]]:
-    """Collect candidates from each requested source, hydrated with any metadata the filters or sort need.
+def collect_candidates(resolved: ResolvedRequest) -> list[dict[str, Any]]:
+    """Collect candidates from the requested channels, or from YouTube search when none are named, hydrated with any metadata the filters or sort need.
 
-    Sources oversample more under an upload-date filter because it discards candidates after collection.
+    Collection oversamples more under an upload-date filter because it discards candidates afterwards.
     """
-    fields = required_fields(request, sort=sort, cutoff=cutoff)
-    date_fetch_limit = request.limit * DATE_FILTER_SOURCE_OVERSAMPLE_FACTOR
+    request = resolved.request
+    fields = required_fields(resolved)
+    date_filtered = resolved.upload_cutoff is not None
+    date_fetch_limit = request.limit * DATE_FILTER_OVERSAMPLE_FACTOR
+    if not request.channels:
+        entries = youtube_candidates(
+            resolved,
+            fetch_limit=date_fetch_limit
+            if date_filtered
+            else request.limit * YOUTUBE_OVERSAMPLE_FACTOR,
+        )
+        return hydrate_candidates(entries, resolved, fields=fields)
     candidates: list[dict[str, Any]] = []
-    for source in request.sources:
-        if source == "youtube":
-            entries = youtube_candidates(
-                request,
-                fetch_limit=date_fetch_limit
-                if cutoff is not None
-                else request.limit * SOURCE_OVERSAMPLE_FACTOR,
-                sort=sort,
-            )
-            candidates.extend(
-                hydrate_candidates(entries, request, fields=fields, cutoff=cutoff)
-            )
-        elif source == "channel":
-            for listing in channel_listings(
-                request,
-                limit=date_fetch_limit if cutoff is not None else request.limit,
-            ):
-                candidates.extend(
-                    hydrate_candidates(
-                        listing,
-                        request,
-                        fields=fields,
-                        cutoff=cutoff,
-                        newest_first=True,
-                    )
-                )
-        else:
-            raise ValueError(f"unsupported search source: {source}")
+    for listing in channel_listings(
+        request,
+        limit=date_fetch_limit if date_filtered else request.limit,
+    ):
+        candidates.extend(
+            hydrate_candidates(listing, resolved, fields=fields, newest_first=True)
+        )
     return candidates
 
 
-def required_fields(
-    request: SearchRequest,
-    *,
-    sort: SearchSort,
-    cutoff: str | None,
-) -> frozenset[str]:
+def required_fields(resolved: ResolvedRequest) -> frozenset[str]:
     """Name the candidate fields that active filters or native result ordering compare."""
+    request = resolved.request
+    native_sort = resolved.sort if request.mode == "native" else None
     fields: set[str] = set()
-    if request.min_views is not None or (
-        request.mode == "native" and sort == "popularity"
-    ):
+    if request.min_views is not None or native_sort == "popularity":
         fields.add("view_count")
-    if request.min_duration is not None or request.max_duration is not None:
+    if (
+        resolved.min_duration_seconds is not None
+        or resolved.max_duration_seconds is not None
+    ):
         fields.add("duration")
-    if cutoff is not None or (request.mode == "native" and sort == "recency"):
+    if resolved.upload_cutoff is not None or native_sort == "recency":
         fields.add("upload_date")
     return frozenset(fields)
 
 
 def hydrate_candidates(
     candidates: list[dict[str, Any]],
-    request: SearchRequest,
+    resolved: ResolvedRequest,
     *,
     fields: frozenset[str],
-    cutoff: str | None,
     newest_first: bool = False,
 ) -> list[dict[str, Any]]:
     """Fetch full metadata for candidates that pass the known filters but lack a field the filters or sort need.
@@ -143,10 +116,8 @@ def hydrate_candidates(
     Failed fetches leave candidates unhydrated for the strict filter to judge.
     Hydrated candidates also keep the raw response under "metadata", so later stages of this search reuse it instead of requesting it again.
     """
-    survivors = filter_candidates(
-        candidates, request, cutoff=cutoff, allow_missing=True
-    )
-    stop_before = cutoff if newest_first else None
+    survivors = filter_candidates(candidates, resolved, allow_missing=True)
+    stop_before = resolved.upload_cutoff if newest_first else None
     batch_size = (
         MAX_CONCURRENT_METADATA_FETCHES if stop_before is not None else len(survivors)
     )

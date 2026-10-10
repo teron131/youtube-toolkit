@@ -9,25 +9,24 @@ from typing import Any
 from ..identity import ChannelIdentity, extract_channel_identity
 from ..youtube.channels import ChannelOptions, fetch_channel_videos
 from ..youtube.client import YtDlpClient
-from .filters import dedupe_candidates, interlace_relevance
-from .request import ChannelTarget, SearchRequest, SearchSort
+from .preprocessing import dedupe_candidates, interlace_relevance
+from .request import ChannelTarget, ResolvedRequest, SearchRequest
 
 CHANNEL_NAME_SEARCH_LIMIT = 10
 MAX_CONCURRENT_DISCOVERY_FETCHES = 4
 
 
 def youtube_candidates(
-    request: SearchRequest,
+    resolved: ResolvedRequest,
     *,
     fetch_limit: int,
-    sort: SearchSort,
 ) -> list[dict[str, Any]]:
-    """Run one YouTube search per query and merge the result lists for the requested ranking policy.
+    """Run one YouTube search per query and merge the result lists for the resolved ranking policy.
 
     The fetch budget is split across the queries, since each supplies only its share of the merged results.
     """
-    youtube_sort = "popularity" if sort == "popularity" else "relevance"
-    queries = tuple(dict.fromkeys(request.queries))
+    youtube_sort = "popularity" if resolved.sort == "popularity" else "relevance"
+    queries = tuple(dict.fromkeys(resolved.request.queries))
     per_query_limit = -(-fetch_limit // len(queries))
     # executor.map preserves query order even when later requests finish first.
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_DISCOVERY_FETCHES) as executor:
@@ -37,7 +36,7 @@ def youtube_candidates(
                 queries,
             )
         )
-    if sort == "relevance":
+    if resolved.sort == "relevance":
         candidates = interlace_relevance(candidate_lists)
     else:
         candidates = dedupe_candidates(

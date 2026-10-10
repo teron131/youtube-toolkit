@@ -1,4 +1,4 @@
-"""Search request contracts validate caller policy before workflows touch YouTube or embeddings."""
+"""Search request contracts validate caller policy and settle open choices before workflows touch YouTube or embeddings."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ from datetime import date
 from typing import Literal, get_args
 
 from ..identity import ChannelRef, is_channel_id, parse_channel_ref
+from ..youtube.channels import cutoff_date_for_days
 
-SearchSource = Literal["youtube", "channel"]
 SearchMode = Literal["native", "semantic"]
 SearchReturnType = Literal["video", "chunk"]
 SearchSort = Literal["relevance", "recency", "popularity"]
@@ -67,12 +67,12 @@ def is_exact_channel_ref(channel_ref: ChannelRef) -> bool:
 class SearchRequest:
     """Validated public search contract shared by CLI and Python callers.
 
+    Channels choose where candidates come from: none searches all of YouTube, any searches only those channels' uploads.
     Queries are equals: each runs as its own YouTube search, and no query ranks above another.
     """
 
     queries: tuple[str, ...]
     limit: int
-    sources: tuple[SearchSource, ...] = ("youtube",)
     mode: SearchMode = "native"
     return_type: SearchReturnType | None = None
     channels: tuple[ChannelTarget, ...] = ()
@@ -86,6 +86,38 @@ class SearchRequest:
     exclude_title: tuple[str, ...] = ()
     uploaded_after: str | None = None
     uploaded_within_days: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedRequest:
+    """A validated request plus the values search stages would otherwise each work out from it.
+
+    The caller's own choices stay on `request`; the other fields hold what had to be defaulted, parsed, or combined.
+    Read `sort` and `return_type` here, because the ones on `request` may still be unset.
+    """
+
+    request: SearchRequest
+    sort: SearchSort
+    return_type: SearchReturnType
+    upload_cutoff: str | None
+    min_duration_seconds: float | None
+    max_duration_seconds: float | None
+
+
+def resolve_request(request: SearchRequest) -> ResolvedRequest:
+    """Validate the request, then settle every choice the caller left open or gave as text.
+
+    Search stages take the result, so none of them runs on an unvalidated request or repeats this work.
+    """
+    validate_request(request)
+    return ResolvedRequest(
+        request=request,
+        sort=resolve_sort(request),
+        return_type=resolve_return_type(request),
+        upload_cutoff=resolve_upload_cutoff(request),
+        min_duration_seconds=parse_duration(request.min_duration),
+        max_duration_seconds=parse_duration(request.max_duration),
+    )
 
 
 def normalize_filter_date(value: str) -> str:
@@ -126,20 +158,26 @@ def resolve_return_type(request: SearchRequest) -> SearchReturnType:
 
 
 def resolve_sort(request: SearchRequest) -> SearchSort:
-    """Choose the default ranking policy from source and mode while honoring explicit caller choice."""
+    """Choose the default ranking policy from channel scope and mode while honoring explicit caller choice."""
     if request.sort is not None:
         return request.sort
-    if request.sources == ("channel",) and request.mode == "native":
+    if request.channels and request.mode == "native":
         return "recency"
     return "relevance"
 
 
+def resolve_upload_cutoff(request: SearchRequest) -> str | None:
+    """Resolve the strictest upload-date cutoff from absolute and relative filters."""
+    cutoffs: list[str] = []
+    if request.uploaded_after is not None:
+        cutoffs.append(normalize_filter_date(request.uploaded_after))
+    if request.uploaded_within_days is not None:
+        cutoffs.append(cutoff_date_for_days(request.uploaded_within_days).isoformat())
+    return max(cutoffs) if cutoffs else None
+
+
 def validate_request(request: SearchRequest) -> None:
     """Validate the public search contract before any network or embedding work starts."""
-    if any(source not in get_args(SearchSource) for source in request.sources):
-        raise ValueError("search source must be one of: youtube, channel")
-    if len(set(request.sources)) != len(request.sources):
-        raise ValueError("search sources must not contain duplicates")
     if request.mode not in get_args(SearchMode):
         raise ValueError("search mode must be one of: native, semantic")
     if request.return_type is not None and request.return_type not in get_args(
@@ -148,7 +186,7 @@ def validate_request(request: SearchRequest) -> None:
         raise ValueError("search return type must be one of: video, chunk")
     if request.sort is not None and request.sort not in get_args(SearchSort):
         raise ValueError("search sort must be one of: relevance, recency, popularity")
-    query_required = request.mode == "semantic" or "youtube" in request.sources
+    query_required = request.mode == "semantic" or not request.channels
     if (query_required and not request.queries) or any(
         not query.strip() for query in request.queries
     ):
@@ -169,17 +207,7 @@ def validate_request(request: SearchRequest) -> None:
         raise ValueError("uploaded-within-days must be non-negative")
     if request.uploaded_after is not None:
         normalize_filter_date(request.uploaded_after)
-    if not request.sources:
-        raise ValueError("search requires at least one source")
     if request.return_type == "chunk" and request.mode != "semantic":
         raise ValueError("chunk return requires semantic mode")
-    if request.channels and "channel" not in request.sources:
-        raise ValueError("--channels requires --source channel")
-    if "channel" in request.sources and not request.channels:
-        raise ValueError("channel source requires at least one --channels value")
-    if (
-        request.mode == "native"
-        and request.sources == ("youtube",)
-        and request.sort == "recency"
-    ):
+    if request.mode == "native" and not request.channels and request.sort == "recency":
         raise ValueError("native YouTube search does not support --sort recency")

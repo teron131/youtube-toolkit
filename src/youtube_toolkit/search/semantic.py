@@ -12,13 +12,15 @@ from ..execution import collect_concurrently
 from ..schemas import TranscriptDocument
 from ..transcript import TranscriptOptions, fetch_transcript
 from .embeddings import EmbeddingClient
-from .filters import (
+from .preprocessing import (
+    ChunkResult,
+    VideoResult,
     candidate_id,
     candidate_metadata,
     normalized_upload_date,
     video_result,
 )
-from .request import SearchRequest, resolve_return_type
+from .request import ResolvedRequest, SearchRequest
 
 MAX_CONCURRENT_TRANSCRIPT_FETCHES = 16
 TRANSCRIPT_CHUNK_CHARS = 1200
@@ -49,12 +51,13 @@ class ScoredChunk:
 
 
 def search_transcripts(
-    request: SearchRequest, candidates: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
+    resolved: ResolvedRequest, candidates: list[dict[str, Any]]
+) -> list[VideoResult] | list[ChunkResult]:
     """Shortlist by title, fetch fresh transcripts, embed chunks, and project chunk or video results.
 
     Partial title, transcript, or chunk-embedding failures become per-result warnings; the search fails only when no transcript chunk could be embedded.
     """
+    request = resolved.request
     candidates = [
         {
             **candidate,
@@ -89,7 +92,7 @@ def search_transcripts(
     def warnings_for(video_id: str) -> list[str]:
         return [*shared_warnings, *chunk_warnings.get(video_id, [])]
 
-    if resolve_return_type(request) == "chunk":
+    if resolved.return_type == "chunk":
         return [
             chunk_result(chunk, warnings=warnings_for(chunk.prepared.video_id))
             for chunk in scored[: request.limit]
@@ -245,9 +248,9 @@ def score_chunks(
     return sorted(scored, key=lambda chunk: chunk.similarity, reverse=True)
 
 
-def chunk_result(chunk: ScoredChunk, *, warnings: list[str]) -> dict[str, Any]:
+def chunk_result(chunk: ScoredChunk, *, warnings: list[str]) -> ChunkResult:
     """Chunk results carry the passage, its score, and the source video's public metadata."""
-    result = {
+    result: ChunkResult = {
         "type": "chunk",
         "video_id": chunk.prepared.video_id,
         "chunk_index": chunk.prepared.chunk_index,
