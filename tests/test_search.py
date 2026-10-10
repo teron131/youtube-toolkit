@@ -11,7 +11,12 @@ import pytest
 import youtube_toolkit.search.semantic as search_semantic
 import youtube_toolkit.search.discovery as search_discovery
 import youtube_toolkit.search.workflow as search_workflow
-from youtube_toolkit.search.request import ChannelTarget, SearchRequest, parse_duration
+from youtube_toolkit.search.request import (
+    ChannelTarget,
+    SearchRequest,
+    parse_duration,
+)
+from youtube_toolkit.search.preprocessing import VideoResult
 from youtube_toolkit.search.workflow import search
 from youtube_toolkit.schemas import TranscriptChunk, TranscriptDocument, VideoMetadata
 
@@ -62,6 +67,11 @@ def search_transcript_side_effects(monkeypatch) -> dict[str, Any]:
         "fetched": fetched_video_ids,
         "metadata": supplied_metadata,
     }
+
+
+def search_videos(request: SearchRequest) -> list[VideoResult]:
+    """Run a search the test knows returns videos, so video-only fields type-check."""
+    return cast(list[VideoResult], search(request))
 
 
 def test_parse_duration_accepts_seconds_and_colon_values() -> None:
@@ -213,7 +223,7 @@ def test_default_filters_run_before_youtube_date_metadata_fetch(
     monkeypatch.setattr(search_discovery, "youtube_search", fake_youtube_search)
     monkeypatch.setattr(search_workflow, "YtDlpClient", FakeYtDlpClient)
 
-    results = search(
+    results = search_videos(
         SearchRequest(
             queries=("Claude Fable 5",),
             limit=5,
@@ -261,7 +271,7 @@ def test_youtube_relevance_search_interlaces_queries(
 
     monkeypatch.setattr(search_discovery, "youtube_search", fake_youtube_search)
 
-    results = search(
+    results = search_videos(
         SearchRequest(
             queries=("alpha", "beta", "gamma", "alpha"),
             limit=5,
@@ -388,7 +398,6 @@ def test_channel_search_fetches_channel_listing(
         SearchRequest(
             queries=(),
             limit=30,
-            sources=("channel",),
             channels=(ChannelTarget.from_ref("@OpenAI"),),
         )
     )
@@ -455,11 +464,10 @@ def test_channel_search_resolves_names_before_fetching_listings(monkeypatch) -> 
         search_discovery, "fetch_channel_videos", fake_fetch_channel_videos
     )
 
-    results = search(
+    results = search_videos(
         SearchRequest(
             queries=(),
             limit=5,
-            sources=("channel",),
             channels=(ChannelTarget.from_ref("Anthropic"),),
         )
     )
@@ -509,7 +517,6 @@ def test_channel_search_uses_explicit_handles_without_name_lookup(monkeypatch) -
         SearchRequest(
             queries=(),
             limit=5,
-            sources=("channel",),
             channels=(ChannelTarget.from_ref("@Anthropic"),),
         )
     )
@@ -583,11 +590,10 @@ def test_channel_search_dedupes_and_sorts_by_recency(monkeypatch) -> None:
     )
     monkeypatch.setattr(search_workflow, "YtDlpClient", UnavailableYtDlpClient)
 
-    results = search(
+    results = search_videos(
         SearchRequest(
             queries=(),
             limit=30,
-            sources=("channel",),
             channels=(
                 ChannelTarget.from_ref("@OpenAI"),
                 ChannelTarget.from_ref("@Anthropic"),
@@ -663,7 +669,6 @@ def test_channel_search_can_sort_by_popularity(monkeypatch) -> None:
         SearchRequest(
             queries=(),
             limit=30,
-            sources=("channel",),
             channels=(ChannelTarget.from_ref("@OpenAI"),),
             sort="popularity",
             min_views=None,
@@ -715,11 +720,10 @@ def test_channel_search_fetches_metadata_missing_from_flat_listings(
     )
     monkeypatch.setattr(search_workflow, "YtDlpClient", FakeYtDlpClient)
 
-    results = search(
+    results = search_videos(
         SearchRequest(
             queries=(),
             limit=30,
-            sources=("channel",),
             channels=(ChannelTarget.from_ref("@OpenAI"),),
             min_views=10_000,
             min_duration="3:00",
@@ -769,7 +773,6 @@ def test_channel_date_filter_stops_hydrating_after_listing_passes_cutoff(
         SearchRequest(
             queries=(),
             limit=2,
-            sources=("channel",),
             channels=(ChannelTarget.from_ref("@OpenAI"),),
             uploaded_after="2026-07-10",
         )
@@ -816,7 +819,6 @@ def test_native_channel_query_filters_video_titles(monkeypatch) -> None:
         SearchRequest(
             queries=("capex",),
             limit=30,
-            sources=("channel",),
             channels=(ChannelTarget.from_ref("@OpenAI"),),
         )
     )
@@ -879,7 +881,6 @@ def test_channel_search_can_sort_by_semantic_relevance(
     results = search(
         SearchRequest(
             queries=("GPU capex",),
-            sources=("channel",),
             mode="semantic",
             return_type="video",
             channels=(ChannelTarget.from_ref("@OpenAI"),),
@@ -975,7 +976,6 @@ def test_semantic_channel_search_prefilters_by_title_embeddings(
     results = search(
         SearchRequest(
             queries=("product announcements",),
-            sources=("channel",),
             mode="semantic",
             return_type="video",
             channels=(ChannelTarget.from_ref("@Anthropic"),),
@@ -1042,7 +1042,6 @@ def test_semantic_video_search_returns_only_scored_videos(
         SearchRequest(
             queries=("GPU capex",),
             limit=10,
-            sources=("channel",),
             mode="semantic",
             return_type="video",
             channels=(ChannelTarget.from_ref("@OpenAI"),),
@@ -1102,7 +1101,6 @@ def test_date_filter_runs_before_transcript_fetch(
         SearchRequest(
             queries=("GPU capex",),
             limit=10,
-            sources=("channel",),
             mode="semantic",
             return_type="video",
             channels=(ChannelTarget.from_ref("@OpenAI"),),
@@ -1179,7 +1177,6 @@ def test_semantic_video_results_include_partial_transcript_warnings(
         SearchRequest(
             queries=("GPU capex",),
             limit=10,
-            sources=("channel",),
             mode="semantic",
             return_type="video",
             channels=(ChannelTarget.from_ref("@OpenAI"),),
@@ -1255,7 +1252,6 @@ def test_semantic_search_defaults_to_chunk_results(
     results = search(
         SearchRequest(
             queries=("GPU capex",),
-            sources=("channel",),
             mode="semantic",
             channels=(ChannelTarget.from_ref("@OpenAI"),),
             limit=2,
@@ -1327,7 +1323,6 @@ def test_live_semantic_search_fetches_transcripts_concurrently(
     results = search(
         SearchRequest(
             queries=("frontier model analysis",),
-            sources=("channel",),
             mode="semantic",
             return_type="video",
             channels=(ChannelTarget.from_ref("@OpenAI"),),
@@ -1352,13 +1347,12 @@ def test_chunk_results_require_semantic_mode() -> None:
             SearchRequest(
                 queries=("GPU capex",),
                 limit=10,
-                sources=("youtube",),
                 return_type="chunk",
             )
         )
 
 
-def test_search_query_is_optional_only_for_native_channel_source(monkeypatch) -> None:
+def test_search_query_is_optional_only_for_native_channel_search(monkeypatch) -> None:
     def fake_fetch_channel_videos(
         channel_ref: str,
         *,
@@ -1378,7 +1372,6 @@ def test_search_query_is_optional_only_for_native_channel_source(monkeypatch) ->
         SearchRequest(
             queries=(),
             limit=10,
-            sources=("channel",),
             channels=(ChannelTarget.from_ref("@OpenAI"),),
         )
     )
@@ -1387,7 +1380,6 @@ def test_search_query_is_optional_only_for_native_channel_source(monkeypatch) ->
             SearchRequest(
                 queries=(),
                 limit=10,
-                sources=("youtube",),
             )
         )
     with pytest.raises(ValueError, match="search query must be non-empty"):
@@ -1395,7 +1387,6 @@ def test_search_query_is_optional_only_for_native_channel_source(monkeypatch) ->
             SearchRequest(
                 queries=(),
                 limit=10,
-                sources=("channel",),
                 mode="semantic",
                 channels=(ChannelTarget.from_ref("@OpenAI"),),
             )
@@ -1434,7 +1425,6 @@ def test_native_channel_search_keeps_titles_matching_any_query(monkeypatch) -> N
         SearchRequest(
             queries=("capex", "agent"),
             limit=10,
-            sources=("channel",),
             channels=(ChannelTarget.from_ref("@OpenAI"),),
         )
     )
@@ -1459,7 +1449,6 @@ def test_semantic_search_scores_passages_by_their_closest_query(monkeypatch) -> 
         SearchRequest(
             queries=("alpha", "beta"),
             limit=5,
-            sources=("channel",),
             mode="semantic",
             return_type="video",
             channels=(ChannelTarget.from_ref("@OpenAI"),),
@@ -1468,41 +1457,6 @@ def test_semantic_search_scores_passages_by_their_closest_query(monkeypatch) -> 
 
     assert [result["video_id"] for result in results] == ["aaaaaaaaaaa"]
     assert results[0]["score"] == pytest.approx(1.0)
-
-
-def test_search_request_rejects_duplicate_sources() -> None:
-    with pytest.raises(ValueError, match="search sources must not contain duplicates"):
-        search(
-            SearchRequest(
-                queries=("agents",),
-                limit=10,
-                sources=("youtube", "youtube"),
-            )
-        )
-
-
-def test_channel_source_requires_channel_targets() -> None:
-    with pytest.raises(
-        ValueError, match="channel source requires at least one --channels"
-    ):
-        search(
-            SearchRequest(
-                queries=(),
-                limit=10,
-                sources=("channel",),
-            )
-        )
-
-
-def test_channel_targets_require_channel_source() -> None:
-    with pytest.raises(ValueError, match="--channels requires --source channel"):
-        search(
-            SearchRequest(
-                queries=("agents",),
-                limit=10,
-                channels=(ChannelTarget.from_ref("@OpenAI"),),
-            )
-        )
 
 
 def test_native_youtube_search_rejects_recency() -> None:
@@ -1565,14 +1519,6 @@ def test_search_request_rejects_invalid_metadata_filters(
 @pytest.mark.parametrize(
     ("search_request", "message"),
     [
-        (
-            SearchRequest(
-                queries=("agents",),
-                limit=10,
-                sources=cast(Any, ("vimeo",)),
-            ),
-            "search source must be one of",
-        ),
         (
             SearchRequest(
                 queries=("agents",),
@@ -1648,83 +1594,10 @@ def test_semantic_search_reports_when_no_transcripts_can_be_prepared(
             SearchRequest(
                 queries=("GPU capex",),
                 limit=10,
-                sources=("channel",),
                 mode="semantic",
                 channels=(ChannelTarget.from_ref("@OpenAI"),),
             )
         )
-
-
-def test_search_sources_can_be_mixed(
-    monkeypatch,
-) -> None:
-
-    def fake_youtube_search(
-        query: str,
-        *,
-        fetch_limit: int,
-        sort: str,
-    ) -> list[dict]:
-        return [
-            {
-                "id": "aaaaaaaaaaa",
-                "title": "YouTube result",
-                "view_count": 30_000,
-                "duration": 600,
-            }
-        ]
-
-    def fake_fetch_channel_videos(
-        channel_ref: str,
-        *,
-        options,
-    ) -> dict:
-        return {
-            "channel_id": "UC123",
-            "channel_handle": channel_ref,
-            "entries": [
-                {
-                    "id": "bbbbbbbbbbb",
-                    "title": "Channel agents result",
-                    "upload_date": "20260703",
-                    "view_count": 40_000,
-                    "duration": 600,
-                },
-                {
-                    "id": "aaaaaaaaaaa",
-                    "title": "Duplicate channel result",
-                    "upload_date": "20260704",
-                    "view_count": 50_000,
-                    "duration": 600,
-                },
-            ],
-        }
-
-    monkeypatch.setattr(search_discovery, "youtube_search", fake_youtube_search)
-    monkeypatch.setattr(
-        search_discovery, "fetch_channel_videos", fake_fetch_channel_videos
-    )
-
-    results = search(
-        SearchRequest(
-            queries=("agents",),
-            limit=10,
-            sources=("youtube", "channel"),
-            channels=(ChannelTarget.from_ref("@OpenAI"),),
-            min_views=None,
-            min_duration=None,
-            max_duration=None,
-        )
-    )
-
-    assert [result["video_id"] for result in results] == [
-        "aaaaaaaaaaa",
-        "bbbbbbbbbbb",
-    ]
-    assert [result["source"] for result in results] == [
-        "youtube",
-        "channel",
-    ]
 
 
 def test_channel_search_limits_after_merge_and_sort(monkeypatch) -> None:
@@ -1789,7 +1662,6 @@ def test_channel_search_limits_after_merge_and_sort(monkeypatch) -> None:
     results = search(
         SearchRequest(
             queries=(),
-            sources=("channel",),
             channels=(
                 ChannelTarget.from_ref("@OpenAI"),
                 ChannelTarget.from_ref("@Anthropic"),
@@ -1880,5 +1752,6 @@ def test_search_preserves_provider_handle_for_filters_and_results(
         )
     )
     assert len(results) == 1
-    metadata = results[0] if mode == "native" else results[0]["video"]
+    result = cast(dict[str, Any], results[0])
+    metadata = result if mode == "native" else result["video"]
     assert metadata["channel_handle"] == "@CreatorHandle"

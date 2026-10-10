@@ -24,7 +24,7 @@ The installer replaces the installed `youtube` tool. To run the checkout directl
 
 ```bash
 youtube search "langgraph tutorial" --limit 5 --max-duration 20:00
-youtube search "reasoning models" --source channel --channels @OpenAI --channels @Anthropic --uploaded-within-days 30 --sort recency
+youtube search "reasoning models" --channels @OpenAI --channels @Anthropic --uploaded-within-days 30 --sort recency
 youtube channel @OpenAI --last 5
 youtube channel @OpenAI --days 7
 youtube metadata <url-or-id>
@@ -37,7 +37,7 @@ youtube doctor
 
 Commands return JSON except `doctor`. Metadata includes descriptions, thumbnails, and chapters. Transcripts return text by default or timed chunks with `--timestamps`; `--export` writes a text file in the working directory, and `--force` allows overwriting it. Transcripts are in English or Chinese when the video has those subtitles, otherwise in the video's own language. Videos without captions fall back to xAI speech-to-text, which needs `XAI_API_KEY`.
 
-Search defaults: at least 10,000 views, duration 3 minutes to 8 hours, and 10 results (30 for channel-only searches). Use `youtube search --help` for filters and overrides.
+Search defaults: at least 10,000 views, duration 3 minutes to 8 hours, and 10 results (30 for channel searches). Use `youtube search --help` for filters and overrides.
 
 Vision returns up to six screenshots in timestamped 2-column × 3-row collages, plus per-frame measurements in JSON. Set `--max-frames 12` to change the limit (1-96). Timed captions choose where to look and local image analysis picks the frames; without timed captions it samples evenly. No model API or speech-to-text is used.
 
@@ -49,7 +49,7 @@ Semantic search uses an embedding API to rank transcript passages:
 
 ```bash
 youtube search "agent memory" --mode semantic --limit 5
-youtube search "model evals" --source channel --channels @OpenAI --mode semantic --return video
+youtube search "model evals" --channels @OpenAI --mode semantic --return video
 ```
 
 Set `EMBEDDING_API_KEY` in the environment. Optional settings are `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL`, and `EMBEDDING_DIMENSIONS`. Semantic results are chunks by default; `--return video` returns ranked videos.

@@ -26,8 +26,6 @@ def test_parser_normalizes_string_arguments_before_handlers() -> None:
             "search",
             "'agent memory'",
             "'langgraph'",
-            "--source",
-            "'channel'",
             "--mode",
             "'semantic'",
             "--return",
@@ -46,7 +44,6 @@ def test_parser_normalizes_string_arguments_before_handlers() -> None:
 
     assert video_args.video_ref == "https://www.youtube.com/watch?v=JpSHyEIZ_bo"
     assert search_args.queries == ["agent memory", "langgraph"]
-    assert search_args.source == ["channel"]
     assert search_args.mode == "semantic"
     assert search_args.return_type == "video"
     assert search_args.channels == ["@OpenAI"]
@@ -278,13 +275,11 @@ def test_reference_help_names_positionals_url(
     assert "video_ref" not in output
 
 
-def test_search_command_group_parses_channel_source() -> None:
+def test_search_command_group_parses_channel_search() -> None:
     search_args = build_parser().parse_args(
         [
             "search",
             "agents",
-            "--source",
-            "channel",
             "--channels",
             "@OpenAI",
             "--channels",
@@ -297,25 +292,21 @@ def test_search_command_group_parses_channel_source() -> None:
     )
 
     assert search_args.command == "search"
-    assert search_args.source == ["channel"]
     assert search_args.channels == ["@OpenAI", "UC123"]
     assert search_args.limit == 2
     assert search_args.sort == "popularity"
 
 
-def test_search_command_group_allows_channel_source_without_query() -> None:
+def test_search_command_group_allows_channel_search_without_query() -> None:
     search_args = build_parser().parse_args(
         [
             "search",
-            "--source",
-            "channel",
             "--channels",
             "@OpenAI",
         ]
     )
 
     assert search_args.queries == []
-    assert search_args.source == ["channel"]
     assert search_args.channels == ["@OpenAI"]
 
 
@@ -373,7 +364,6 @@ def test_search_command_builds_default_youtube_request(monkeypatch) -> None:
     payload = commands.search(
         argparse.Namespace(
             queries=["agents", "agent skills", "tool use"],
-            source=None,
             mode="native",
             return_type=None,
             channels=[],
@@ -395,7 +385,6 @@ def test_search_command_builds_default_youtube_request(monkeypatch) -> None:
     assert requests == [
         SearchRequest(
             queries=("agents", "agent skills", "tool use"),
-            sources=("youtube",),
             mode="native",
             return_type=None,
             limit=commands.DEFAULT_YOUTUBE_SEARCH_LIMIT,
@@ -422,7 +411,6 @@ def test_search_command_builds_channel_request(monkeypatch) -> None:
     payload = commands.search(
         argparse.Namespace(
             queries=["agents"],
-            source=["channel"],
             uploaded_after=None,
             uploaded_within_days=None,
             mode="native",
@@ -444,7 +432,6 @@ def test_search_command_builds_channel_request(monkeypatch) -> None:
     assert requests == [
         SearchRequest(
             queries=("agents",),
-            sources=("channel",),
             mode="native",
             return_type=None,
             channels=(
@@ -485,9 +472,9 @@ def test_superseded_commands_are_removed(command: str) -> None:
         build_parser().parse_args([command])
 
 
-def test_database_search_source_is_removed() -> None:
+def test_search_source_flag_is_removed() -> None:
     with pytest.raises(SystemExit):
-        build_parser().parse_args(["search", "agents", "--source", "db"])
+        build_parser().parse_args(["search", "agents", "--source", "channel"])
 
 
 def test_doctor_reports_local_artifacts_without_creating_them(

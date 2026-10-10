@@ -4,27 +4,47 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import date
-from typing import Any
+from typing import Any, Literal, NotRequired, TypedDict
 
 from ..identity import extract_channel_identity, extract_video_id
 from ..schemas import normalize_number
-from ..youtube.channels import cutoff_date_for_days
-from .request import (
-    SearchRequest,
-    normalize_filter_date,
-    parse_duration,
-)
+from .request import ResolvedRequest
 
 SortableValue = str | int | float | tuple[int | float, ...]
-VIDEO_RESULT_KEYS = (
-    "title",
-    "channel_id",
-    "channel_handle",
-    "upload_date",
-    "duration",
-    "view_count",
-    "like_count",
-)
+
+
+class SearchVideoFields(TypedDict):
+    """Video facts every search result carries, whether it is a video or a chunk of one."""
+
+    title: str | None
+    channel_id: str | None
+    channel_handle: str | None
+    upload_date: str | None
+    duration: float | None
+    view_count: int | None
+    like_count: int | None
+
+
+class VideoResult(SearchVideoFields):
+    """One video in search output; `score` appears only for semantic search and `warnings` only when preparation degraded."""
+
+    type: Literal["video"]
+    video_id: str | None
+    source: str | None
+    score: NotRequired[float]
+    warnings: NotRequired[list[str]]
+
+
+class ChunkResult(TypedDict):
+    """One transcript passage in semantic search output, with its video's facts nested under `video`."""
+
+    type: Literal["chunk"]
+    video_id: str
+    chunk_index: int
+    text: str
+    score: float
+    video: SearchVideoFields
+    warnings: NotRequired[list[str]]
 
 
 def interlace_relevance(
@@ -79,9 +99,9 @@ def video_result(
     candidate: dict[str, Any],
     *,
     warnings: list[str] | None = None,
-) -> dict[str, Any]:
+) -> VideoResult:
     """Video results expose the stable public key set plus preparation warnings when transcript work degraded."""
-    result = {
+    result: VideoResult = {
         "type": "video",
         "video_id": candidate_id(candidate),
         **candidate_metadata(candidate),
@@ -94,11 +114,17 @@ def video_result(
     return result
 
 
-def candidate_metadata(candidate: dict[str, Any]) -> dict[str, Any]:
+def candidate_metadata(candidate: dict[str, Any]) -> SearchVideoFields:
     """Project shared video facts, retaining a handle supplied under yt-dlp's uploader identity fields."""
-    metadata = {key: candidate.get(key) for key in VIDEO_RESULT_KEYS}
-    metadata["channel_handle"] = extract_channel_identity(candidate).channel_handle
-    return metadata
+    return {
+        "title": candidate.get("title"),
+        "channel_id": candidate.get("channel_id"),
+        "channel_handle": extract_channel_identity(candidate).channel_handle,
+        "upload_date": candidate.get("upload_date"),
+        "duration": candidate.get("duration"),
+        "view_count": candidate.get("view_count"),
+        "like_count": candidate.get("like_count"),
+    }
 
 
 def rank_by_value(
@@ -153,43 +179,31 @@ def popularity(candidate: dict[str, Any]) -> tuple[float, float] | None:
 
 def filter_candidates(
     candidates: list[dict[str, Any]],
-    request: SearchRequest,
+    resolved: ResolvedRequest,
     *,
-    cutoff: str | None,
     allow_missing: bool = False,
 ) -> list[dict[str, Any]]:
-    """Apply the request's metadata filters against an optional ISO upload cutoff.
-
-    With allow_missing, absent view counts, durations, and upload dates pass so callers can fetch them before strict filtering.
-    """
-    min_duration_seconds = parse_duration(request.min_duration)
-    max_duration_seconds = parse_duration(request.max_duration)
+    """Keep the candidates that pass every metadata filter of the resolved request."""
     return [
         candidate
         for candidate in candidates
-        if passes_filters(
-            candidate,
-            request,
-            min_duration_seconds=min_duration_seconds,
-            max_duration_seconds=max_duration_seconds,
-            cutoff=cutoff,
-            allow_missing=allow_missing,
-        )
+        if passes_filters(candidate, resolved, allow_missing=allow_missing)
     ]
 
 
 def passes_filters(
     candidate: dict[str, Any],
-    request: SearchRequest,
+    resolved: ResolvedRequest,
     *,
-    min_duration_seconds: float | None,
-    max_duration_seconds: float | None,
-    cutoff: str | None,
     allow_missing: bool,
 ) -> bool:
-    """Evaluate all local metadata filters for a single candidate against bounds resolved once per batch."""
+    """Decide whether one candidate satisfies every metadata filter of the resolved request.
+
+    With allow_missing, absent view counts, durations, and upload dates pass so callers can fetch them before strict filtering.
+    """
     if candidate_id(candidate) is None:
         return False
+    request = resolved.request
 
     def checked(field: str) -> bool:
         return not allow_missing or candidate.get(field) is not None
@@ -204,21 +218,27 @@ def passes_filters(
 
     duration = candidate.get("duration")
     if (
-        min_duration_seconds is not None
+        resolved.min_duration_seconds is not None
         and checked("duration")
-        and (not isinstance(duration, int | float) or duration < min_duration_seconds)
+        and (
+            not isinstance(duration, int | float)
+            or duration < resolved.min_duration_seconds
+        )
     ):
         return False
     if (
-        max_duration_seconds is not None
+        resolved.max_duration_seconds is not None
         and checked("duration")
-        and (not isinstance(duration, int | float) or duration > max_duration_seconds)
+        and (
+            not isinstance(duration, int | float)
+            or duration > resolved.max_duration_seconds
+        )
     ):
         return False
 
-    if cutoff is not None and checked("upload_date"):
+    if resolved.upload_cutoff is not None and checked("upload_date"):
         upload_date = normalized_upload_date(candidate.get("upload_date"))
-        if upload_date is None or upload_date < cutoff:
+        if upload_date is None or upload_date < resolved.upload_cutoff:
             return False
 
     channel = channel_text(candidate)
@@ -282,16 +302,6 @@ def text_excluded(
         return False
     haystack = str(value or "").casefold()
     return any(needle.casefold() in haystack for needle in needles)
-
-
-def upload_cutoff(request: SearchRequest) -> str | None:
-    """Resolve the strictest upload-date cutoff from absolute and relative filters."""
-    cutoffs: list[str] = []
-    if request.uploaded_after is not None:
-        cutoffs.append(normalize_filter_date(request.uploaded_after))
-    if request.uploaded_within_days is not None:
-        cutoffs.append(cutoff_date_for_days(request.uploaded_within_days).isoformat())
-    return max(cutoffs) if cutoffs else None
 
 
 def normalized_upload_date(value: Any) -> str | None:

@@ -104,16 +104,14 @@ def _add_video_commands(subparsers: argparse._SubParsersAction) -> None:
 def _add_search_command(subparsers: argparse._SubParsersAction) -> None:
     """Register YouTube and channel search with its filters."""
     search_parser = subparsers.add_parser(
-        "search", help="Search videos or transcript chunks from selected sources"
+        "search",
+        help="Search videos or transcript chunks across YouTube or within channels",
     )
     search_parser.add_argument(
         "queries",
         nargs="*",
         metavar="query",
         help="Search query; give several to interleave their results",
-    )
-    search_parser.add_argument(
-        "--source", action="append", choices=("youtube", "channel"), default=None
     )
     search_parser.add_argument(
         "--mode", choices=("native", "semantic"), default="native"
@@ -126,7 +124,7 @@ def _add_search_command(subparsers: argparse._SubParsersAction) -> None:
         action="append",
         default=[],
         metavar="CHANNEL",
-        help="Channel URL, handle, or ID for channel source",
+        help="Search only this channel's uploads; URL, handle, or ID",
     )
     search_parser.add_argument("--limit", type=int, default=None)
     search_parser.add_argument(
