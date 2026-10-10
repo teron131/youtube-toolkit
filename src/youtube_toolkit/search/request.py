@@ -65,11 +65,13 @@ def is_exact_channel_ref(channel_ref: ChannelRef) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class SearchRequest:
-    """Validated public search contract shared by CLI and Python callers."""
+    """Validated public search contract shared by CLI and Python callers.
 
-    query: str
+    Queries are equals: each runs as its own YouTube search, and no query ranks above another.
+    """
+
+    queries: tuple[str, ...]
     limit: int
-    extra_queries: tuple[str, ...] = ()
     sources: tuple[SearchSource, ...] = ("youtube",)
     mode: SearchMode = "native"
     return_type: SearchReturnType | None = None
@@ -147,7 +149,9 @@ def validate_request(request: SearchRequest) -> None:
     if request.sort is not None and request.sort not in get_args(SearchSort):
         raise ValueError("search sort must be one of: relevance, recency, popularity")
     query_required = request.mode == "semantic" or "youtube" in request.sources
-    if query_required and not request.query.strip():
+    if (query_required and not request.queries) or any(
+        not query.strip() for query in request.queries
+    ):
         raise ValueError("search query must be non-empty")
     if request.limit <= 0:
         raise ValueError("search limit must be greater than 0")
@@ -167,8 +171,6 @@ def validate_request(request: SearchRequest) -> None:
         normalize_filter_date(request.uploaded_after)
     if not request.sources:
         raise ValueError("search requires at least one source")
-    if request.extra_queries and "youtube" not in request.sources:
-        raise ValueError("extra queries require youtube source")
     if request.return_type == "chunk" and request.mode != "semantic":
         raise ValueError("chunk return requires semantic mode")
     if request.channels and "channel" not in request.sources:

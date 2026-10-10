@@ -269,7 +269,7 @@
     <rect x="472" y="984" width="128" height="20" fill="#0F1115"/>
     <line x1="472" y1="984.5" x2="600" y2="984.5" stroke="#2F343D" stroke-width="1"/>
     <text x="480" y="999" class="stamp">16:42</text>
-    <text x="332" y="1036" class="note">.cache/youtube-toolkit/vision/&lt;datetime&gt;-&lt;video-id&gt;/</text>
+    <text x="332" y="1036" class="note"><tspan x="332">.cache/youtube-toolkit/vision/</tspan><tspan x="332" dy="19">&lt;datetime&gt;-&lt;video-id&gt;/</tspan></text>
     <rect x="646" y="710" width="430" height="300" fill="#FFFFFF" rx="8" stroke="#D6DAE2" stroke-width="1"/>
     <text x="666" y="740.2" class="code" xml:space="preserve">{</text>
     <text x="666" y="757.2" class="code" xml:space="preserve"><tspan class="key">  &quot;timestamp_seconds&quot;: </tspan><tspan fill="#E5302A">515.0</tspan>,</text>

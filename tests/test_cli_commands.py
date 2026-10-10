@@ -25,7 +25,6 @@ def test_parser_normalizes_string_arguments_before_handlers() -> None:
         [
             "search",
             "'agent memory'",
-            "--extra-query",
             "'langgraph'",
             "--source",
             "'channel'",
@@ -46,8 +45,7 @@ def test_parser_normalizes_string_arguments_before_handlers() -> None:
     unmatched_quote_args = build_parser().parse_args(["search", "'earnings"])
 
     assert video_args.video_ref == "https://www.youtube.com/watch?v=JpSHyEIZ_bo"
-    assert search_args.query == "agent memory"
-    assert search_args.extra_queries == ["langgraph"]
+    assert search_args.queries == ["agent memory", "langgraph"]
     assert search_args.source == ["channel"]
     assert search_args.mode == "semantic"
     assert search_args.return_type == "video"
@@ -55,7 +53,7 @@ def test_parser_normalizes_string_arguments_before_handlers() -> None:
     assert search_args.include_channel == ["OpenAI"]
     assert search_args.exclude_title == ["shorts"]
     assert search_args.sort == "popularity"
-    assert unmatched_quote_args.query == "'earnings"
+    assert unmatched_quote_args.queries == ["'earnings"]
 
 
 def test_video_metadata_command_returns_normalized_video_facts(monkeypatch) -> None:
@@ -85,9 +83,7 @@ def test_video_metadata_command_returns_normalized_video_facts(monkeypatch) -> N
 
     monkeypatch.setattr(commands, "YtDlpClient", FakeClient)
 
-    assert commands.VideoCommands.metadata(
-        argparse.Namespace(video_ref="JpSHyEIZ_bo")
-    ) == {
+    assert commands.metadata(argparse.Namespace(video_ref="JpSHyEIZ_bo")) == {
         "video_id": "JpSHyEIZ_bo",
         "url": "https://www.youtube.com/watch?v=JpSHyEIZ_bo",
         "title": "Example",
@@ -128,16 +124,22 @@ def test_video_transcript_command_selects_plain_or_timestamped_output(
     monkeypatch.setattr(commands, "fetch_transcript", lambda _video_ref: document)
 
     assert (
-        commands.VideoCommands.transcript(
+        commands.transcript(
             argparse.Namespace(
-                video_ref="JpSHyEIZ_bo", timestamps=False, export=False, force=False
+                video_ref="JpSHyEIZ_bo",
+                timestamps=False,
+                export=False,
+                force=False,
             )
         )
         == "First sentence. Second sentence."
     )
-    assert commands.VideoCommands.transcript(
+    assert commands.transcript(
         argparse.Namespace(
-            video_ref="JpSHyEIZ_bo", timestamps=True, export=False, force=False
+            video_ref="JpSHyEIZ_bo",
+            timestamps=True,
+            export=False,
+            force=False,
         )
     ) == [
         {
@@ -182,7 +184,9 @@ def test_video_transcript_export_writes_metadata_and_plain_transcript(
         ],
     )
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(commands, "fetch_transcript", lambda _video_ref: document)
+    monkeypatch.setattr(
+        commands, "fetch_transcript", lambda _video_ref, **_options: document
+    )
 
     assert main(["transcript", "JpSHyEIZ_bo", "--export"]) == 0
 
@@ -207,7 +211,7 @@ def test_video_transcript_export_writes_metadata_and_plain_transcript(
     )
 
     with pytest.raises(ValueError, match="use --force to replace it"):
-        commands.VideoCommands.transcript(
+        commands.transcript(
             argparse.Namespace(
                 video_ref="JpSHyEIZ_bo",
                 timestamps=True,
@@ -216,7 +220,7 @@ def test_video_transcript_export_writes_metadata_and_plain_transcript(
             )
         )
 
-    commands.VideoCommands.transcript(
+    commands.transcript(
         argparse.Namespace(
             video_ref="JpSHyEIZ_bo",
             timestamps=True,
@@ -238,7 +242,7 @@ def test_video_transcript_force_requires_export(monkeypatch) -> None:
     )
 
     with pytest.raises(ValueError, match="--force requires --export"):
-        commands.VideoCommands.transcript(
+        commands.transcript(
             argparse.Namespace(
                 video_ref="JpSHyEIZ_bo",
                 timestamps=False,
@@ -268,7 +272,7 @@ def test_reference_help_names_positionals_url(
         build_parser().parse_args(args)
 
     output = capsys.readouterr().out
-    assert usage in output
+    assert usage in " ".join(output.split())
     assert "url" in output
     assert "YouTube video URL or ID" in output
     assert "video_ref" not in output
@@ -310,28 +314,22 @@ def test_search_command_group_allows_channel_source_without_query() -> None:
         ]
     )
 
-    assert search_args.query == ""
+    assert search_args.queries == []
     assert search_args.source == ["channel"]
     assert search_args.channels == ["@OpenAI"]
 
 
-def test_search_command_group_parses_extra_queries() -> None:
+def test_search_command_group_parses_several_queries() -> None:
     search_args = build_parser().parse_args(
         [
             "search",
             "agents",
-            "--extra-query",
             "agent skills",
-            "--extra-query",
             "tool use",
         ]
     )
 
-    assert search_args.query == "agents"
-    assert search_args.extra_queries == [
-        "agent skills",
-        "tool use",
-    ]
+    assert search_args.queries == ["agents", "agent skills", "tool use"]
 
 
 def test_search_command_group_accepts_plural_filter_aliases() -> None:
@@ -372,10 +370,9 @@ def test_search_command_builds_default_youtube_request(monkeypatch) -> None:
         return [{"id": "aaaaaaaaaaa"}]
 
     monkeypatch.setattr(search_workflow, "search", fake_run_search_request)
-    payload = commands.SearchCommands.search(
+    payload = commands.search(
         argparse.Namespace(
-            query="agents",
-            extra_queries=["agent skills", "tool use"],
+            queries=["agents", "agent skills", "tool use"],
             source=None,
             mode="native",
             return_type=None,
@@ -397,8 +394,7 @@ def test_search_command_builds_default_youtube_request(monkeypatch) -> None:
     assert payload == [{"id": "aaaaaaaaaaa"}]
     assert requests == [
         SearchRequest(
-            query="agents",
-            extra_queries=("agent skills", "tool use"),
+            queries=("agents", "agent skills", "tool use"),
             sources=("youtube",),
             mode="native",
             return_type=None,
@@ -423,11 +419,10 @@ def test_search_command_builds_channel_request(monkeypatch) -> None:
         return [{"id": "aaaaaaaaaaa"}]
 
     monkeypatch.setattr(search_workflow, "search", fake_run_search_request)
-    payload = commands.SearchCommands.search(
+    payload = commands.search(
         argparse.Namespace(
-            query="agents",
+            queries=["agents"],
             source=["channel"],
-            extra_queries=[],
             uploaded_after=None,
             uploaded_within_days=None,
             mode="native",
@@ -448,7 +443,7 @@ def test_search_command_builds_channel_request(monkeypatch) -> None:
     assert payload == [{"id": "aaaaaaaaaaa"}]
     assert requests == [
         SearchRequest(
-            query="agents",
+            queries=("agents",),
             sources=("channel",),
             mode="native",
             return_type=None,

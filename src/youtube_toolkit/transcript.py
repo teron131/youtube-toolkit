@@ -1,26 +1,32 @@
-"""Retrieve and archive fresh transcripts, and export readable text with metadata and overwrite protection."""
+"""Transcript retrieval policy: prefer captions, fall back to speech-to-text when allowed, archive each fresh document, and export readable text with overwrite protection."""
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 import re
-from typing import Any, TypedDict
+from typing import Any, Protocol, TypedDict
 import unicodedata
 
 from .artifacts import write_artifact
+from .convert_zh import convert_zh
 from .identity import VideoRef, require_video_id
-from .schemas import TranscriptDocument, VideoMetadata
-from .youtube.caption import TranscriptClient, TranscriptOptions, fetch_live_transcript
+from .schemas import TranscriptChunk, TranscriptDocument, VideoMetadata
+from .stt import transcribe_audio_details
+from .youtube.caption import CaptionTranscriptUnavailable, fetch_caption_transcript
+from .youtube.client import YtDlpClient
 
-
-class TranscriptExportResult(TypedDict):
-    """File created by an explicit transcript export request."""
-
-    video_id: str
-    path: str
-
-
+DEFAULT_TRANSCRIPT_LANGUAGES = (
+    "en",
+    "zh-Hant",
+    "zh-HK",
+    "yue-HK",
+    "yue",
+    "zh-TW",
+    "zh-Hans",
+    "zh-CN",
+    "zh",
+)
 TRANSCRIPT_LANGUAGE_LABELS = {
     "en-orig": "English",
     "en": "English",
@@ -44,6 +50,37 @@ FILENAME_WHITESPACE = re.compile(r"\s+")
 REPEATED_UNDERSCORES = re.compile(r"_+")
 
 
+@dataclass(frozen=True, slots=True)
+class TranscriptOptions:
+    """Caller policy for caption language, source, and permission to fall back to untimed STT.
+
+    Languages rank manual subtitles; automatic captions are used only in the spoken language of the video, never as machine translations.
+    """
+
+    languages: tuple[str, ...] = DEFAULT_TRANSCRIPT_LANGUAGES
+    source: str = "any"
+    allow_stt: bool = True
+
+
+class TranscriptClient(Protocol):
+    """yt-dlp surface for caption metadata and the speech-to-text audio fallback."""
+
+    def metadata(self, video_ref: VideoRef, /) -> dict[str, Any]:
+        """Fetch raw video metadata containing caption URLs and fallback STT identity."""
+        ...
+
+    def download_transcription_audio(self, video_ref: VideoRef, /) -> Path:
+        """Download one temporary audio file for the transcript STT fallback."""
+        ...
+
+
+class TranscriptExportResult(TypedDict):
+    """File created by an explicit transcript export request."""
+
+    video_id: str
+    path: str
+
+
 def fetch_transcript(
     video_ref: VideoRef,
     *,
@@ -51,18 +88,39 @@ def fetch_transcript(
     client: TranscriptClient | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> TranscriptDocument:
-    """Fetch captions or STT and archive a new document, reusing metadata only when supplied by the current operation."""
+    """Prefer captions, fall back to STT when allowed, and archive the new document.
+
+    Text from either source is returned in Taiwan Traditional script.
+
+    Supplied metadata must be a response the current operation fetched for this video; otherwise metadata is fetched fresh.
+    """
     options = options or TranscriptOptions()
     video_id = require_video_id(video_ref)
+    if metadata is not None and metadata.get("id") != video_id:
+        raise ValueError("Supplied metadata does not match requested video")
+    client = client or YtDlpClient()
+    if metadata is None:
+        metadata = client.metadata(video_ref)
+    try:
+        document = fetch_caption_transcript(
+            metadata, languages=options.languages, source=options.source
+        )
+    except CaptionTranscriptUnavailable:
+        if not options.allow_stt:
+            raise
+        document = _fetch_stt_transcript(metadata, client=client)
+    document = replace(
+        document,
+        chunks=[
+            replace(chunk, text=convert_zh(chunk.text)) for chunk in document.chunks
+        ],
+    )
     request = {
         "video_id": video_id,
         "languages": list(options.languages),
         "source": options.source,
         "allow_stt": options.allow_stt,
     }
-    document = fetch_live_transcript(
-        video_ref, options=options, client=client, metadata=metadata
-    )
     write_artifact("transcripts", video_id, request, asdict(document))
     return document
 
@@ -92,6 +150,32 @@ def write_transcript_export(
         "video_id": document.metadata.video_id,
         "path": str(path),
     }
+
+
+def _fetch_stt_transcript(
+    metadata_payload: dict[str, Any],
+    *,
+    client: TranscriptClient,
+) -> TranscriptDocument:
+    """Download temporary audio, run STT, and return its untimed text as one transcript chunk in the detected language."""
+    metadata = VideoMetadata.from_yt_dlp(metadata_payload)
+    audio_path = client.download_transcription_audio(metadata.video_id)
+    try:
+        transcription = transcribe_audio_details(audio_path)
+    finally:
+        audio_path.unlink(missing_ok=True)
+    return TranscriptDocument(
+        metadata=metadata,
+        language=transcription.language or "speech-to-text",
+        source="speech-to-text",
+        chunks=[
+            TranscriptChunk(
+                start_seconds=0,
+                end_seconds=0,
+                text=transcription.text,
+            )
+        ],
+    )
 
 
 def _export_filename(metadata: VideoMetadata) -> str:

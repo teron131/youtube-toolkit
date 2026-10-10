@@ -17,7 +17,7 @@ from youtube_toolkit.schemas import TranscriptChunk, TranscriptDocument, VideoMe
 from youtube_toolkit.vision import frames as frame_selection, workflow
 from youtube_toolkit.youtube.caption import CaptionTranscriptUnavailable
 from youtube_toolkit.youtube.client import VISION_VIDEO_FORMAT_SELECTOR, YtDlpClient
-from youtube_toolkit.vision.transcript import TranscriptWindow
+from youtube_toolkit.vision.windows import TranscriptWindow
 
 VIDEO_ID = "JpSHyEIZ_bo"
 
@@ -68,8 +68,10 @@ def test_sample_vision_returns_evidence_and_cleans_up(
             path.write_bytes(b"video")
             return path
 
-    def transcript(metadata, *, options):
-        assert not options.allow_stt
+        def download_transcription_audio(self, _ref):
+            pytest.fail("vision must not fall back to speech-to-text")
+
+    def transcript(metadata, *, languages, source):
         if not captions:
             raise CaptionTranscriptUnavailable("No captions")
         return TranscriptDocument(
@@ -89,7 +91,7 @@ def test_sample_vision_returns_evidence_and_cleans_up(
     monkeypatch.setattr(workflow, "YtDlpClient", FakeClient)
     monkeypatch.setattr(workflow.shutil, "which", lambda _: "ffmpeg")
     monkeypatch.setattr(
-        "youtube_toolkit.youtube.caption.fetch_caption_transcript", transcript
+        "youtube_toolkit.transcript.fetch_caption_transcript", transcript
     )
     monkeypatch.setattr(
         workflow, "select_transcript_windows", lambda _doc, **_kw: [window]
@@ -387,5 +389,5 @@ def test_video_vision_cli_routes_to_public_extraction(monkeypatch) -> None:
         ),
     )
 
-    assert args.handler is commands.VideoCommands.vision
-    assert commands.VideoCommands.vision(args) == expected
+    assert args.handler is commands.vision
+    assert commands.vision(args) == expected

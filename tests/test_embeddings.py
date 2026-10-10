@@ -12,7 +12,7 @@ from youtube_toolkit.config import (
     EmbeddingConfig,
     embedding_concurrency,
 )
-from youtube_toolkit.embeddings import EmbeddingError, embed_text
+from youtube_toolkit.search.embeddings import EmbeddingClient, EmbeddingError
 from youtube_toolkit.search.semantic import split_transcript_chunks
 
 
@@ -31,8 +31,8 @@ def test_split_transcript_chunks_uses_overlap() -> None:
     ]
 
 
-def test_embed_text_uses_embedding_config(monkeypatch) -> None:
-    """The real SDK sends configured credentials, endpoint, dimensions, and float encoding."""
+def test_embedding_client_uses_config_and_one_sdk_client(monkeypatch) -> None:
+    """The real SDK sends configured credentials, endpoint, dimensions, and float encoding through one reused client."""
     requests = []
 
     def respond(request):
@@ -54,9 +54,13 @@ def test_embed_text_uses_embedding_config(monkeypatch) -> None:
         base_url="https://embedding.example/v1/",
         output_dimensionality=512,
     )
-    monkeypatch.setattr("youtube_toolkit.embeddings.OpenAI", create_client)
+    monkeypatch.setattr("youtube_toolkit.search.embeddings.OpenAI", create_client)
 
-    assert embed_text("hello", config=config) == [0.25, 0.75]
+    with EmbeddingClient(config) as client:
+        assert client.embed("hello") == [0.25, 0.75]
+        assert client.embed("again") == [0.25, 0.75]
+    assert len(clients) == 1
+    assert len(requests) == 2
     assert str(requests[0].url) == "https://embedding.example/v1/embeddings"
     assert requests[0].headers["Authorization"] == "Bearer embedding-key"
     assert json.loads(requests[0].content) == {
@@ -86,12 +90,13 @@ def test_embedding_request_retries_transient_network_failures(monkeypatch) -> No
             **kwargs, http_client=httpx2.Client(transport=httpx2.MockTransport(respond))
         )
 
-    monkeypatch.setattr("youtube_toolkit.embeddings.OpenAI", create_client)
+    monkeypatch.setattr("youtube_toolkit.search.embeddings.OpenAI", create_client)
     monkeypatch.setattr("openai._base_client.time.sleep", lambda _delay: None)
     config = EmbeddingConfig(
         "text-embedding-test", "embedding-key", "https://embedding.example/v1", 2
     )
-    assert embed_text("hello", config=config) == [1.0, 0.0]
+    with EmbeddingClient(config) as client:
+        assert client.embed("hello") == [1.0, 0.0]
     assert attempts == 3
 
 
@@ -112,10 +117,13 @@ def test_embedding_failures_remain_search_errors(monkeypatch, status, payload) -
             ),
         )
 
-    monkeypatch.setattr("youtube_toolkit.embeddings.OpenAI", create_client)
+    monkeypatch.setattr("youtube_toolkit.search.embeddings.OpenAI", create_client)
     config = EmbeddingConfig("test", "embedding-key", "https://embedding.example/v1")
-    with pytest.raises(EmbeddingError, match=r"Invalid key|did not include values"):
-        embed_text("hello", config=config)
+    with (
+        EmbeddingClient(config) as client,
+        pytest.raises(EmbeddingError, match=r"Invalid key|did not include values"),
+    ):
+        client.embed("hello")
 
 
 def test_embedding_config_normalizes_values() -> None:

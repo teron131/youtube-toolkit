@@ -1,4 +1,4 @@
-"""Channel listing retrieval owns reference normalization, limits, and date-window expansion."""
+"""Channel listings own reference normalization, limits, and day windows that date flat listings with per-video metadata."""
 
 from __future__ import annotations
 
@@ -6,8 +6,9 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol
 
-from ..config import DEFAULT_LAST_VIDEOS
-from ..identity import ChannelRef, normalize_channel_url
+from ..config import DEFAULT_LAST_VIDEOS, MAX_CONCURRENT_METADATA_FETCHES
+from ..execution import collect_concurrently
+from ..identity import ChannelRef, VideoRef, normalize_channel_url
 from .client import YtDlpClient
 
 MIN_DAYS_WINDOW = 10
@@ -22,15 +23,16 @@ class ChannelOptions:
 
 
 class ChannelVideosClient(Protocol):
-    """Minimal yt-dlp surface needed for channel listing workflows."""
+    """yt-dlp surface for flat channel listings and the per-video metadata that supplies upload dates."""
 
     def channel_videos(
         self,
         channel_url: str,
         *,
         last: int | None,
-        flat: bool = True,
     ) -> dict[str, Any]: ...
+
+    def metadata(self, video_ref: VideoRef, /) -> dict[str, Any]: ...
 
 
 def fetch_channel_videos(
@@ -39,7 +41,12 @@ def fetch_channel_videos(
     options: ChannelOptions | None = None,
     client: ChannelVideosClient | None = None,
 ) -> dict[str, Any]:
-    """Resolve and validate a channel request, expanding date-window fetches until the listing crosses the cutoff."""
+    """Return a flat channel listing; a day window keeps only videos uploaded inside it, each with its upload date.
+
+    Flat listings omit upload dates, so a day window fetches video metadata newest first in concurrent batches and stops after the batch that reaches an older video or dates none.
+    The flat listing doubles only when the next full batch would run past its end, and no video's metadata is fetched twice.
+    Videos whose metadata cannot be fetched have no date and are left out.
+    """
     options = options or ChannelOptions()
     client = client or YtDlpClient()
     validate_channel_options(options)
@@ -50,27 +57,43 @@ def fetch_channel_videos(
             last=options.last,
         )
 
+    cutoff_date = cutoff_date_for_days(options.days)
     window_size = max(options.last or MIN_DAYS_WINDOW, MIN_DAYS_WINDOW)
+    listing = client.channel_videos(channel_url, last=window_size)
+    attempted: set[str] = set()
+    upload_dates: dict[str, date] = {}
     while True:
-        metadata = client.channel_videos(
-            channel_url,
-            last=window_size,
-            flat=False,
-        )
-        entries = metadata.get("entries") or []
-        dated_entries = collect_dated_entries(entries)
-        cutoff_date = cutoff_date_for_days(options.days)
-        metadata["entries"] = [
-            entry for entry, upload_date in dated_entries if upload_date >= cutoff_date
+        entries = listing.get("entries") or []
+        pending = [
+            video_id
+            for entry in entries
+            if isinstance(entry, dict)
+            and isinstance(video_id := entry.get("id"), str)
+            and video_id not in attempted
         ]
-        if not should_expand_window(
-            entries,
-            dated_entries,
-            days=options.days,
-            window_size=window_size,
+        if (
+            len(pending) < MAX_CONCURRENT_METADATA_FETCHES
+            and len(entries) >= window_size
         ):
-            return metadata
-        window_size *= 2
+            window_size *= 2
+            listing = client.channel_videos(channel_url, last=window_size)
+            continue
+        batch = pending[:MAX_CONCURRENT_METADATA_FETCHES]
+        if not batch:
+            break
+        attempted.update(batch)
+        batch_dates = fetch_upload_dates(client, batch)
+        upload_dates |= batch_dates
+        if not batch_dates or min(batch_dates.values()) < cutoff_date:
+            break
+    listing["entries"] = [
+        {**entry, "upload_date": upload_date.strftime("%Y%m%d")}
+        for entry in listing.get("entries") or []
+        if isinstance(entry, dict)
+        and (upload_date := upload_dates.get(entry.get("id"))) is not None
+        and upload_date >= cutoff_date
+    ]
+    return listing
 
 
 def validate_channel_options(options: ChannelOptions) -> None:
@@ -82,7 +105,24 @@ def validate_channel_options(options: ChannelOptions) -> None:
 
 
 def cutoff_date_for_days(days: int) -> date:
+    """Count day windows back from today's UTC date, the clock yt-dlp upload dates use."""
     return datetime.now(UTC).date() - timedelta(days=days)
+
+
+def fetch_upload_dates(
+    client: ChannelVideosClient, video_ids: list[str]
+) -> dict[str, date]:
+    """Fetch one batch of video metadata concurrently and keep each parseable upload date."""
+    metadata_by_id, _failures = collect_concurrently(
+        {video_id: video_id for video_id in video_ids},
+        client.metadata,
+        max_workers=MAX_CONCURRENT_METADATA_FETCHES,
+    )
+    return {
+        video_id: upload_date
+        for video_id, metadata in metadata_by_id.items()
+        if (upload_date := parse_upload_date(metadata.get("upload_date"))) is not None
+    }
 
 
 def parse_upload_date(upload_date: str | None) -> date | None:
@@ -93,31 +133,3 @@ def parse_upload_date(upload_date: str | None) -> date | None:
         int(upload_date[4:6]),
         int(upload_date[6:8]),
     )
-
-
-def collect_dated_entries(
-    entries: list[dict[str, Any]],
-) -> list[tuple[dict[str, Any], date]]:
-    """Keep listing entries that have parseable upload dates for window expansion."""
-    dated_entries: list[tuple[dict[str, Any], date]] = []
-    for entry in entries:
-        upload_date = parse_upload_date(entry.get("upload_date"))
-        if upload_date is not None:
-            dated_entries.append((entry, upload_date))
-    return dated_entries
-
-
-def should_expand_window(
-    entries: list[dict[str, Any]],
-    dated_entries: list[tuple[dict[str, Any], date]],
-    *,
-    days: int,
-    window_size: int,
-) -> bool:
-    """Keep expanding only when the current full page is still newer than the requested window."""
-    if len(entries) < window_size:
-        return False
-    if not dated_entries:
-        return False
-    oldest_upload_date = min(upload_date for _, upload_date in dated_entries)
-    return oldest_upload_date >= cutoff_date_for_days(days)

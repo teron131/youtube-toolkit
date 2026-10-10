@@ -12,6 +12,7 @@ DEFAULT_SEARCH_MAX_DURATION = "8:00:00"
 DEFAULT_YOUTUBE_SEARCH_LIMIT = 10
 DEFAULT_CHANNEL_SEARCH_LIMIT = 30
 DEFAULT_LAST_VIDEOS = 10
+MAX_CONCURRENT_METADATA_FETCHES = 8
 DEFAULT_VISION_MAX_FRAMES = 6
 MAX_VISION_FRAMES = 96
 
@@ -66,16 +67,10 @@ def embedding_config_from_env() -> EmbeddingConfig:
 
 def embedding_concurrency(job_count: int) -> int:
     """Clamp embedding worker count to the configured limit and the amount of pending work."""
-    configured_concurrency = config_int_value(
+    configured = config_int_value(
         "EMBEDDING_CONCURRENCY", DEFAULT_EMBEDDING_CONCURRENCY
     )
-    return min(
-        job_count,
-        max(
-            1,
-            min(configured_concurrency, MAX_EMBEDDING_CONCURRENCY),
-        ),
-    )
+    return min(job_count, max(1, min(configured, MAX_EMBEDDING_CONCURRENCY)))
 
 
 def config_value(name: str) -> str | None:
