@@ -14,11 +14,10 @@ from PIL import Image, ImageDraw, ImageFont
 from ..artifacts import create_artifact_directory
 from ..config import DEFAULT_VISION_MAX_FRAMES, MAX_VISION_FRAMES
 from ..identity import VideoRef, require_video_id
-from ..transcript import fetch_transcript
-from ..youtube.caption import TranscriptOptions
+from ..transcript import TranscriptOptions, fetch_transcript
 from ..youtube.client import YtDlpClient
 from .frames import FRAME_HEIGHT, FRAME_WIDTH, SelectedFrame, select_frames
-from .transcript import select_transcript_windows
+from .windows import select_transcript_windows
 
 MAX_VIDEO_DURATION_SECONDS = 2 * 60 * 60
 MAX_VIDEO_BYTES = 500 * 1024 * 1024

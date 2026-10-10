@@ -10,7 +10,7 @@ from youtube_toolkit.schemas import (
     VideoChapter,
     VideoMetadata,
 )
-from youtube_toolkit.vision.transcript import select_transcript_windows
+from youtube_toolkit.vision.windows import select_transcript_windows
 
 
 def document(chunks, chapters=(), *, duration=None):

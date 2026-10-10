@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, date, datetime, timedelta
+from datetime import date
 from typing import Any
 
 from ..identity import extract_channel_identity, extract_video_id
+from ..schemas import normalize_number
+from ..youtube.channels import cutoff_date_for_days
 from .request import (
     SearchRequest,
     normalize_filter_date,
@@ -28,7 +30,11 @@ VIDEO_RESULT_KEYS = (
 def interlace_relevance(
     candidate_lists: list[list[dict[str, Any]]],
 ) -> list[dict[str, Any]]:
-    """Merge multiple relevance-ranked lists fairly while deduping by video ID."""
+    """Merge each query's result list by taking turns, deduping by video ID.
+
+    This is the ranking for multi-query search, not just a merge: every list arrives in YouTube's own relevance order, and nothing is scored locally because that would mean fetching and processing every candidate.
+    Taking the next result from each list in turn assumes equal ranks are equally relevant, which keeps the merged order roughly descending at no cost.
+    """
     merged: list[dict[str, Any]] = []
     seen_video_ids: set[str] = set()
     longest_list = max((len(candidates) for candidates in candidate_lists), default=0)
@@ -136,20 +142,13 @@ def sortable(value: Any) -> SortableValue | None:
     return None
 
 
-def popularity(candidate: dict[str, Any]) -> tuple[int | float, int | float] | None:
+def popularity(candidate: dict[str, Any]) -> tuple[float, float] | None:
     """Popularity sorts by views first and likes second while treating absent counters as zero."""
-    view_count = candidate.get("view_count")
-    like_count = candidate.get("like_count")
-    if isinstance(view_count, bool) or not isinstance(view_count, int | float):
-        view_count = None
-    if isinstance(like_count, bool) or not isinstance(like_count, int | float):
-        like_count = None
+    view_count = normalize_number(candidate.get("view_count"))
+    like_count = normalize_number(candidate.get("like_count"))
     if view_count is None and like_count is None:
         return None
-    return (
-        view_count or 0,
-        like_count or 0,
-    )
+    return view_count or 0.0, like_count or 0.0
 
 
 def filter_candidates(
@@ -237,9 +236,9 @@ def passes_filters(
     if (
         request.mode == "native"
         and candidate.get("source") == "channel"
-        and request.query.strip()
+        and request.queries
     ):
-        return text_matches(title, (request.query,))
+        return any(text_matches(title, (query,)) for query in request.queries)
     return True
 
 
@@ -291,12 +290,7 @@ def upload_cutoff(request: SearchRequest) -> str | None:
     if request.uploaded_after is not None:
         cutoffs.append(normalize_filter_date(request.uploaded_after))
     if request.uploaded_within_days is not None:
-        cutoffs.append(
-            (
-                datetime.now(UTC).astimezone().date()
-                - timedelta(days=request.uploaded_within_days)
-            ).isoformat()
-        )
+        cutoffs.append(cutoff_date_for_days(request.uploaded_within_days).isoformat())
     return max(cutoffs) if cutoffs else None
 
 

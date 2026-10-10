@@ -22,35 +22,28 @@ def youtube_candidates(
     fetch_limit: int,
     sort: SearchSort,
 ) -> list[dict[str, Any]]:
-    """Fetch and normalize YouTube search candidates for the requested ranking policy."""
+    """Run one YouTube search per query and merge the result lists for the requested ranking policy.
+
+    The fetch budget is split across the queries, since each supplies only its share of the merged results.
+    """
     youtube_sort = "popularity" if sort == "popularity" else "relevance"
-    queries = tuple(dict.fromkeys((request.query, *request.extra_queries)))
+    queries = tuple(dict.fromkeys(request.queries))
+    per_query_limit = -(-fetch_limit // len(queries))
     # executor.map preserves query order even when later requests finish first.
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_DISCOVERY_FETCHES) as executor:
         candidate_lists = list(
             executor.map(
-                partial(youtube_search, fetch_limit=fetch_limit, sort=youtube_sort),
+                partial(youtube_search, fetch_limit=per_query_limit, sort=youtube_sort),
                 queries,
             )
         )
     if sort == "relevance":
-        return [
-            {
-                **candidate,
-                "source": "youtube",
-            }
-            for candidate in interlace_relevance(candidate_lists)
-        ]
-    candidates = [
-        candidate for candidates in candidate_lists for candidate in candidates
-    ]
-    return [
-        {
-            **candidate,
-            "source": "youtube",
-        }
-        for candidate in dedupe_candidates(candidates)
-    ]
+        candidates = interlace_relevance(candidate_lists)
+    else:
+        candidates = dedupe_candidates(
+            [candidate for results in candidate_lists for candidate in results]
+        )
+    return [{**candidate, "source": "youtube"} for candidate in candidates]
 
 
 def youtube_search(

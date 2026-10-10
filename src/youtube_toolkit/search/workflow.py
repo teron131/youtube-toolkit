@@ -2,6 +2,7 @@
 
 Sources discover candidate videos from YouTube, channel listings, or their combination.
 Native mode stays metadata-first and returns video objects after local filters, ranking, and limits.
+Relevance order is delegated to YouTube: each query's results keep YouTube's ranking, and several queries are interleaved rather than rescored.
 Semantic mode runs title, transcript, chunk-index, and scoring stages, then returns chunks by default.
 Full transcript output remains an explicit transcript command rather than a search side effect.
 """
@@ -10,6 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..config import MAX_CONCURRENT_METADATA_FETCHES
 from ..execution import collect_concurrently
 from ..youtube.client import YtDlpClient
 from .discovery import channel_listings, youtube_candidates
@@ -30,7 +32,6 @@ from .request import (
     validate_request,
 )
 
-MAX_CONCURRENT_METADATA_FETCHES = 8
 SOURCE_OVERSAMPLE_FACTOR = 3
 DATE_FILTER_SOURCE_OVERSAMPLE_FACTOR = 12
 
@@ -140,6 +141,7 @@ def hydrate_candidates(
     Flat listings omit fields (channel listings carry no view counts or upload dates), so unknown values pass a lenient prefilter and only its survivors are fetched, concurrently and in order.
     A newest-first listing under an upload cutoff is fetched in batches that stop at the first video older than the cutoff, because every later video is older too.
     Failed fetches leave candidates unhydrated for the strict filter to judge.
+    Hydrated candidates also keep the raw response under "metadata", so later stages of this search reuse it instead of requesting it again.
     """
     survivors = filter_candidates(
         candidates, request, cutoff=cutoff, allow_missing=True
@@ -175,6 +177,7 @@ def hydrate_candidates(
                     "id": video_id,
                     "upload_date": normalized_upload_date(metadata.get("upload_date")),
                     "source": candidate.get("source"),
+                    "metadata": metadata,
                 }
             )
         if stop_before is not None and any(

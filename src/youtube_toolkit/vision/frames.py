@@ -17,7 +17,7 @@ from scenedetect import FrameTimecode
 from scenedetect.detectors import AdaptiveDetector
 
 from ..config import DEFAULT_VISION_MAX_FRAMES
-from .transcript import TranscriptWindow
+from .windows import TranscriptWindow
 
 FFMPEG_TIMEOUT_SECONDS = 10 * 60
 FFMPEG_THREADS = max(1, min(2, (os.process_cpu_count() or 1) // 4))

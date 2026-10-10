@@ -33,7 +33,7 @@ def test_download_transcription_audio_uses_unique_artifact_stem(
         timeout,
     ):
         """Capture yt-dlp args and create the expected output file."""
-        assert timeout == 30
+        assert timeout == 600
         commands.append(command)
         output_pattern = Path(command[command.index("--output") + 1])
         audio_path = output_pattern.with_name(
@@ -193,11 +193,11 @@ def test_failed_audio_download_cleans_only_its_own_partial_files(
     unrelated.write_bytes(b"existing audio")
 
     def fail(command, **kwargs):
-        assert kwargs["timeout"] == 30
+        assert kwargs["timeout"] == 600
         pattern = Path(command[command.index("--output") + 1])
         pattern.with_suffix(".m4a.part").write_bytes(b"partial")
         if timed_out:
-            raise subprocess.TimeoutExpired(command, timeout=30)
+            raise subprocess.TimeoutExpired(command, timeout=600)
         return SimpleNamespace(returncode=1, stderr="download failed")
 
     monkeypatch.setattr("youtube_toolkit.youtube.client.subprocess.run", fail)
@@ -207,3 +207,38 @@ def test_failed_audio_download_cleans_only_its_own_partial_files(
         YtDlpClient().download_transcription_audio("JpSHyEIZ_bo")
     assert list(audio_dir.iterdir()) == [unrelated]
     assert unrelated.read_bytes() == b"existing audio"
+
+
+@pytest.mark.parametrize(
+    ("refusals", "expected_calls", "expected_delays"),
+    [(3, 4, [5.0, 10.0, 15.0]), (4, 4, [5.0, 10.0, 15.0])],
+)
+def test_refused_downloads_are_rerun_after_a_pause(
+    monkeypatch, tmp_path, refusals, expected_calls, expected_delays
+) -> None:
+    """An HTTP 403 from YouTube is retried three times with backoff, then the refusal is surfaced."""
+    monkeypatch.chdir(tmp_path)
+    calls = []
+    delays: list[float] = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        if len(calls) <= refusals:
+            return SimpleNamespace(
+                returncode=1,
+                stderr="ERROR: unable to download video data: HTTP Error 403: Forbidden",
+            )
+        pattern = Path(command[command.index("--output") + 1])
+        pattern.with_suffix(".m4a").write_bytes(b"audio")
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr("youtube_toolkit.youtube.client.subprocess.run", run)
+    monkeypatch.setattr("youtube_toolkit.execution.time.sleep", delays.append)
+
+    if refusals < expected_calls:
+        assert YtDlpClient().download_transcription_audio("JpSHyEIZ_bo").is_file()
+    else:
+        with pytest.raises(RuntimeError, match="HTTP Error 403"):
+            YtDlpClient().download_transcription_audio("JpSHyEIZ_bo")
+    assert len(calls) == expected_calls
+    assert delays == expected_delays

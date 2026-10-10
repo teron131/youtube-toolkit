@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import math
 from typing import Any
 
 from ..config import embedding_concurrency
-from ..embeddings import embed_text
 from ..execution import collect_concurrently
 from ..schemas import TranscriptDocument
-from ..transcript import fetch_transcript
+from ..transcript import TranscriptOptions, fetch_transcript
+from .embeddings import EmbeddingClient
 from .filters import (
     candidate_id,
     candidate_metadata,
@@ -63,20 +64,21 @@ def search_transcripts(
     ]
     if not candidates:
         raise unprepared_embeddings_error([])
-    query_embedding = embed_text(request.query)
-    candidates, title_failures = shortlist_by_title(
-        request, candidates, query_embedding
-    )
-    documents, transcript_failures = fetch_semantic_transcripts(candidates)
-    chunks = prepare_transcript_chunks(candidates, documents)
-    vectors, chunk_failures = embed_texts_concurrently(
-        {chunk.text: chunk.text for chunk in chunks}
-    )
+    with EmbeddingClient() as embedder:
+        query_embeddings = [embedder.embed(query) for query in request.queries]
+        candidates, title_failures = shortlist_by_title(
+            request, candidates, query_embeddings, embed=embedder.embed
+        )
+        documents, transcript_failures = fetch_semantic_transcripts(candidates)
+        chunks = prepare_transcript_chunks(candidates, documents)
+        vectors, chunk_failures = embed_texts_concurrently(
+            {chunk.text: chunk.text for chunk in chunks}, embed=embedder.embed
+        )
     if not vectors:
         raise unprepared_embeddings_error(
             [*transcript_failures.values(), *chunk_failures.values()]
         )
-    scored = score_chunks(chunks, vectors, query_embedding)
+    scored = score_chunks(chunks, vectors, query_embeddings)
 
     shared_warnings = [
         *compact_stage_failures("title embedding", title_failures),
@@ -114,7 +116,9 @@ def search_transcripts(
 def shortlist_by_title(
     request: SearchRequest,
     candidates: list[dict[str, Any]],
-    query_embedding: list[float],
+    query_embeddings: list[list[float]],
+    *,
+    embed: Callable[[str], list[float]],
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
     """Score titles before fetching transcripts to bound transcript and chunk-embedding work.
 
@@ -127,12 +131,12 @@ def shortlist_by_title(
         and isinstance((title := candidate.get("title")), str)
         and title.strip()
     }
-    vectors, failures = embed_texts_concurrently(titles)
+    vectors, failures = embed_texts_concurrently(titles, embed=embed)
     if not vectors:
         return candidates, failures
     scored = sorted(
         (
-            (cosine_similarity(query_embedding, vectors[video_id]), candidate)
+            (best_similarity(query_embeddings, vectors[video_id]), candidate)
             for candidate in candidates
             if (video_id := candidate_id(candidate)) in vectors
         ),
@@ -153,14 +157,25 @@ def shortlist_by_title(
 def fetch_semantic_transcripts(
     candidates: list[dict[str, Any]],
 ) -> tuple[dict[str, TranscriptDocument], dict[str, str]]:
-    """Fetch fresh transcripts concurrently while retaining per-video failures."""
+    """Fetch fresh caption transcripts concurrently while retaining per-video failures.
+
+    Speech-to-text is never used here: a search should stay as cheap to repeat as a YouTube search, and transcribing every uncaptioned candidate would not be.
+    Candidates hydrated earlier in this search pass their metadata response on instead of fetching it a second time.
+    """
     jobs = {
-        video_id: video_id
+        video_id: (video_id, candidate.get("metadata"))
         for candidate in candidates
         if (video_id := candidate_id(candidate)) is not None
     }
+
+    def fetch(job: tuple[str, dict[str, Any] | None]) -> TranscriptDocument:
+        video_id, metadata = job
+        return fetch_transcript(
+            video_id, options=TranscriptOptions(allow_stt=False), metadata=metadata
+        )
+
     documents, failures = collect_concurrently(
-        jobs, fetch_transcript, max_workers=MAX_CONCURRENT_TRANSCRIPT_FETCHES
+        jobs, fetch, max_workers=MAX_CONCURRENT_TRANSCRIPT_FETCHES
     )
     return documents, {video_id: str(error) for video_id, error in failures.items()}
 
@@ -191,20 +206,22 @@ def prepare_transcript_chunks(
 
 def embed_texts_concurrently(
     texts: dict[str, str],
+    *,
+    embed: Callable[[str], list[float]],
 ) -> tuple[dict[str, list[float]], dict[str, str]]:
     """Embed independent texts concurrently without letting one remote failure stop the stage."""
     if not texts:
         return {}, {}
 
-    def embed(text: str) -> list[float]:
-        vector = embed_text(text)
+    def embed_nonempty(text: str) -> list[float]:
+        vector = embed(text)
         if not vector:
             raise RuntimeError("Embedding request returned an empty vector")
         return vector
 
     vectors, failures = collect_concurrently(
         texts,
-        embed,
+        embed_nonempty,
         max_workers=embedding_concurrency(len(texts)),
     )
     return vectors, {key: str(error) for key, error in failures.items()}
@@ -213,15 +230,15 @@ def embed_texts_concurrently(
 def score_chunks(
     chunks: list[PreparedChunk],
     vectors: dict[str, list[float]],
-    query_embedding: list[float],
+    query_embeddings: list[list[float]],
 ) -> list[ScoredChunk]:
-    """Rank embedded chunks by query similarity after applying the result threshold."""
+    """Rank embedded chunks by their best similarity to any query after applying the result threshold."""
     scored: list[ScoredChunk] = []
     for chunk in chunks:
         vector = vectors.get(chunk.text)
         if vector is None:
             continue
-        similarity = cosine_similarity(query_embedding, vector)
+        similarity = best_similarity(query_embeddings, vector)
         if similarity < RESULT_MIN_SIMILARITY:
             continue
         scored.append(ScoredChunk(prepared=chunk, similarity=similarity))
@@ -307,6 +324,11 @@ def split_transcript_chunks(
             break
         start = end - overlap_chars
     return chunks
+
+
+def best_similarity(query_embeddings: list[list[float]], vector: list[float]) -> float:
+    """Score a text by its closest query, so no query outranks another."""
+    return max(cosine_similarity(query, vector) for query in query_embeddings)
 
 
 def cosine_similarity(left: list[float], right: list[float]) -> float:

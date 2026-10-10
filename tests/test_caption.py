@@ -2,6 +2,7 @@
 
 from dataclasses import asdict
 from pathlib import Path
+from types import SimpleNamespace
 import urllib.error
 
 import pytest
@@ -10,15 +11,16 @@ from youtube_toolkit.artifacts import write_artifact
 from youtube_toolkit.schemas import TranscriptChunk, TranscriptDocument, VideoMetadata
 from youtube_toolkit.stt import SpeechTranscription
 from youtube_toolkit.youtube.caption import (
-    DEFAULT_TRANSCRIPT_LANGUAGES,
     CaptionTranscriptUnavailable,
-    TranscriptOptions,
     fetch_caption_payload,
-    fetch_live_transcript,
     remove_sponsorblock_chunks,
     select_caption_track,
 )
-from youtube_toolkit.transcript import fetch_transcript
+from youtube_toolkit.transcript import (
+    DEFAULT_TRANSCRIPT_LANGUAGES,
+    TranscriptOptions,
+    fetch_transcript,
+)
 
 
 def test_remove_sponsorblock_chunks_drops_overlapping_chunks() -> None:
@@ -65,7 +67,7 @@ def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
-        "youtube_toolkit.youtube.caption.transcribe_audio_details",
+        "youtube_toolkit.transcript.transcribe_audio_details",
         fake_transcribe_audio_details,
     )
 
@@ -77,7 +79,7 @@ def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
     assert document.metadata.video_id == "JpSHyEIZ_bo"
     assert document.metadata.title == "No captions"
     assert document.source == "speech-to-text"
-    assert document.language == "speech-to-text"
+    assert document.language == "zh"
     assert document.text == "數據庫"
     assert not audio_path.exists()
 
@@ -123,6 +125,45 @@ def test_fetch_transcript_fetches_and_archives_captions(monkeypatch, tmp_path) -
     assert document.text == "GPT-5.6 model analysis"
 
 
+@pytest.mark.parametrize(
+    ("language", "caption", "expected"),
+    [("zh-Hans", "数据库里", "數據庫裡"), ("en", "Database", "Database")],
+)
+def test_caption_text_is_converted_to_taiwan_traditional(
+    monkeypatch, tmp_path, language, caption, expected
+) -> None:
+    """Captions follow the same script policy as speech-to-text: Taiwan Traditional characters, original wording."""
+
+    class FakeClient:
+        def metadata(self, video_ref: str) -> dict:
+            return {
+                "id": video_ref,
+                "subtitles": {language: [caption_track(language)]},
+            }
+
+        def download_transcription_audio(self, _video_id: str) -> Path:
+            pytest.fail("caption retrieval should not download STT audio")
+
+    monkeypatch.setattr(
+        "youtube_toolkit.youtube.caption.fetch_caption_payload",
+        lambda _url: {
+            "events": [
+                {"tStartMs": 0, "dDurationMs": 1000, "segs": [{"utf8": caption}]}
+            ]
+        },
+    )
+    monkeypatch.chdir(tmp_path)
+
+    document = fetch_transcript(
+        "JpSHyEIZ_bo",
+        options=TranscriptOptions(languages=(language,)),
+        client=FakeClient(),
+    )
+
+    assert document.language == language
+    assert document.text == expected
+
+
 def test_stt_fallback_removes_downloaded_audio_after_failure(
     monkeypatch,
     tmp_path,
@@ -146,12 +187,12 @@ def test_stt_fallback_removes_downloaded_audio_after_failure(
         raise RuntimeError("STT unavailable")
 
     monkeypatch.setattr(
-        "youtube_toolkit.youtube.caption.transcribe_audio_details",
+        "youtube_toolkit.transcript.transcribe_audio_details",
         fail_transcription,
     )
 
     with pytest.raises(RuntimeError, match="STT unavailable"):
-        fetch_live_transcript("JpSHyEIZ_bo", client=FakeClient())
+        fetch_transcript("JpSHyEIZ_bo", client=FakeClient())
 
     assert not audio_path.exists()
 
@@ -294,9 +335,108 @@ def test_default_languages_prefer_manual_english_before_automatic_chinese() -> N
     )
 
 
+def caption_track(lang: str, translated_to: str | None = None) -> dict:
+    url = f"https://www.youtube.com/api/timedtext?v=example&lang={lang}&fmt=json3"
+    return {
+        "ext": "json3",
+        "url": url + (f"&tlang={translated_to}" if translated_to else ""),
+    }
+
+
+@pytest.mark.parametrize(
+    ("language", "expected_key", "expected_lang"),
+    [("ja", "ja-orig", "ja"), ("en-US", "en-US", "en-US")],
+)
+def test_default_languages_prefer_original_captions_over_machine_translations(
+    language, expected_key, expected_lang
+) -> None:
+    """Without English or Chinese originals, the spoken language wins over YouTube's machine translations, even on dubbed videos."""
+    metadata = {
+        "language": language,
+        "automatic_captions": {
+            "en": [caption_track(expected_lang, translated_to="en")],
+            "zh-Hant": [caption_track(expected_lang, translated_to="zh-Hant")],
+            "ja-orig": [caption_track("ja")],
+            "ja": [caption_track("ja")],
+            "en-US": [caption_track("en-US")],
+        },
+        "subtitles": {},
+    }
+    assert select_caption_track(metadata, DEFAULT_TRANSCRIPT_LANGUAGES, "any") == (
+        caption_track(expected_lang)["url"],
+        expected_key,
+        "automatic_captions",
+    )
+
+
+@pytest.mark.parametrize(
+    ("language", "manual", "expected"),
+    [
+        ("en", ["en-US", "zh-Hant"], ("en-US", "subtitles")),
+        (None, ["en", "zh-Hant"], ("zh-Hant", "subtitles")),
+        ("ja", ["en", "zh-Hant"], ("en", "subtitles")),
+        ("ja", ["fr"], ("ja-orig", "automatic_captions")),
+    ],
+)
+def test_manual_subtitles_follow_spoken_language_before_automatic_captions(
+    language, manual, expected
+) -> None:
+    """Manual English or Chinese comes first, led by the spoken language; a video without automatic captions counts as Chinese."""
+    spoken = language or "zh"
+    metadata = {
+        "language": language,
+        "automatic_captions": (
+            {f"{spoken}-orig": [caption_track(spoken)]} if language else {}
+        ),
+        "subtitles": {key: [caption_track(key)] for key in manual},
+    }
+
+    assert select_caption_track(metadata, DEFAULT_TRANSCRIPT_LANGUAGES, "any") == (
+        caption_track(expected[0].removesuffix("-orig"))["url"],
+        *expected,
+    )
+
+
+def test_metadata_drops_machine_translated_captions(monkeypatch, tmp_path) -> None:
+    """Translations are removed before metadata is returned or archived, keeping the original tracks."""
+    import json
+
+    from youtube_toolkit.youtube.client import YtDlpClient
+
+    monkeypatch.chdir(tmp_path)
+    response = {
+        "id": "JpSHyEIZ_bo",
+        "automatic_captions": {
+            "en-orig": [caption_track("en")],
+            "en": [caption_track("en"), caption_track("ja", translated_to="en")],
+            "fr": [caption_track("en", translated_to="fr")],
+        },
+    }
+    monkeypatch.setattr(
+        "youtube_toolkit.youtube.client.subprocess.run",
+        lambda command, **kwargs: SimpleNamespace(
+            returncode=0, stdout=json.dumps(response)
+        ),
+    )
+
+    metadata = YtDlpClient().metadata("JpSHyEIZ_bo")
+
+    originals = {"en-orig": [caption_track("en")], "en": [caption_track("en")]}
+    assert metadata["automatic_captions"] == originals
+    archived = json.loads(
+        next((tmp_path / ".cache/youtube-toolkit/metadata").glob("*.json")).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert archived["payload"]["automatic_captions"] == originals
+
+
 @pytest.mark.parametrize(
     "options",
-    [TranscriptOptions(languages=("zh",)), TranscriptOptions(source="manual")],
+    [
+        TranscriptOptions(languages=("zh",)),
+        TranscriptOptions(source="manual"),
+    ],
 )
 def test_transcript_archives_preserve_timing_and_retrieval_options(
     monkeypatch, tmp_path, options
@@ -324,11 +464,16 @@ def test_transcript_archives_preserve_timing_and_retrieval_options(
         ],
     )
 
-    def fetch(video_ref, *, options, client, metadata=None):
-        calls.append(options)
-        return expected
+    class FakeClient:
+        def metadata(self, video_ref):
+            calls.append(video_ref)
+            return {"id": "JpSHyEIZ_bo"}
 
-    monkeypatch.setattr("youtube_toolkit.transcript.fetch_live_transcript", fetch)
+    monkeypatch.setattr("youtube_toolkit.transcript.YtDlpClient", FakeClient)
+    monkeypatch.setattr(
+        "youtube_toolkit.transcript.fetch_caption_transcript",
+        lambda _metadata, **_policy: expected,
+    )
     assert fetch_transcript("JpSHyEIZ_bo") == expected
     assert fetch_transcript("https://youtu.be/JpSHyEIZ_bo") == expected
     assert len(calls) == 2

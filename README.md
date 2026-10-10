@@ -26,6 +26,7 @@ The installer replaces the installed `youtube` tool. To run the checkout directl
 youtube search "langgraph tutorial" --limit 5 --max-duration 20:00
 youtube search "reasoning models" --source channel --channels @OpenAI --channels @Anthropic --uploaded-within-days 30 --sort recency
 youtube channel @OpenAI --last 5
+youtube channel @OpenAI --days 7
 youtube metadata <url-or-id>
 youtube transcript <url-or-id>
 youtube transcript <url-or-id> --timestamps
@@ -34,7 +35,7 @@ youtube vision <url-or-id>
 youtube doctor
 ```
 
-Commands return JSON except `doctor`. Metadata includes descriptions, thumbnails, and chapters. Transcripts return text by default or timed chunks with `--timestamps`; `--export` writes a text file in the working directory, and `--force` allows overwriting it. Videos without captions fall back to xAI speech-to-text, which needs `XAI_API_KEY`.
+Commands return JSON except `doctor`. Metadata includes descriptions, thumbnails, and chapters. Transcripts return text by default or timed chunks with `--timestamps`; `--export` writes a text file in the working directory, and `--force` allows overwriting it. Transcripts are in English or Chinese when the video has those subtitles, otherwise in the video's own language. Videos without captions fall back to xAI speech-to-text, which needs `XAI_API_KEY`.
 
 Search defaults: at least 10,000 views, duration 3 minutes to 8 hours, and 10 results (30 for channel-only searches). Use `youtube search --help` for filters and overrides.
 

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 from typing import Any
@@ -11,6 +13,7 @@ from urllib.parse import unquote, urlencode, urlparse
 from uuid import uuid4
 
 from ..artifacts import artifact_root, write_artifact
+from ..execution import retry_transient
 from ..identity import VideoRef, normalize_youtube_url, require_video_id
 
 SEARCH_SORT_PARAMS = {
@@ -19,23 +22,34 @@ SEARCH_SORT_PARAMS = {
 }
 STT_AUDIO_FORMAT_SELECTOR = "bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio[ext=aac]"
 VISION_VIDEO_FORMAT_SELECTOR = "bestvideo[height<=720][ext=mp4]/bestvideo[height<=720]"
-VISION_VIDEO_DOWNLOAD_TIMEOUT_SECONDS = 10 * 60
+# A metadata, search, or listing request that takes over a minute is stuck.
 YTDLP_REQUEST_TIMEOUT_SECONDS = 60
-AUDIO_DOWNLOAD_TIMEOUT_SECONDS = 30
+# A download can simply be slow: YouTube was measured as low as 0.5 MB/s, and a two-hour 720p video is about 300 MB.
+YTDLP_DOWNLOAD_TIMEOUT_SECONDS = 10 * 60
+# YouTube refuses requests in short bursts, so a refused process is retried three times, after 5, 10, and 15 seconds.
+FORBIDDEN_RETRIES = 3
+FORBIDDEN_BACKOFF_SECONDS = 5.0
+# YouTube marks machine-translated caption tracks with a tlang query parameter.
+TRANSLATED_TRACK_URL = re.compile(r"[?&]tlang=")
+# yt-dlp runs as a module of this interpreter, so the installed package version is the one used.
+YTDLP_COMMAND = (sys.executable, "-m", "yt_dlp", "--no-cache-dir")
+
+
+class YtDlpForbidden(RuntimeError):
+    """Raised when YouTube refuses a yt-dlp process with HTTP 403, which usually clears on a later attempt."""
 
 
 class YtDlpClient:
     """Subprocess adapter that owns all direct yt-dlp command construction."""
 
-    def command_prefix(self) -> list[str]:
-        """Return the Python-module command prefix used to invoke yt-dlp from this environment."""
-        return [sys.executable, "-m", "yt_dlp", "--no-cache-dir"]
-
     def metadata(self, video_ref: VideoRef) -> dict[str, Any]:
-        """Fetch full yt-dlp metadata for one validated YouTube video reference."""
+        """Fetch full yt-dlp metadata for one validated YouTube video reference.
+
+        Machine-translated caption tracks are dropped before the response is returned or archived.
+        """
         return self._json(
             [
-                *self.command_prefix(),
+                *YTDLP_COMMAND,
                 "-J",
                 "--skip-download",
                 "--sponsorblock-mark",
@@ -45,6 +59,7 @@ class YtDlpClient:
             namespace="metadata",
             identifier=require_video_id(video_ref),
             error_message="yt-dlp metadata request failed",
+            prepare=_drop_translated_captions,
         )
 
     def search(
@@ -62,7 +77,7 @@ class YtDlpClient:
         search_url = f"https://www.youtube.com/results?{urlencode(search_params)}"
         return self._json(
             [
-                *self.command_prefix(),
+                *YTDLP_COMMAND,
                 "--quiet",
                 "--no-warnings",
                 "--dump-single-json",
@@ -81,17 +96,15 @@ class YtDlpClient:
         channel_url: str,
         *,
         last: int | None,
-        flat: bool = True,
     ) -> dict[str, Any]:
-        """Fetch a channel videos listing through yt-dlp with optional playlist truncation."""
+        """Fetch a flat channel videos listing through yt-dlp with optional playlist truncation."""
         command = [
-            *self.command_prefix(),
+            *YTDLP_COMMAND,
             "--quiet",
             "--no-warnings",
             "--dump-single-json",
+            "--flat-playlist",
         ]
-        if flat:
-            command.append("--flat-playlist")
         if last is not None:
             command.extend(
                 [
@@ -114,7 +127,7 @@ class YtDlpClient:
         output_stem = artifact_root() / "audio" / f"{video_id}-{uuid4().hex}"
         output_stem.parent.mkdir(parents=True, exist_ok=True)
         command = [
-            *self.command_prefix(),
+            *YTDLP_COMMAND,
             "--no-playlist",
             "--quiet",
             "--no-warnings",
@@ -129,7 +142,7 @@ class YtDlpClient:
             _run(
                 command,
                 action="audio download",
-                timeout_seconds=AUDIO_DOWNLOAD_TIMEOUT_SECONDS,
+                timeout_seconds=YTDLP_DOWNLOAD_TIMEOUT_SECONDS,
             )
             candidates = [
                 path
@@ -159,7 +172,7 @@ class YtDlpClient:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         _run(
             [
-                *self.command_prefix(),
+                *YTDLP_COMMAND,
                 "--no-playlist",
                 "--quiet",
                 "--no-warnings",
@@ -174,7 +187,7 @@ class YtDlpClient:
                 normalize_youtube_url(video_ref),
             ],
             action="video download for vision",
-            timeout_seconds=VISION_VIDEO_DOWNLOAD_TIMEOUT_SECONDS,
+            timeout_seconds=YTDLP_DOWNLOAD_TIMEOUT_SECONDS,
         )
         if not output_path.exists():
             raise RuntimeError(f"yt-dlp completed but did not create {output_path}")
@@ -192,9 +205,10 @@ class YtDlpClient:
         namespace: str,
         identifier: str,
         error_message: str,
+        prepare: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """Fetch a fresh yt-dlp response and archive it without consulting previous requests."""
-        request = {"arguments": command[len(self.command_prefix()) :]}
+        """Fetch a fresh yt-dlp response, apply any response policy, and archive the result without consulting previous requests."""
+        request = {"arguments": command[len(YTDLP_COMMAND) :]}
         result = _run(
             command,
             action="request",
@@ -207,8 +221,32 @@ class YtDlpClient:
             raise RuntimeError("yt-dlp did not return valid JSON") from exc
         if not isinstance(data, dict):
             raise RuntimeError("yt-dlp returned a non-object JSON payload")
+        if prepare is not None:
+            data = prepare(data)
         write_artifact(namespace, identifier, request, data)
         return data
+
+
+def _drop_translated_captions(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Keep only original automatic-caption tracks.
+
+    YouTube offers each recognized track machine-translated into every supported language, which can make up over 90% of a metadata payload.
+    """
+    captions = metadata.get("automatic_captions")
+    if not isinstance(captions, dict):
+        return metadata
+    originals = {
+        language: kept
+        for language, tracks in captions.items()
+        if (
+            kept := [
+                track
+                for track in tracks
+                if not TRANSLATED_TRACK_URL.search(track.get("url") or "")
+            ]
+        )
+    }
+    return {**metadata, "automatic_captions": originals}
 
 
 def _run(
@@ -218,23 +256,38 @@ def _run(
     timeout_seconds: int,
     failure_message: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run one bounded yt-dlp process, translating timeouts, launch errors, and exit codes into RuntimeError."""
-    try:
-        result = subprocess.run(  # noqa: S603 - fixed yt-dlp executable prefix and argument list.
-            command,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=timeout_seconds,
-        )
-    except subprocess.TimeoutExpired as error:
-        raise RuntimeError(
-            f"yt-dlp {action} timed out after {timeout_seconds} seconds"
-        ) from error
-    except OSError as error:
-        raise RuntimeError(f"Could not start yt-dlp {action}: {error}") from error
-    if result.returncode != 0:
-        raise RuntimeError(
-            result.stderr.strip() or failure_message or f"yt-dlp {action} failed"
-        )
-    return result
+    """Run one bounded yt-dlp process, translating timeouts, launch errors, and exit codes into RuntimeError.
+
+    A process YouTube refuses with HTTP 403 is rerun after a pause, because a fresh run requests new media URLs.
+    """
+
+    def attempt() -> subprocess.CompletedProcess[str]:
+        try:
+            result = subprocess.run(  # noqa: S603 - fixed yt-dlp executable prefix and argument list.
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError(
+                f"yt-dlp {action} timed out after {timeout_seconds} seconds"
+            ) from error
+        except OSError as error:
+            raise RuntimeError(f"Could not start yt-dlp {action}: {error}") from error
+        if result.returncode != 0:
+            message = (
+                result.stderr.strip() or failure_message or f"yt-dlp {action} failed"
+            )
+            if "HTTP Error 403" in result.stderr:
+                raise YtDlpForbidden(message)
+            raise RuntimeError(message)
+        return result
+
+    return retry_transient(
+        attempt,
+        attempts=FORBIDDEN_RETRIES + 1,
+        backoff_seconds=FORBIDDEN_BACKOFF_SECONDS,
+        retryable_errors=(YtDlpForbidden,),
+    )

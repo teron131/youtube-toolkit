@@ -44,8 +44,8 @@ class VideoMetadata:
             channel_handle=channel_identity.channel_handle,
             upload_date=normalize_upload_date(metadata.get("upload_date")),
             duration_seconds=normalize_number(metadata.get("duration")),
-            view_count=normalize_view_count(metadata.get("view_count")),
-            like_count=normalize_view_count(metadata.get("like_count")),
+            view_count=normalize_count(metadata.get("view_count")),
+            like_count=normalize_count(metadata.get("like_count")),
             description=normalize_text(metadata.get("description")),
             thumbnail=normalize_text(metadata.get("thumbnail")),
             chapters=[
@@ -116,19 +116,19 @@ def normalize_text(value: Any) -> str | None:
 
 
 def normalize_title(value: Any) -> str | None:
-    """Normalize title text and convert Chinese script to the toolkit's Hong Kong Traditional policy."""
+    """Normalize title text and convert Chinese script to the toolkit's Taiwan Traditional policy."""
     normalized_text = normalize_text(value)
     if normalized_text is None:
         return None
     return convert_zh(normalized_text)
 
 
-def normalize_view_count(view_count: Any) -> int | None:
+def normalize_count(count: Any) -> int | None:
     """Accept integer counters from external metadata while rejecting booleans."""
-    if isinstance(view_count, bool):
+    if isinstance(count, bool):
         return None
-    if isinstance(view_count, int):
-        return view_count
+    if isinstance(count, int):
+        return count
     return None
 
 

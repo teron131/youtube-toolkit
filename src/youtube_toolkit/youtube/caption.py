@@ -1,101 +1,43 @@
-"""Transcript retrieval owns caption selection, STT fallback, and cleanup policy."""
+"""YouTube caption tracks become timed transcript documents here: track choice, JSON3 download, parsing, and SponsorBlock removal.
+
+YouTube's machine translations are never used: the client drops them from metadata, and automatic captions are chosen only in the spoken language of the video.
+Language preference and the speech-to-text fallback belong to the transcript workflow that calls this adapter.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Sequence
 import html
 import json
-from pathlib import Path
-from typing import Any, Protocol
 import urllib.error
 import urllib.request
 
-from ..convert_zh import convert_zh
 from ..execution import retry_transient
-from ..identity import (
-    ALLOWED_CAPTION_HOST_SUFFIXES,
-    VideoRef,
-    require_video_id,
-    validate_url,
-)
+from ..identity import ALLOWED_CAPTION_HOST_SUFFIXES, validate_url
 from ..schemas import TranscriptChunk, TranscriptDocument, VideoMetadata
-from ..stt import transcribe_audio_details
-from .client import YtDlpClient
 
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-DEFAULT_TRANSCRIPT_LANGUAGES = (
-    "en-orig",
-    "en",
-    "zh-Hant",
-    "zh-HK",
-    "yue-HK",
-    "yue",
-    "zh-TW",
-    "zh-Hans",
-    "zh-CN",
-    "zh",
-)
 CAPTION_REQUEST_ATTEMPTS = 3
 CAPTION_RETRY_BACKOFF_SECONDS = 1.0
-
-
-@dataclass(frozen=True, slots=True)
-class TranscriptOptions:
-    """Caller policy for caption language, source, and permission to fall back to untimed STT."""
-
-    languages: tuple[str, ...] = DEFAULT_TRANSCRIPT_LANGUAGES
-    source: str = "any"
-    allow_stt: bool = True
+# YouTube auto-captions English almost always and Chinese rarely, and yt-dlp only reports a spoken language from auto captions, so a video with none is taken to be Chinese.
+UNCAPTIONED_LANGUAGE = "zh"
+CHINESE_LANGUAGES = frozenset({"zh", "yue"})
 
 
 class CaptionTranscriptUnavailable(RuntimeError):
     """Raised when metadata has no usable caption transcript for the requested policy."""
 
 
-class TranscriptClient(Protocol):
-    """yt-dlp surface for caption metadata and the speech-to-text audio fallback."""
-
-    def metadata(self, video_ref: VideoRef, /) -> dict[str, Any]:
-        """Fetch raw video metadata containing caption URLs and fallback STT identity."""
-        ...
-
-    def download_transcription_audio(self, video_ref: VideoRef, /) -> Path:
-        """Download one temporary audio file for the transcript STT fallback."""
-        ...
-
-
-def fetch_live_transcript(
-    video_ref: VideoRef,
-    *,
-    options: TranscriptOptions | None = None,
-    client: TranscriptClient | None = None,
-    metadata: dict[str, Any] | None = None,
-) -> TranscriptDocument:
-    """Prefer captions and fall back to STT, using a matching metadata response already fetched by the caller when available."""
-    options = options or TranscriptOptions()
-    client = client or YtDlpClient()
-    if metadata is not None and metadata.get("id") != require_video_id(video_ref):
-        raise ValueError("Supplied metadata does not match requested video")
-    metadata_payload = client.metadata(video_ref) if metadata is None else metadata
-    try:
-        return fetch_caption_transcript(metadata_payload, options=options)
-    except CaptionTranscriptUnavailable:
-        if not options.allow_stt:
-            raise
-        return fetch_stt_transcript(metadata_payload, client=client)
-
-
 def fetch_caption_transcript(
     metadata_payload: dict,
     *,
-    options: TranscriptOptions,
+    languages: Sequence[str],
+    source: str,
 ) -> TranscriptDocument:
-    """Build a transcript document from yt-dlp caption metadata under the requested caption policy."""
+    """Build a transcript document from yt-dlp caption metadata under the requested language and source preference."""
     metadata = VideoMetadata.from_yt_dlp(metadata_payload)
     caption_url, language, caption_source = select_caption_track(
-        metadata_payload,
-        list(options.languages),
-        options.source,
+        metadata_payload, languages, source
     )
     caption_payload = fetch_caption_payload(caption_url)
     chunks = extract_timed_chunks(caption_payload)
@@ -116,63 +58,38 @@ def fetch_caption_transcript(
     )
 
 
-def fetch_stt_transcript(
-    metadata_payload: dict,
-    *,
-    client: TranscriptClient,
-) -> TranscriptDocument:
-    """Download temporary audio, run STT, and return its untimed text as one transcript chunk."""
-    metadata = VideoMetadata.from_yt_dlp(metadata_payload)
-    audio_path = client.download_transcription_audio(metadata.video_id)
-    try:
-        transcription = transcribe_audio_details(audio_path)
-    finally:
-        audio_path.unlink(missing_ok=True)
-    return TranscriptDocument(
-        metadata=metadata,
-        language="speech-to-text",
-        source="speech-to-text",
-        chunks=[
-            TranscriptChunk(
-                start_seconds=0,
-                end_seconds=0,
-                text=convert_zh(transcription.text),
-            )
-        ],
-    )
-
-
 def select_caption_track(
     metadata: dict,
-    languages: list[str],
+    languages: Sequence[str],
     source: str,
 ) -> tuple[str, str, str]:
-    """Select the first usable caption URL matching requested language and source precedence."""
-    automatic = metadata.get("automatic_captions") or {}
-    manual = metadata.get("subtitles") or {}
-    if source == "auto":
-        caption_sources = [("automatic_captions", automatic)]
-    elif source == "manual":
-        caption_sources = [("subtitles", manual)]
-    elif source == "any":
-        caption_sources = [("automatic_captions", automatic), ("subtitles", manual)]
-    else:
+    """Select manual subtitles by language preference, then automatic captions in spoken language of the video.
+
+    Preferred languages matching the spoken language are tried first, so a Chinese video with English and Chinese subtitles yields Chinese; a video without automatic captions counts as Chinese.
+    Automatic captions are never matched against the language preference, because outside the spoken language they are machine translations.
+    The source limits the choice to manual subtitles or to automatic captions.
+    """
+    if source not in {"auto", "manual", "any"}:
         raise ValueError("caption source must be auto, manual, or any")
+    manual = {} if source == "auto" else metadata.get("subtitles") or {}
+    automatic = {} if source == "manual" else metadata.get("automatic_captions") or {}
+    spoken = metadata.get("language")
+    if not isinstance(spoken, str) or not spoken:
+        spoken = None
+    candidates = [
+        ("subtitles", key, manual[key])
+        for language in _spoken_first(languages, spoken)
+        for key in _language_keys(language, manual)
+    ] + [
+        ("automatic_captions", key, automatic[key])
+        for key in _original_language_keys(spoken, automatic)
+    ]
+    for source_name, key, tracks in candidates:
+        url = _track_url(tracks)
+        if url is not None:
+            return url, key, source_name
 
-    for language in languages:
-        for source_name, caption_pool in caption_sources:
-            tracks = caption_pool.get(language) or []
-            for track in tracks:
-                if track.get("ext") == "json3" and track.get("url"):
-                    return track["url"], language, source_name
-            for track in tracks:
-                if track.get("url"):
-                    return track["url"], language, source_name
-
-    available_languages = sorted(
-        {language for _, caption_pool in caption_sources for language in caption_pool}
-    )
-    available_summary = ", ".join(available_languages) or "none"
+    available_summary = ", ".join(sorted({*manual, *automatic})) or "none"
     requested = ", ".join(languages)
     raise CaptionTranscriptUnavailable(
         f"No caption track found for requested languages [{requested}]. Available languages: {available_summary}"
@@ -283,3 +200,44 @@ def remove_sponsorblock_chunks(
         if not overlaps_skip:
             filtered.append(chunk)
     return filtered
+
+
+def _spoken_first(languages: Sequence[str], spoken: str | None) -> list[str]:
+    """Move preferred languages in the spoken language's family ahead of the rest, keeping each group's order."""
+    family = _family(spoken)
+    return sorted(languages, key=lambda language: _family(language) != family)
+
+
+def _family(language: str | None) -> str:
+    """Group Cantonese and every Chinese script or region into one spoken family; no reported language counts as Chinese."""
+    base = (language or UNCAPTIONED_LANGUAGE).partition("-")[0]
+    return "zh" if base in CHINESE_LANGUAGES else base
+
+
+def _language_keys(language: str, captions: dict) -> list[str]:
+    """Match a preferred language exactly first, then its regional variants such as en-US for en."""
+    variants = [key for key in captions if key.startswith(f"{language}-")]
+    return [*([language] if language in captions else []), *variants]
+
+
+def _original_language_keys(language: str | None, automatic: dict) -> list[str]:
+    """Name the automatic-caption keys for the video's spoken language.
+
+    Dubbed videos mark one original track per audio language, so the video's language decides; without it, only a single original mark or a single remaining language is trusted.
+    """
+    if language is None:
+        marked = [key for key in automatic if key.endswith("-orig")]
+        unambiguous = marked or list(automatic)
+        return unambiguous if len(unambiguous) == 1 else []
+    base = language.partition("-")[0]
+    candidates = (f"{language}-orig", language, f"{base}-orig", base)
+    return [key for key in dict.fromkeys(candidates) if key in automatic]
+
+
+def _track_url(tracks: list[dict]) -> str | None:
+    """Prefer JSON3, the format transcript parsing reads, before any other downloadable format."""
+    usable = [track for track in tracks if track.get("url")]
+    preferred = next((track for track in usable if track.get("ext") == "json3"), None)
+    if preferred is not None:
+        return preferred["url"]
+    return usable[0]["url"] if usable else None
