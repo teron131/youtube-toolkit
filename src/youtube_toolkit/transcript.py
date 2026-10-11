@@ -1,7 +1,8 @@
-"""Transcript retrieval policy: prefer captions, fall back to speech-to-text when allowed, archive each fresh document, and export readable text with overwrite protection."""
+"""Transcript retrieval policy: prefer captions, fall back to cloud and then local speech-to-text when allowed and set up, archive each fresh document, and export readable text with overwrite protection."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 import re
@@ -11,10 +12,24 @@ import unicodedata
 from .artifacts import write_artifact
 from .convert_zh import convert_zh
 from .identity import VideoRef, require_video_id
-from .schemas import TranscriptChunk, TranscriptDocument, VideoMetadata
-from .stt import transcribe_audio_details
-from .youtube.caption import CaptionTranscriptUnavailable, fetch_caption_transcript
-from .youtube.client import YtDlpClient
+from .schemas import (
+    SpeechTranscription,
+    TranscriptChunk,
+    TranscriptDocument,
+    VideoMetadata,
+    normalize_text,
+)
+from .stt import (
+    cloud_stt_configured,
+    local_stt_installed,
+    transcribe_in_cloud,
+    transcribe_locally,
+)
+from .youtube import (
+    CaptionTranscriptUnavailable,
+    YtDlpClient,
+    fetch_caption_transcript,
+)
 
 DEFAULT_TRANSCRIPT_LANGUAGES = (
     "en",
@@ -88,8 +103,9 @@ def fetch_transcript(
     client: TranscriptClient | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> TranscriptDocument:
-    """Prefer captions, fall back to STT when allowed, and archive the new document.
+    """Prefer captions, fall back to STT when allowed and set up, and archive the new document.
 
+    With neither a cloud key nor the local libraries installed the caption failure stands, so retrieval behaves as captions-only and downloads no audio.
     Text from either source is returned in Taiwan Traditional script.
 
     Supplied metadata must be a response the current operation fetched for this video; otherwise metadata is fetched fresh.
@@ -108,7 +124,10 @@ def fetch_transcript(
     except CaptionTranscriptUnavailable:
         if not options.allow_stt:
             raise
-        document = _fetch_stt_transcript(metadata, client=client)
+        transcribe = _stt_transcriber()
+        if transcribe is None:
+            raise
+        document = _fetch_stt_transcript(metadata, client=client, transcribe=transcribe)
     document = replace(
         document,
         chunks=[
@@ -152,21 +171,39 @@ def write_transcript_export(
     }
 
 
+def _stt_transcriber() -> Callable[[Path], SpeechTranscription] | None:
+    """Choose how to transcribe an uncaptioned video, or nothing when no route is set up.
+
+    The cloud provider wins whenever its key is set; otherwise the local model is used when its libraries are installed.
+    """
+    if cloud_stt_configured():
+        return transcribe_in_cloud
+    if local_stt_installed():
+        return transcribe_locally
+    return None
+
+
 def _fetch_stt_transcript(
     metadata_payload: dict[str, Any],
     *,
     client: TranscriptClient,
+    transcribe: Callable[[Path], SpeechTranscription],
 ) -> TranscriptDocument:
-    """Download temporary audio, run STT, and return its untimed text as one transcript chunk in the detected language."""
+    """Download temporary audio, run STT, and return its untimed text as one transcript chunk.
+
+    The document's language is the one the transcriber detected, else the one yt-dlp reported for the video.
+    """
     metadata = VideoMetadata.from_yt_dlp(metadata_payload)
     audio_path = client.download_transcription_audio(metadata.video_id)
     try:
-        transcription = transcribe_audio_details(audio_path)
+        transcription = transcribe(audio_path)
     finally:
         audio_path.unlink(missing_ok=True)
     return TranscriptDocument(
         metadata=metadata,
-        language=transcription.language or "speech-to-text",
+        language=transcription.language
+        or normalize_text(metadata_payload.get("language"))
+        or "speech-to-text",
         source="speech-to-text",
         chunks=[
             TranscriptChunk(

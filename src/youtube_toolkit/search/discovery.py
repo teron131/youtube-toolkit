@@ -7,8 +7,7 @@ from functools import partial
 from typing import Any
 
 from ..identity import ChannelIdentity, extract_channel_identity
-from ..youtube.channels import ChannelOptions, fetch_channel_videos
-from ..youtube.client import YtDlpClient
+from ..youtube import ChannelOptions, YtDlpClient, fetch_channel_videos
 from .preprocessing import dedupe_candidates, interlace_relevance
 from .request import ChannelTarget, ResolvedRequest, SearchRequest
 
@@ -32,7 +31,7 @@ def youtube_candidates(
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_DISCOVERY_FETCHES) as executor:
         candidate_lists = list(
             executor.map(
-                partial(youtube_search, fetch_limit=per_query_limit, sort=youtube_sort),
+                partial(search_youtube, fetch_limit=per_query_limit, sort=youtube_sort),
                 queries,
             )
         )
@@ -45,13 +44,13 @@ def youtube_candidates(
     return [{**candidate, "source": "youtube"} for candidate in candidates]
 
 
-def youtube_search(
+def search_youtube(
     query: str,
     *,
     fetch_limit: int,
     sort: str,
 ) -> list[dict[str, Any]]:
-    """Call the yt-dlp search adapter and keep only object entries."""
+    """Run one query through YouTube's own search and return its raw entries; search_videos builds the full workflow on top of this."""
     client = YtDlpClient()
     payload = client.search(
         query,
@@ -100,7 +99,7 @@ def resolve_channel_listing(selection: ChannelTarget) -> tuple[str, ChannelIdent
         selection.channel_name,
         f"{selection.channel_name} official YouTube channel",
     ):
-        for match in youtube_search(
+        for match in search_youtube(
             query,
             fetch_limit=CHANNEL_NAME_SEARCH_LIMIT,
             sort="relevance",

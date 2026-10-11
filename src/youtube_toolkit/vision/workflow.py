@@ -15,7 +15,7 @@ from ..artifacts import create_artifact_directory
 from ..config import DEFAULT_VISION_MAX_FRAMES, MAX_VISION_FRAMES
 from ..identity import VideoRef, require_video_id
 from ..transcript import TranscriptOptions, fetch_transcript
-from ..youtube.client import YtDlpClient
+from ..youtube import YtDlpClient
 from .frames import FRAME_HEIGHT, FRAME_WIDTH, SelectedFrame, select_frames
 from .windows import select_transcript_windows
 

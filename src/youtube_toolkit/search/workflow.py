@@ -13,7 +13,8 @@ from typing import Any
 
 from ..config import MAX_CONCURRENT_METADATA_FETCHES
 from ..execution import collect_concurrently
-from ..youtube.client import YtDlpClient
+from ..youtube import YtDlpClient
+from .discovery import channel_listings, youtube_candidates
 from .preprocessing import (
     ChunkResult,
     VideoResult,
@@ -25,14 +26,13 @@ from .preprocessing import (
     rank_by_value,
     video_result,
 )
-from .discovery import channel_listings, youtube_candidates
 from .request import ResolvedRequest, SearchRequest, resolve_request
 
 YOUTUBE_OVERSAMPLE_FACTOR = 3
 DATE_FILTER_OVERSAMPLE_FACTOR = 12
 
 
-def search(request: SearchRequest) -> list[VideoResult] | list[ChunkResult]:
+def search_videos(request: SearchRequest) -> list[VideoResult] | list[ChunkResult]:
     """Run the public search workflow across the requested channel scope, filters, and result shapes."""
     resolved = resolve_request(request)
 

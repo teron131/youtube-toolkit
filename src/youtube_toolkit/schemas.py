@@ -85,6 +85,14 @@ class TranscriptChunk:
 
 
 @dataclass(frozen=True, slots=True)
+class SpeechTranscription:
+    """Speech-to-text result shared by the cloud and local routes: the text and, when the route detects it, the language."""
+
+    text: str
+    language: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class TranscriptDocument:
     """Transcript document boundary returned by caption and STT workflows."""
 

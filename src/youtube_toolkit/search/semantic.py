@@ -16,8 +16,8 @@ from .preprocessing import (
     ChunkResult,
     VideoResult,
     candidate_id,
-    candidate_metadata,
     normalized_upload_date,
+    video_fields,
     video_result,
 )
 from .request import ResolvedRequest, SearchRequest
@@ -256,7 +256,7 @@ def chunk_result(chunk: ScoredChunk, *, warnings: list[str]) -> ChunkResult:
         "chunk_index": chunk.prepared.chunk_index,
         "text": chunk.prepared.text,
         "score": chunk.similarity,
-        "video": candidate_metadata(chunk.prepared.candidate),
+        "video": video_fields(chunk.prepared.candidate),
     }
     if warnings:
         result["warnings"] = warnings

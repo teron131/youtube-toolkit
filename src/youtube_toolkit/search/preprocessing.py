@@ -104,7 +104,7 @@ def video_result(
     result: VideoResult = {
         "type": "video",
         "video_id": candidate_id(candidate),
-        **candidate_metadata(candidate),
+        **video_fields(candidate),
         "source": candidate.get("source"),
     }
     if "score" in candidate:
@@ -114,7 +114,7 @@ def video_result(
     return result
 
 
-def candidate_metadata(candidate: dict[str, Any]) -> SearchVideoFields:
+def video_fields(candidate: dict[str, Any]) -> SearchVideoFields:
     """Project shared video facts, retaining a handle supplied under yt-dlp's uploader identity fields."""
     return {
         "title": candidate.get("title"),
