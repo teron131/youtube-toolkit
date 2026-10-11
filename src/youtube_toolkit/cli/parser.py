@@ -15,6 +15,7 @@ from ..config import (
 )
 from . import commands
 from .health import run_doctor
+from .setup import run_setup
 
 
 class YoutubeArgumentParser(argparse.ArgumentParser):
@@ -50,6 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_video_commands(subparsers)
     _add_search_command(subparsers)
     _add_channel_command(subparsers)
+    _add_setup_command(subparsers)
     _add_stt_setup_command(subparsers)
     _add_doctor_command(subparsers)
     return parser
@@ -199,6 +201,20 @@ def _add_channel_command(subparsers: argparse._SubParsersAction) -> None:
         "--days", type=int, help="Return videos uploaded in the last N days"
     )
     channel_parser.set_defaults(handler=commands.channel)
+
+
+def _add_setup_command(subparsers: argparse._SubParsersAction) -> None:
+    """Register interactive app settings without accepting secrets in command-line arguments."""
+    setup_parser = subparsers.add_parser(
+        "setup", help="Save API keys and settings for YouTube Toolkit only"
+    )
+    setup_parser.add_argument(
+        "--embeddings", action="store_true", help="Configure embedding settings only"
+    )
+    setup_parser.add_argument(
+        "--stt", action="store_true", help="Configure speech-to-text settings only"
+    )
+    setup_parser.set_defaults(handler=run_setup)
 
 
 def _add_stt_setup_command(subparsers: argparse._SubParsersAction) -> None:

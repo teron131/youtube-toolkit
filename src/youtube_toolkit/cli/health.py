@@ -7,13 +7,8 @@ from importlib.util import find_spec
 import shutil
 from typing import Literal, TypedDict
 
+from .. import config
 from ..artifacts import artifact_root
-from ..config import (
-    DEFAULT_EMBEDDING_MODEL,
-    config_value,
-    embedding_config_from_env,
-    local_stt_model,
-)
 from ..stt import (
     cloud_provider,
     cloud_stt_configured,
@@ -37,6 +32,7 @@ class DoctorReport(TypedDict):
     """Runtime, artifact location, and optional capability readiness for the doctor command."""
 
     yt_dlp_version: str
+    config: str
     artifacts: str
     vision: bool
     ffmpeg: bool
@@ -51,6 +47,7 @@ def run_doctor(args: argparse.Namespace) -> DoctorReport:
 
     return {
         "yt_dlp_version": yt_dlp.version.__version__,
+        "config": str(config.config_path()),
         "artifacts": str(artifact_root()),
         "vision": vision_available(),
         "ffmpeg": shutil.which("ffmpeg") is not None,
@@ -60,17 +57,17 @@ def run_doctor(args: argparse.Namespace) -> DoctorReport:
 
 
 def embedding_api_health() -> EmbeddingHealthResult:
-    """Validate environment configuration for optional semantic search."""
-    model = config_value("EMBEDDING_MODEL") or DEFAULT_EMBEDDING_MODEL
-    if config_value("EMBEDDING_API_KEY") is None:
+    """Validate effective configuration for optional semantic search without exposing keys."""
+    model = config.config_value("EMBEDDING_MODEL") or config.DEFAULT_EMBEDDING_MODEL
+    if config.config_value("EMBEDDING_API_KEY") is None:
         return {
             "ok": False,
             "model": model,
             "status": "missing",
-            "detail": "Set EMBEDDING_API_KEY for semantic search",
+            "detail": "Set EMBEDDING_API_KEY with `youtube setup --embeddings` for semantic search",
         }
     try:
-        embedding_config_from_env()
+        config.embedding_config_from_env()
     except ValueError as error:
         return {"ok": False, "model": model, "status": "invalid", "detail": str(error)}
     return {
@@ -87,8 +84,8 @@ def stt_health() -> str:
     if cloud_stt_configured():
         return f"Configured ({provider.label} API); `youtube stt-setup --cloud-test` sends a billed test"
     if not local_stt_installed():
-        return f"Set {provider.api_key_env}, or install youtube-toolkit[stt] and ffmpeg for local models"
-    model = local_stt_model()
+        return f"Set {provider.api_key_env} with `youtube setup --stt`, or install youtube-toolkit[stt] and ffmpeg for local models"
+    model = config.local_stt_model()
     if not local_model_downloaded(model):
         return f"Local {model} downloads on first use, or now with `youtube stt-setup`"
     return f"Configured (local {model}); `youtube stt-setup` checks that it runs"

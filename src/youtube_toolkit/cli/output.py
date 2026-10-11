@@ -28,6 +28,7 @@ def render_doctor(report: DoctorReport) -> str:
         [
             "YouTube Toolkit",
             f"  yt-dlp     {report['yt_dlp_version']}",
+            f"  config     {report['config']}",
             f"  artifacts  {report['artifacts']}",
             f"  vision     {'available' if report['vision'] else 'not installed'}",
             f"  ffmpeg     {'available' if report['ffmpeg'] else 'not installed'}",
