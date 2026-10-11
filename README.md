@@ -2,7 +2,7 @@
 
 A YouTube CLI for agents with directory-local request archives: search, read transcripts, inspect metadata, and extract visual context through yt-dlp.
 
-![Route map of the toolkit: each command is a line through the parts it uses. Every command except doctor reaches YouTube through yt-dlp; semantic search can also call an embedding API, and missing captions fall back to a speech-to-text API.](docs/architecture.svg)
+![Retrieval routes through yt-dlp, captions, optional embeddings, and cloud speech-to-text, alongside local readiness checks.](docs/architecture.svg)
 
 ## Install
 
@@ -24,13 +24,14 @@ For local speech-to-text on videos without captions, install its optional depend
 uv run python scripts/install.py --stt
 ```
 
-The installer replaces the installed `youtube` tool. To run the checkout directly, use `uv run youtube`.
+The installer replaces the installed `youtube` tool; combine `--vision --stt` to install both optional capabilities. To run the checkout directly, use `uv run youtube`.
 
 ## Examples
 
 ```bash
 youtube search "langgraph tutorial" --limit 5 --max-duration 20:00
 youtube search "reasoning models" --channels @OpenAI --channels @Anthropic --uploaded-within-days 30 --sort recency
+youtube search --channels @OpenAI --limit 5
 youtube channel @OpenAI --last 5
 youtube channel @OpenAI --days 7
 youtube metadata <url-or-id>
@@ -42,28 +43,84 @@ youtube stt-setup
 youtube doctor
 ```
 
-Commands return JSON except `doctor`. Metadata includes descriptions, thumbnails, and chapters. Transcripts return text by default or timed chunks with `--timestamps`; `--export` writes a text file in the working directory, and `--force` allows overwriting it. Transcripts are in English or Chinese when the video has those subtitles, otherwise in the video's own language. Videos without captions fall back to [speech-to-text](#speech-to-text) when it is set up, and otherwise fail with a no-captions error.
+Commands return JSON except `doctor`, which reports local readiness without contacting YouTube or model APIs. `stt-setup` checks the configured speech-to-text routes separately; it does not retrieve a YouTube video.
 
-Search defaults: at least 10,000 views, duration 3 minutes to 8 hours, and 10 results (30 for channel searches). Use `youtube search --help` for filters and overrides.
+## Search and channel listings
 
-Vision returns up to six screenshots in timestamped 2-column × 3-row collages, plus per-frame measurements in JSON. Set `--max-frames 12` to change the limit (1-96). Timed captions choose where to look and local image analysis picks the frames; without timed captions it samples evenly. No model API or speech-to-text is used.
+Search covers YouTube by default, or the uploads of the channels named with `--channels`:
 
-![How vision picks frames: caption passages choose where to look, only those windows are decoded at one frame per second, local image analysis picks one sharp, steady frame per window, and the result is timestamped collages with JSON measurements.](docs/vision-pipeline.svg)
+| Command or mode | Query behavior | Default ordering |
+| --- | --- | --- |
+| Native YouTube search | Query required; several queries are interleaved and duplicate videos removed | YouTube relevance |
+| Native channel search (`--channels`) | Query optional; titles must contain any supplied query, case-insensitively | Recency |
+| `youtube channel` | Direct upload listing, without queries or search filters | Latest first |
 
-## Semantic search
+`--sort popularity` orders native search results by views; native YouTube search rejects `--sort recency`. Repeat `--channels` to combine channels.
 
-Semantic search uses an embedding API to rank transcript passages:
+For `youtube channel`, `--last N` selects the latest uploads. `--days N` uses a UTC date window and fetches upload dates, skipping videos it cannot date; `--last` then sets the initial listing size rather than capping the final results.
+
+Search defaults can be overridden with these flags:
+
+| Flag | Default | Controls |
+| --- | --- | --- |
+| `--limit` | 10 for YouTube; 30 for channel searches | Maximum results returned |
+| `--min-views` | 10,000 | Minimum video views |
+| `--min-duration` | `3:00` | Minimum video duration |
+| `--max-duration` | `8:00:00` | Maximum video duration |
+
+Use `youtube search --help` for all filters and overrides.
+
+Channel listings omit upload dates, so recency sorting and date filters require per-video metadata requests. Other filters fetch metadata only when a required field is missing.
+
+### Semantic search
+
+Semantic search shortlists videos by title, then uses an embedding API to rank transcript passages:
 
 ```bash
 youtube search "agent memory" --mode semantic --limit 5
 youtube search "model evals" --channels @OpenAI --mode semantic --return video
 ```
 
-Set `EMBEDDING_API_KEY` in the environment. Optional settings are `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL`, and `EMBEDDING_DIMENSIONS`. Semantic results are chunks by default; `--return video` returns ranked videos.
+Configure embeddings through environment variables:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `EMBEDDING_API_KEY` | Required; no default | API key for the embedding service |
+| `EMBEDDING_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible API endpoint |
+| `EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model |
+| `EMBEDDING_DIMENSIONS` | 1,536 | Requested vector dimensions |
+| `EMBEDDING_CONCURRENCY` | 16 | Parallel requests, clamped to 1–50 |
+
+Results are passages by default; `--return video` ranks videos by their best matching passage. With several queries, each passage is scored against its closest query. Duplicate texts share an embedding request within each stage, and results are ranked by similarity.
+
+Semantic search reads captions only and never invokes speech-to-text. Partial caption or embedding failures are summarized in result `warnings`; the command fails if no transcript passage can be embedded. An empty result list means no passage met the similarity threshold. Passage `chunk_index` values are not timestamps; use `transcript --timestamps` for caption timing.
+
+## Metadata and transcripts
+
+Metadata includes descriptions, thumbnails, and chapters. Transcripts return a JSON string by default or timed chunks with `--timestamps`. Manual English or Chinese subtitles are preferred, with the video's language family tried first; otherwise the toolkit uses original-language automatic captions. It excludes machine-translated tracks, converts Chinese transcript text to Taiwan Traditional, and removes caption spans overlapping SponsorBlock segments.
+
+When no usable captions exist, the transcript command falls back to [speech-to-text](#speech-to-text) if configured. STT output has no timing: `--timestamps` returns one chunk with zero start and end. Caption download failures remain errors.
+
+`--export` writes metadata and transcript text to `<normalized-title>_<normalized-channel>.txt` in the working directory and returns its path. Combine it with `--timestamps` for a timed export. `--force` replaces an existing export and requires `--export`.
+
+## Visual context
+
+Vision returns timestamped collages and per-frame measurements in JSON. Timed captions choose where to look and local image analysis picks the frames; without usable timed captions it samples evenly. No model API or speech-to-text is used.
+
+| Setting or limit | Value |
+| --- | --- |
+| Screenshots (`--max-frames`) | Default 6; accepts 1–96; repetitive content can yield fewer |
+| Collage layout | Up to six screenshots per page, in 2 columns × 3 rows |
+| Maximum video duration | 2 hours |
+| Maximum temporary video size | 500 MiB |
+
+For example, `--max-frames 12` allows up to 12 screenshots. Collages remain under `.cache/youtube-toolkit/vision/` after the downloaded video is removed.
+
+![How vision picks frames: caption passages choose where to look, only those windows are decoded at one frame per second, local image analysis picks one sharp, steady frame per window, and the result is timestamped collages with JSON measurements.](docs/vision-pipeline.svg)
 
 ## Speech-to-text
 
-Videos without captions are transcribed by the first route that is set up: a cloud provider when its key is set, otherwise the local model when it is installed with `--stt`.
+The transcript command selects a cloud provider when its key is set, otherwise a local model when its dependencies and `ffmpeg` are installed. Provider errors propagate; local transcription is selected only when the cloud key is absent. With neither route available, the no-captions error is returned.
 
 `STT_PROVIDER` chooses the cloud provider, and each one needs its own key:
 
@@ -81,12 +138,21 @@ The local model is `nvidia/parakeet-tdt-0.6b-v3`, or the Hugging Face ASR model 
 
 Parakeet covers 25 European languages only and returns noise for others such as Chinese. For those, use the cloud route or set `STT_LOCAL_MODEL=openai/whisper-large-v3-turbo`. On an Apple M5, Parakeet transcribed an hour of audio in 45 seconds and Whisper large-v3-turbo took about 4 minutes.
 
-```bash
-youtube stt-setup
-youtube stt-setup --cloud-test
-```
+The readiness commands have different effects:
 
-`stt-setup` reports both routes, downloads the local model if needed, and runs it once. `--cloud-test` also sends a two-second recording to the cloud provider, which is a real request the provider bills.
+| Command | Checks | Downloads or API calls |
+| --- | --- | --- |
+| `youtube doctor` | Local runtime and configuration readiness | None; creates no files and loads no model |
+| `youtube stt-setup` | Reports both STT routes and tests the local route when its dependencies and `ffmpeg` are available | Downloads the local model if needed; no cloud request |
+| `youtube stt-setup --cloud-test` | The same local checks, plus a two-second cloud test recording | May download the local model; sends a real request billed by the cloud provider |
+
+If the local dependencies or `ffmpeg` are unavailable, `stt-setup` reports that the local route is not installed. These commands check configuration; API keys are supplied through the environment.
+
+## Local artifacts
+
+Run commands from the directory where their research artifacts belong. Fresh yt-dlp metadata, search listings, channel listings, and normalized transcript documents are archived under `.cache/youtube-toolkit/`, with a UTC timestamp and a readable identifier in each filename. JSON artifacts contain `request`, `fetched_at`, and `payload`; repeated retrievals preserve earlier copies.
+
+Saved copies are never automatically reused or expired. Semantic rankings and embeddings stay in memory for the current search. Long text fields in JSON stdout are capped at 400,000 characters; transcript exports and archived documents retain the complete text.
 
 ## Agent skill
 

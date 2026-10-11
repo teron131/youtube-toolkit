@@ -1,15 +1,16 @@
 """Search contracts exercise discovery, filtering, and ephemeral semantic ranking."""
 
 from collections.abc import Callable
-from contextlib import nullcontext
 from threading import Barrier
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 
+from youtube_toolkit.config import EmbeddingConfig
 from youtube_toolkit.schemas import TranscriptChunk, TranscriptDocument, VideoMetadata
 import youtube_toolkit.search.discovery as search_discovery
+from youtube_toolkit.search.embeddings import EmbeddingClient
 from youtube_toolkit.search.preprocessing import VideoResult
 from youtube_toolkit.search.request import (
     ChannelTarget,
@@ -22,11 +23,20 @@ from youtube_toolkit.search.workflow import search_videos
 
 
 def use_embeddings(monkeypatch, embed: Callable[[str], list[float]]) -> None:
-    """Answer semantic-search embedding requests from a deterministic text-to-vector function."""
+    """Replace only the embedding transport, retaining production batch execution and failure handling."""
+
+    def create(**kwargs):
+        return SimpleNamespace(data=[SimpleNamespace(embedding=embed(kwargs["input"]))])
+
     monkeypatch.setattr(
-        search_semantic,
-        "EmbeddingClient",
-        lambda: nullcontext(SimpleNamespace(embed=embed)),
+        "youtube_toolkit.search.embeddings.OpenAI",
+        lambda **_kwargs: SimpleNamespace(
+            embeddings=SimpleNamespace(create=create), close=lambda: None
+        ),
+    )
+    config = EmbeddingConfig("test", "embedding-key", "https://embedding.example/v1")
+    monkeypatch.setattr(
+        search_semantic, "EmbeddingClient", lambda: EmbeddingClient(config)
     )
 
 
@@ -994,6 +1004,52 @@ def test_semantic_channel_search_prefilters_by_title_embeddings(
     ]
 
 
+def test_semantic_titles_share_embeddings_and_keep_per_video_warnings(
+    monkeypatch,
+) -> None:
+    """Text-keyed batch results still rank every matching video and identify every failed video."""
+    entries = [
+        {"id": "aaaaaaaaaaa", "title": "Unavailable title"},
+        {"id": "bbbbbbbbbbb", "title": "Unavailable title"},
+        {"id": "ccccccccccc", "title": "Shared title"},
+        {"id": "ddddddddddd", "title": "Shared title"},
+    ]
+    monkeypatch.setattr(
+        search_discovery,
+        "fetch_channel_videos",
+        lambda _ref, **_kwargs: {"entries": entries},
+    )
+    embedded = []
+
+    def embed(text):
+        embedded.append(text)
+        if text == "Unavailable title":
+            raise RuntimeError("embedding unavailable")
+        return [1.0, 0.0]
+
+    use_embeddings(monkeypatch, embed)
+    results = search_videos(
+        SearchRequest(
+            queries=("query",),
+            limit=5,
+            mode="semantic",
+            return_type="video",
+            channels=(ChannelTarget.from_ref("@OpenAI"),),
+        )
+    )
+
+    assert [result["video_id"] for result in results] == ["ccccccccccc", "ddddddddddd"]
+    assert embedded.count("Unavailable title") == 1
+    assert embedded.count("Shared title") == 1
+    assert all(
+        result["warnings"]
+        == [
+            "title embedding skipped 2 item(s): aaaaaaaaaaa: embedding unavailable; bbbbbbbbbbb: embedding unavailable"
+        ]
+        for result in results
+    )
+
+
 def test_semantic_video_search_returns_only_scored_videos(
     monkeypatch,
     search_transcript_side_effects,
@@ -1432,7 +1488,10 @@ def test_native_channel_search_keeps_titles_matching_any_query(monkeypatch) -> N
     assert [result["video_id"] for result in results] == ["aaaaaaaaaaa", "bbbbbbbbbbb"]
 
 
-def test_semantic_search_scores_passages_by_their_closest_query(monkeypatch) -> None:
+@pytest.mark.parametrize("queries", [("alpha", "beta"), ("alpha", "beta", "alpha")])
+def test_semantic_search_scores_passages_by_their_closest_query(
+    monkeypatch, queries
+) -> None:
     """A passage matching only a later query still ranks, because no query outranks another."""
 
     def fake_fetch_channel_videos(channel_ref: str, *, options) -> dict:
@@ -1441,13 +1500,17 @@ def test_semantic_search_scores_passages_by_their_closest_query(monkeypatch) -> 
     monkeypatch.setattr(
         search_discovery, "fetch_channel_videos", fake_fetch_channel_videos
     )
-    use_embeddings(
-        monkeypatch, lambda text: [1.0, 0.0] if text == "alpha" else [0.0, 1.0]
-    )
+    embedded = []
+
+    def embed(text):
+        embedded.append(text)
+        return [1.0, 0.0] if text == "alpha" else [0.0, 1.0]
+
+    use_embeddings(monkeypatch, embed)
 
     results = search_videos(
         SearchRequest(
-            queries=("alpha", "beta"),
+            queries=queries,
             limit=5,
             mode="semantic",
             return_type="video",
@@ -1457,6 +1520,8 @@ def test_semantic_search_scores_passages_by_their_closest_query(monkeypatch) -> 
 
     assert [result["video_id"] for result in results] == ["aaaaaaaaaaa"]
     assert results[0]["score"] == pytest.approx(1.0)
+    assert embedded.count("alpha") == 1
+    assert embedded.count("beta") == 1
 
 
 def test_native_youtube_search_rejects_recency() -> None:

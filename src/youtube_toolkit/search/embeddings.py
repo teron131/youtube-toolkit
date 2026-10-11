@@ -1,12 +1,13 @@
-"""Embedding endpoint access for semantic search, reusing one connection pool across a workflow's requests and translating failures."""
+"""Own embedding transport, bounded batches, and per-item failures while sharing one connection pool within a search."""
 
 from __future__ import annotations
 
-from typing import Self
+from typing import Self, overload
 
 from openai import APIError, OpenAI
 
-from ..config import EmbeddingConfig, embedding_config_from_env
+from ..config import EmbeddingConfig, embedding_concurrency, embedding_config_from_env
+from ..execution import collect_concurrently
 
 
 class EmbeddingError(RuntimeError):
@@ -37,8 +38,34 @@ class EmbeddingClient:
     def __exit__(self, *_exc_info: object) -> None:
         self._client.close()
 
-    def embed(self, text: str) -> list[float]:
-        """Request one float embedding with a 60-second timeout and two retries."""
+    @overload
+    def embed(self, text: str) -> list[float]: ...
+
+    @overload
+    def embed(
+        self, text: list[str]
+    ) -> tuple[dict[str, list[float]], dict[str, str]]: ...
+
+    def embed(
+        self, text: str | list[str]
+    ) -> list[float] | tuple[dict[str, list[float]], dict[str, str]]:
+        """Embed a string as one vector, or a list as text-keyed successes and failures.
+
+        Lists request each distinct text once, concurrently, and retain partial failures without discarding successful vectors.
+        Each request has a 60-second timeout and two retries; results are never cached across calls.
+        """
+        if isinstance(text, list):
+            if not text:
+                return {}, {}
+            jobs = {item: item for item in text}
+            vectors, failures = collect_concurrently(
+                jobs, self.embed, max_workers=embedding_concurrency(len(jobs))
+            )
+            return (
+                {item: vectors[item] for item in jobs if item in vectors},
+                {item: str(failures[item]) for item in jobs if item in failures},
+            )
+
         try:
             response = self._client.embeddings.create(
                 model=self._config.model,
@@ -49,6 +76,8 @@ class EmbeddingClient:
             values = response.data[0].embedding if response.data else None
             if not isinstance(values, list):
                 raise EmbeddingError("Embedding response did not include values")
+            if not values:
+                raise EmbeddingError("Embedding request returned an empty vector")
             return [float(value) for value in values]
         except (APIError, ValueError) as error:
             raise EmbeddingError(str(error)) from error

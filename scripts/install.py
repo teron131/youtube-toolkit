@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -79,10 +80,12 @@ def main(argv: list[str] | None = None) -> None:
     tool_bin_dir = Path(
         run("uv", "tool", "dir", "--bin", capture_output=True).stdout.strip()
     )
-    youtube_command = tool_bin_dir / "youtube"
-    if not youtube_command.exists():
-        raise RuntimeError(f"Installed youtube command is missing: {youtube_command}")
-    run(str(youtube_command), "doctor")
+    youtube_command = shutil.which(str(tool_bin_dir / "youtube"))
+    if youtube_command is None:
+        raise RuntimeError(
+            f"Installed youtube command is missing or not executable in {tool_bin_dir}"
+        )
+    run(youtube_command, "doctor")
 
 
 if __name__ == "__main__":

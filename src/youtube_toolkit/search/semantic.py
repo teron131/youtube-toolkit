@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 import math
 from typing import Any
 
-from ..config import embedding_concurrency
 from ..execution import collect_concurrently
 from ..schemas import TranscriptDocument
 from ..transcript import TranscriptOptions, fetch_transcript
@@ -68,15 +66,15 @@ def search_transcripts(
     if not candidates:
         raise unprepared_embeddings_error([])
     with EmbeddingClient() as embedder:
-        query_embeddings = [embedder.embed(query) for query in request.queries]
+        query_embeddings = [
+            embedder.embed(query) for query in dict.fromkeys(request.queries)
+        ]
         candidates, title_failures = shortlist_by_title(
-            request, candidates, query_embeddings, embed=embedder.embed
+            request, candidates, query_embeddings, embedder=embedder
         )
         documents, transcript_failures = fetch_semantic_transcripts(candidates)
         chunks = prepare_transcript_chunks(candidates, documents)
-        vectors, chunk_failures = embed_texts_concurrently(
-            {chunk.text: chunk.text for chunk in chunks}, embed=embedder.embed
-        )
+        vectors, chunk_failures = embedder.embed([chunk.text for chunk in chunks])
     if not vectors:
         raise unprepared_embeddings_error(
             [*transcript_failures.values(), *chunk_failures.values()]
@@ -121,7 +119,7 @@ def shortlist_by_title(
     candidates: list[dict[str, Any]],
     query_embeddings: list[list[float]],
     *,
-    embed: Callable[[str], list[float]],
+    embedder: EmbeddingClient,
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
     """Score titles before fetching transcripts to bound transcript and chunk-embedding work.
 
@@ -134,14 +132,20 @@ def shortlist_by_title(
         and isinstance((title := candidate.get("title")), str)
         and title.strip()
     }
-    vectors, failures = embed_texts_concurrently(titles, embed=embed)
+    vectors, text_failures = embedder.embed(list(titles.values()))
+    failures = {
+        video_id: text_failures[title]
+        for video_id, title in titles.items()
+        if title in text_failures
+    }
     if not vectors:
         return candidates, failures
     scored = sorted(
         (
-            (best_similarity(query_embeddings, vectors[video_id]), candidate)
+            (best_similarity(query_embeddings, vectors[title]), candidate)
             for candidate in candidates
-            if (video_id := candidate_id(candidate)) in vectors
+            if (video_id := candidate_id(candidate)) in titles
+            and (title := titles[video_id]) in vectors
         ),
         key=lambda item: item[0],
         reverse=True,
@@ -205,29 +209,6 @@ def prepare_transcript_chunks(
             )
         )
     return prepared
-
-
-def embed_texts_concurrently(
-    texts: dict[str, str],
-    *,
-    embed: Callable[[str], list[float]],
-) -> tuple[dict[str, list[float]], dict[str, str]]:
-    """Embed independent texts concurrently without letting one remote failure stop the stage."""
-    if not texts:
-        return {}, {}
-
-    def embed_nonempty(text: str) -> list[float]:
-        vector = embed(text)
-        if not vector:
-            raise RuntimeError("Embedding request returned an empty vector")
-        return vector
-
-    vectors, failures = collect_concurrently(
-        texts,
-        embed_nonempty,
-        max_workers=embedding_concurrency(len(texts)),
-    )
-    return vectors, {key: str(error) for key, error in failures.items()}
 
 
 def score_chunks(
