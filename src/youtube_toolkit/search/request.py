@@ -65,7 +65,7 @@ def is_exact_channel_ref(channel_ref: ChannelRef) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class SearchRequest:
-    """Validated public search contract shared by CLI and Python callers.
+    """Caller-supplied search policy shared by CLI and Python callers.
 
     Channels choose where candidates come from: none searches all of YouTube, any searches only those channels' uploads.
     Queries are equals: each runs as its own YouTube search, and no query ranks above another.
@@ -107,16 +107,47 @@ class ResolvedRequest:
 def resolve_request(request: SearchRequest) -> ResolvedRequest:
     """Validate the request, then settle every choice the caller left open or gave as text.
 
-    Search stages take the result, so none of them runs on an unvalidated request or repeats this work.
+    Parsed filters become the resolved fields directly, so search stages use the same values that validation checked.
     """
-    validate_request(request)
+    if request.mode not in get_args(SearchMode):
+        raise ValueError("search mode must be one of: native, semantic")
+    if request.return_type is not None and request.return_type not in get_args(
+        SearchReturnType
+    ):
+        raise ValueError("search return type must be one of: video, chunk")
+    if request.sort is not None and request.sort not in get_args(SearchSort):
+        raise ValueError("search sort must be one of: relevance, recency, popularity")
+    query_required = request.mode == "semantic" or not request.channels
+    if (query_required and not request.queries) or any(
+        not query.strip() for query in request.queries
+    ):
+        raise ValueError("search query must be non-empty")
+    if request.limit <= 0:
+        raise ValueError("search limit must be greater than 0")
+    if request.min_views is not None and request.min_views < 0:
+        raise ValueError("--min-views cannot be negative")
+    min_duration_seconds = parse_duration(request.min_duration)
+    max_duration_seconds = parse_duration(request.max_duration)
+    if (
+        min_duration_seconds is not None
+        and max_duration_seconds is not None
+        and min_duration_seconds > max_duration_seconds
+    ):
+        raise ValueError("--min-duration cannot be greater than --max-duration")
+    if request.uploaded_within_days is not None and request.uploaded_within_days < 0:
+        raise ValueError("uploaded-within-days must be non-negative")
+    upload_cutoff = resolve_upload_cutoff(request)
+    if request.return_type == "chunk" and request.mode != "semantic":
+        raise ValueError("chunk return requires semantic mode")
+    if request.mode == "native" and not request.channels and request.sort == "recency":
+        raise ValueError("native YouTube search does not support --sort recency")
     return ResolvedRequest(
         request=request,
         sort=resolve_sort(request),
         return_type=resolve_return_type(request),
-        upload_cutoff=resolve_upload_cutoff(request),
-        min_duration_seconds=parse_duration(request.min_duration),
-        max_duration_seconds=parse_duration(request.max_duration),
+        upload_cutoff=upload_cutoff,
+        min_duration_seconds=min_duration_seconds,
+        max_duration_seconds=max_duration_seconds,
     )
 
 
@@ -174,40 +205,3 @@ def resolve_upload_cutoff(request: SearchRequest) -> str | None:
     if request.uploaded_within_days is not None:
         cutoffs.append(cutoff_date_for_days(request.uploaded_within_days).isoformat())
     return max(cutoffs) if cutoffs else None
-
-
-def validate_request(request: SearchRequest) -> None:
-    """Validate the public search contract before any network or embedding work starts."""
-    if request.mode not in get_args(SearchMode):
-        raise ValueError("search mode must be one of: native, semantic")
-    if request.return_type is not None and request.return_type not in get_args(
-        SearchReturnType
-    ):
-        raise ValueError("search return type must be one of: video, chunk")
-    if request.sort is not None and request.sort not in get_args(SearchSort):
-        raise ValueError("search sort must be one of: relevance, recency, popularity")
-    query_required = request.mode == "semantic" or not request.channels
-    if (query_required and not request.queries) or any(
-        not query.strip() for query in request.queries
-    ):
-        raise ValueError("search query must be non-empty")
-    if request.limit <= 0:
-        raise ValueError("search limit must be greater than 0")
-    if request.min_views is not None and request.min_views < 0:
-        raise ValueError("--min-views cannot be negative")
-    min_duration_seconds = parse_duration(request.min_duration)
-    max_duration_seconds = parse_duration(request.max_duration)
-    if (
-        min_duration_seconds is not None
-        and max_duration_seconds is not None
-        and min_duration_seconds > max_duration_seconds
-    ):
-        raise ValueError("--min-duration cannot be greater than --max-duration")
-    if request.uploaded_within_days is not None and request.uploaded_within_days < 0:
-        raise ValueError("uploaded-within-days must be non-negative")
-    if request.uploaded_after is not None:
-        normalize_filter_date(request.uploaded_after)
-    if request.return_type == "chunk" and request.mode != "semantic":
-        raise ValueError("chunk return requires semantic mode")
-    if request.mode == "native" and not request.channels and request.sort == "recency":
-        raise ValueError("native YouTube search does not support --sort recency")

@@ -100,9 +100,53 @@ def test_embedding_request_retries_transient_network_failures(monkeypatch) -> No
     assert attempts == 3
 
 
+def test_embedding_batches_share_text_without_losing_results_or_failures(
+    monkeypatch,
+) -> None:
+    """Lists share one request per distinct text, keep partial failures, and fetch fresh embeddings on later calls."""
+    requests = []
+
+    def respond(request):
+        text = json.loads(request.content)["input"]
+        requests.append(text)
+        if text == "unavailable":
+            return httpx2.Response(400, json={"error": {"message": "Rejected text"}})
+        if text == "empty":
+            return httpx2.Response(200, json={"data": [{"embedding": []}]})
+        return httpx2.Response(200, json={"data": [{"embedding": [1.0, 0.0]}]})
+
+    def create_client(**kwargs):
+        return OpenAI(
+            **kwargs, http_client=httpx2.Client(transport=httpx2.MockTransport(respond))
+        )
+
+    monkeypatch.setattr("youtube_toolkit.search.embeddings.OpenAI", create_client)
+    config = EmbeddingConfig("test", "embedding-key", "https://embedding.example/v1")
+    with EmbeddingClient(config) as client:
+        assert client.embed([]) == ({}, {})
+        assert requests == []
+        vectors, failures = client.embed(
+            ["shared title", "shared title", "unavailable", "unavailable", "empty"]
+        )
+        assert vectors == {"shared title": [1.0, 0.0]}
+        assert set(failures) == {"unavailable", "empty"}
+        assert "Rejected text" in failures["unavailable"]
+        assert failures["empty"] == "Embedding request returned an empty vector"
+        assert sorted(requests) == ["empty", "shared title", "unavailable"]
+        assert client.embed(["shared title"]) == (
+            {"shared title": [1.0, 0.0]},
+            {},
+        )
+    assert requests.count("shared title") == 2
+
+
 @pytest.mark.parametrize(
     ("status", "payload"),
-    [(401, {"error": {"message": "Invalid key"}}), (200, {"data": []})],
+    [
+        (401, {"error": {"message": "Invalid key"}}),
+        (200, {"data": []}),
+        (200, {"data": [{"embedding": []}]}),
+    ],
 )
 def test_embedding_failures_remain_search_errors(monkeypatch, status, payload) -> None:
     """API rejection and missing vectors stay within the caller's existing error contract."""
@@ -121,7 +165,9 @@ def test_embedding_failures_remain_search_errors(monkeypatch, status, payload) -
     config = EmbeddingConfig("test", "embedding-key", "https://embedding.example/v1")
     with (
         EmbeddingClient(config) as client,
-        pytest.raises(EmbeddingError, match=r"Invalid key|did not include values"),
+        pytest.raises(
+            EmbeddingError, match=r"Invalid key|did not include values|empty vector"
+        ),
     ):
         client.embed("hello")
 

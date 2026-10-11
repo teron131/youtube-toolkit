@@ -111,7 +111,7 @@ def hydrate_candidates(
 ) -> list[dict[str, Any]]:
     """Fetch full metadata for candidates that pass the known filters but lack a field the filters or sort need.
 
-    Flat listings omit fields (channel listings carry no view counts or upload dates), so unknown values pass a lenient prefilter and only its survivors are fetched, concurrently and in order.
+    Flat listings can omit fields (channel listings omit upload dates), so unknown values pass a lenient prefilter and only its survivors are fetched, concurrently and in order.
     A newest-first listing under an upload cutoff is fetched in batches that stop at the first video older than the cutoff, because every later video is older too.
     Failed fetches leave candidates unhydrated for the strict filter to judge.
     Hydrated candidates also keep the raw response under "metadata", so later stages of this search reuse it instead of requesting it again.

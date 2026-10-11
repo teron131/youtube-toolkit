@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="744" viewBox="0 0 1120 744" role="img" aria-labelledby="title desc">
-  <title id="title">How each YouTube Toolkit command reaches YouTube</title>
-  <desc id="desc">A route map. Each youtube command is a colored line running left to right, from the command through the local parts it uses to the network services it can reach. search runs through filter and rank, then yt-dlp; with --mode semantic it also reads transcripts and calls the embedding API (dashed). transcript runs through the transcripts interchange, which fetches and archives transcripts, prefers captions, and only when captions are missing downloads audio through yt-dlp for the speech-to-text API (dashed). vision runs through pick frames (FFmpeg, OpenCV) and the transcripts interchange with captions only, never speech-to-text. metadata and channel share one line straight to yt-dlp. doctor ends at local readiness checks and never touches the network. Every line except doctor ends at the yt-dlp interchange, which with plain caption downloads is the only path to YouTube; each yt-dlp request fetches a fresh response and saves a timestamped copy, and one shared trunk carries every line to YouTube. </desc>
+  <title id="title">YouTube Toolkit retrieval routes</title>
+  <desc id="desc">A route map of retrieval commands and doctor. Each illustrated command is a colored line running left to right through the local parts and services it uses. search runs through filter and rank, then yt-dlp; with --mode semantic it also reads captions and calls the embedding API (dashed). transcript fetches and archives a transcript, preferring captions; when usable captions are missing and a cloud key is configured, it downloads audio through yt-dlp for cloud speech-to-text (dashed). The README also describes the local STT alternative and the separate stt-setup command. vision uses FFmpeg and OpenCV to pick frames, guided by captions when available, and never invokes speech-to-text. metadata and channel share one line to yt-dlp. doctor ends at local readiness checks without network access. Retrieval reaches YouTube through yt-dlp and caption downloads; fresh metadata and listing responses are archived, and a shared trunk carries the retrieval lines to YouTube.</desc>
   <defs>
     <style>
       /* Barlow (c) 2017 The Barlow Project Authors, SIL Open Font License 1.1; Basic Latin subset. */
@@ -21,8 +21,8 @@
   </defs>
   <rect x="0.5" y="0.5" width="1119" height="743" rx="16" fill="#FFFFFF" stroke="#D6DAE2"/>
   <g id="header">
-    <text x="44" y="62" class="title">How each command reaches YouTube</text>
-    <text x="44" y="92" class="lede">Each command is a line through the parts it uses. Dashed lines run only in some modes; anything in the shaded zone is a network call.</text>
+    <text x="44" y="62" class="title">Retrieval routes</text>
+    <text x="44" y="92" class="lede">Retrieval and doctor routes are shown. Dashed lines mark optional paths; services in the shaded zone require network access.</text>
   </g>
   <g id="zones">
     <rect x="800" y="120" width="292" height="592" fill="#EEF0F4" rx="12"/>
@@ -80,7 +80,7 @@
     <text x="520.6" y="666" class="detail">no network</text>
     <text x="890" y="192" class="station">Embedding API</text>
     <text x="890" y="212" class="detail">semantic search only</text>
-    <text x="890" y="306" class="station">Speech-to-text API</text>
+    <text x="890" y="306" class="station">Cloud speech-to-text</text>
     <text x="890" y="326" class="detail">only if captions are missing</text>
     <text x="890" y="405" class="terminus">YouTube</text>
     <text x="890" y="427" class="detail">metadata, captions, media</text>
