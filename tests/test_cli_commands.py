@@ -2,10 +2,13 @@
 
 import argparse
 import json
+import os
+import warnings
 
 import pytest
 
-from youtube_toolkit.cli import commands, health, output
+from youtube_toolkit import config
+from youtube_toolkit.cli import commands, health, output, setup
 from youtube_toolkit.cli.__main__ import main
 from youtube_toolkit.cli.parser import build_parser
 from youtube_toolkit.schemas import TranscriptChunk, TranscriptDocument, VideoMetadata
@@ -463,9 +466,7 @@ def test_emit_json_truncates_long_text_fields(capsys, monkeypatch) -> None:
     assert json.loads(capsys.readouterr().out) == "z" * 20
 
 
-@pytest.mark.parametrize(
-    "command", ["db", "watchlist", "blacklist", "index", "setup", "video"]
-)
+@pytest.mark.parametrize("command", ["db", "watchlist", "blacklist", "index", "video"])
 def test_superseded_commands_are_removed(command: str) -> None:
     with pytest.raises(SystemExit):
         build_parser().parse_args([command])
@@ -522,7 +523,7 @@ def test_stt_setup_reports_both_routes_and_bills_only_when_asked(monkeypatch) ->
     ("environment", "installed", "downloaded", "expected"),
     [
         ({"XAI_API_KEY": "test-key"}, True, True, "Configured (xAI API)"),
-        ({}, False, False, "Set XAI_API_KEY, or install youtube-toolkit[stt]"),
+        ({}, False, False, "Set XAI_API_KEY with `youtube setup --stt`"),
         ({}, True, False, "nvidia/parakeet-tdt-0.6b-v3 downloads on first use"),
         (
             {"STT_LOCAL_MODEL": "example/speech-model"},
@@ -558,6 +559,142 @@ def test_vision_requires_dependencies_before_fetch(monkeypatch, capsys) -> None:
     monkeypatch.setattr(commands, "require_vision", reject)
     assert main(["vision", "JpSHyEIZ_bo"]) == 1
     assert "Vision dependencies missing" in capsys.readouterr().err
+
+
+def test_setup_saves_keys_without_echoing_or_exporting_them(
+    monkeypatch, capsys
+) -> None:
+    """The real command saves both routes, leaves the environment unchanged, and reports names only."""
+    for name in (
+        "EMBEDDING_API_KEY",
+        "EMBEDDING_MODEL",
+        "STT_PROVIDER",
+        "GEMINI_API_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    answers = iter(
+        ["https://embedding.example/v1", "example-model", "512", "", "gemini", ""]
+    )
+    keys = iter(["secret-embedding-key", "secret-gemini-key"])
+    monkeypatch.setattr(setup.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda: next(answers))
+    monkeypatch.setattr(setup.getpass, "getpass", lambda *_args, **_kwargs: next(keys))
+    before = dict(os.environ)
+
+    assert main(["setup"]) == 0
+
+    captured = capsys.readouterr()
+    saved = config.read_config()
+    assert saved == {
+        "EMBEDDING_API_KEY": "secret-embedding-key",
+        "EMBEDDING_BASE_URL": "https://embedding.example/v1",
+        "EMBEDDING_MODEL": "example-model",
+        "EMBEDDING_DIMENSIONS": "512",
+        "STT_PROVIDER": "gemini",
+        "GEMINI_API_KEY": "secret-gemini-key",
+    }
+    assert json.loads(captured.out) == {
+        "config_path": str(config.config_path()),
+        "saved_settings": list(saved),
+    }
+    assert "secret-embedding-key" not in captured.out + captured.err
+    assert "secret-gemini-key" not in captured.out + captured.err
+    assert dict(os.environ) == before
+    assert health.embedding_api_health()["status"] == "configured"
+    assert "Configured (Gemini API)" in health.stt_health()
+
+
+def test_setup_keeps_or_removes_saved_values_without_changing_other_settings(
+    monkeypatch, capsys
+) -> None:
+    config.save_config(
+        {
+            "EMBEDDING_API_KEY": "keep-key",
+            "EMBEDDING_MODEL": "remove-model",
+            "XAI_API_KEY": "unrelated-key",
+        }
+    )
+    answers = iter(["", "-", "", ""])
+    monkeypatch.setattr(setup.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda: next(answers))
+    monkeypatch.setattr(setup.getpass, "getpass", lambda *_args, **_kwargs: "")
+
+    assert main(["setup", "--embeddings"]) == 0
+    assert config.read_config() == {
+        "EMBEDDING_API_KEY": "keep-key",
+        "XAI_API_KEY": "unrelated-key",
+    }
+    assert "keep-key" not in capsys.readouterr().out
+
+
+def test_setup_stt_uses_the_selected_providers_key(monkeypatch) -> None:
+    config.save_config({"EMBEDDING_API_KEY": "keep-key"})
+    answers = iter(["vercel", ""])
+    monkeypatch.setattr(setup.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda: next(answers))
+    monkeypatch.setattr(
+        setup.getpass, "getpass", lambda *_args, **_kwargs: "gateway-key"
+    )
+
+    assert main(["setup", "--stt"]) == 0
+    assert config.read_config() == {
+        "EMBEDDING_API_KEY": "keep-key",
+        "STT_PROVIDER": "vercel",
+        "AI_GATEWAY_API_KEY": "gateway-key",
+    }
+
+
+@pytest.mark.parametrize("failure", [EOFError, KeyboardInterrupt])
+def test_setup_cancellation_preserves_existing_config(
+    monkeypatch, capsys, failure
+) -> None:
+    path = config.save_config({"EMBEDDING_API_KEY": "old-key"})
+    before = path.read_bytes()
+    monkeypatch.setattr(setup.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(
+        setup.getpass, "getpass", lambda *_args, **_kwargs: "replacement-key"
+    )
+
+    def cancel() -> str:
+        raise failure
+
+    monkeypatch.setattr("builtins.input", cancel)
+    assert main(["setup", "--embeddings"]) == 1
+    assert path.read_bytes() == before
+    assert "no settings were saved" in capsys.readouterr().err
+
+
+def test_setup_rejects_invalid_settings_without_replacing_config(
+    monkeypatch, capsys
+) -> None:
+    path = config.save_config({"EMBEDDING_API_KEY": "old-key"})
+    before = path.read_bytes()
+    answers = iter(["", "", "zero", ""])
+    monkeypatch.setattr(setup.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda: next(answers))
+    monkeypatch.setattr(setup.getpass, "getpass", lambda *_args, **_kwargs: "new-key")
+
+    assert main(["setup", "--embeddings"]) == 1
+    assert path.read_bytes() == before
+    assert "EMBEDDING_DIMENSIONS must be a positive integer" in capsys.readouterr().err
+
+
+def test_setup_requires_a_terminal_and_refuses_echoed_secret_input(
+    monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr(setup.sys.stdin, "isatty", lambda: False)
+    assert main(["setup"]) == 1
+    assert "interactive terminal" in capsys.readouterr().err
+    monkeypatch.setattr(setup.sys.stdin, "isatty", lambda: True)
+
+    def no_hidden_input(*_args, **_kwargs) -> str:
+        warnings.warn("Cannot hide input", setup.getpass.GetPassWarning, stacklevel=2)
+        pytest.fail("Must not fall back to echoing the key")
+
+    monkeypatch.setattr(setup.getpass, "getpass", no_hidden_input)
+    assert main(["setup", "--embeddings"]) == 1
+    assert "Hidden key entry is unavailable" in capsys.readouterr().err
+    assert not config.config_path().exists()
 
 
 def test_channel_command_dispatches_listing_without_subcommand(

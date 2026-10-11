@@ -1,10 +1,16 @@
-"""Environment settings, defaults, and validation shared by retrieval clients, search, and readiness checks."""
+"""App-specific settings, environment overrides, and defaults shared by retrieval clients, search, and readiness checks."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+from pathlib import Path
+import re
+from tempfile import NamedTemporaryFile
 from urllib.parse import urlparse
+
+from dotenv.parser import parse_stream
+from platformdirs import user_config_path
 
 DEFAULT_SEARCH_MIN_VIEWS = 10_000
 DEFAULT_SEARCH_MIN_DURATION = "3:00"
@@ -61,7 +67,7 @@ class EmbeddingConfig:
 
 
 def embedding_config_from_env() -> EmbeddingConfig:
-    """Resolve embedding config from EMBEDDING_* variables, requiring only the API key."""
+    """Resolve EMBEDDING_* settings from environment overrides and saved app configuration, requiring only the API key."""
     api_key = config_value("EMBEDDING_API_KEY")
     if api_key is None:
         raise ValueError("Missing model config value: EMBEDDING_API_KEY")
@@ -94,9 +100,9 @@ def local_stt_model() -> str:
 
 
 def config_value(name: str) -> str | None:
-    """Read one setting from the process environment, treating blank values as unset."""
+    """Prefer a nonblank environment override, then the app's saved setting, without modifying the process environment."""
     value = os.environ.get(name, "").strip()
-    return value or None
+    return value or read_config().get(name, "").strip() or None
 
 
 def config_int_value(
@@ -110,3 +116,56 @@ def config_int_value(
     if not value.isdigit():
         raise ValueError(f"Model config value must be a positive integer: {name}")
     return int(value)
+
+
+def config_path() -> Path:
+    """Locate per-user settings outside the installed package and research directories so reinstalls preserve keys."""
+    return (
+        user_config_path("youtube-toolkit", appauthor=False, roaming=True)
+        / "config.env"
+    )
+
+
+def read_config() -> dict[str, str]:
+    """Read dotenv settings literally without exporting them, expanding variables, or accepting a partially parsed file."""
+    path = config_path()
+    settings = {}
+    try:
+        with path.open(encoding="utf-8") as stream:
+            for binding in parse_stream(stream):
+                if binding.error or (
+                    binding.key is not None
+                    and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", binding.key)
+                ):
+                    raise ValueError(
+                        f"Invalid YouTube Toolkit configuration: {path} (line {binding.original.line})"
+                    )
+                if binding.key is not None and binding.value is not None:
+                    settings[binding.key] = binding.value
+    except FileNotFoundError:
+        return {}
+    except UnicodeError as error:
+        raise ValueError(f"Invalid YouTube Toolkit configuration: {path}") from error
+    return settings
+
+
+def save_config(settings: dict[str, str]) -> Path:
+    """Replace the app's config atomically with a user-only file; never write shell configuration or export settings."""
+    path = config_path()
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=path.parent,
+        prefix=".config-",
+        delete_on_close=False,
+    ) as stream:
+        for name, value in settings.items():
+            escaped = value.replace("\\", "\\\\").replace("'", "\\'")
+            stream.write(f"{name}='{escaped}'\n")
+        # Windows requires the temporary file to be closed before replacement.
+        stream.close()
+        temporary = Path(stream.name)
+        temporary.chmod(0o600)
+        temporary.replace(path)
+    return path

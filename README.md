@@ -26,6 +26,39 @@ uv run python scripts/install.py --stt
 
 The installer replaces the installed `youtube` tool; combine `--vision --stt` to install both optional capabilities. To run the checkout directly, use `uv run youtube`.
 
+## API keys and configuration
+
+Run the interactive setup to save embedding and speech-to-text settings for this application:
+
+```bash
+youtube setup
+youtube setup --embeddings
+youtube setup --stt
+```
+
+Without flags, setup configures both capabilities; combine `--embeddings --stt` to explicitly select both.
+Keys use hidden prompts, and there are no command-line key flags.
+Press Enter to keep an existing saved value, or enter `-` to remove its saved override.
+Canceling before completion saves nothing.
+
+Settings are saved in an application-specific `config.env` using `.env` syntax (`KEY=value`):
+
+| Platform | Configuration file |
+| --- | --- |
+| macOS | `~/Library/Application Support/youtube-toolkit/config.env` |
+| Linux | `${XDG_CONFIG_HOME:-~/.config}/youtube-toolkit/config.env` |
+| Windows | `%APPDATA%/youtube-toolkit/config.env` |
+
+`XDG_CONFIG_HOME` overrides the configuration directory on both Linux and macOS.
+Setup changes no shell startup files or `PATH` settings.
+Keys are stored in this local file, with access restricted to the current user on POSIX systems; they are not stored in the OS keychain.
+Nonblank environment variables override saved settings, followed by the defaults documented below.
+For example, an exported `EMBEDDING_MODEL` takes precedence over the model saved by setup.
+The file accepts comments, quoted values, and optional `export` prefixes; values are read literally without expanding `${VARIABLE}` references or exporting them to the process environment.
+
+Prompts appear on stderr; the final JSON reports the configuration path and saved setting names without their values.
+Setup makes no API calls or model downloads; use the readiness commands below when you want to check the configured routes.
+
 ## Examples
 
 ```bash
@@ -81,7 +114,7 @@ youtube search "agent memory" --mode semantic --limit 5
 youtube search "model evals" --channels @OpenAI --mode semantic --return video
 ```
 
-Configure embeddings through environment variables:
+Configure embeddings with `youtube setup --embeddings`, or supply the same settings through environment variables:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -122,6 +155,8 @@ For example, `--max-frames 12` allows up to 12 screenshots. Collages remain unde
 
 The transcript command selects a cloud provider when its key is set, otherwise a local model when its dependencies and `ffmpeg` are installed. Provider errors propagate; local transcription is selected only when the cloud key is absent. With neither route available, the no-captions error is returned.
 
+Use `youtube setup --stt` to save the provider, its API key, and the local model setting, or supply them through environment variables.
+
 `STT_PROVIDER` chooses the cloud provider, and each one needs its own key:
 
 | `STT_PROVIDER` | Key | Model |
@@ -138,15 +173,17 @@ The local model is `nvidia/parakeet-tdt-0.6b-v3`, or the Hugging Face ASR model 
 
 Parakeet covers 25 European languages only and returns noise for others such as Chinese. For those, use the cloud route or set `STT_LOCAL_MODEL=openai/whisper-large-v3-turbo`. On an Apple M5, Parakeet transcribed an hour of audio in 45 seconds and Whisper large-v3-turbo took about 4 minutes.
 
-The readiness commands have different effects:
+Configuration and readiness commands have different effects:
 
-| Command | Checks | Downloads or API calls |
+| Command | Purpose | Downloads or API calls |
 | --- | --- | --- |
+| `youtube setup` | Saves embedding and STT settings interactively | None |
 | `youtube doctor` | Local runtime and configuration readiness | None; creates no files and loads no model |
 | `youtube stt-setup` | Reports both STT routes and tests the local route when its dependencies and `ffmpeg` are available | Downloads the local model if needed; no cloud request |
 | `youtube stt-setup --cloud-test` | The same local checks, plus a two-second cloud test recording | May download the local model; sends a real request billed by the cloud provider |
 
-If the local dependencies or `ffmpeg` are unavailable, `stt-setup` reports that the local route is not installed. These commands check configuration; API keys are supplied through the environment.
+If the local dependencies or `ffmpeg` are unavailable, `stt-setup` reports that the local route is not installed.
+`doctor` and `stt-setup` check configuration; use `setup` to enter and save keys.
 
 ## Local artifacts
 

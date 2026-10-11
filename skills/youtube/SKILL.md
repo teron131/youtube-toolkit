@@ -55,7 +55,7 @@ Search covers YouTube unless `--channels` names channels whose uploads should be
 
 Channel listings omit upload dates, so recency sorting and date filters fetch per-video metadata and take longer. Other filters fetch metadata only when a required field is missing. Filters and unavailable metadata can leave fewer results than `--limit`.
 
-Semantic search requires a query, shortlists titles, and ranks transcript passages by their best similarity to any query. Set `EMBEDDING_API_KEY`; optional settings are `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`, and `EMBEDDING_CONCURRENCY` (default 16, maximum 50). Results are passages by default, or videos ranked by their best passage with `--return video`. `--return chunk` requires semantic mode. A passage's `chunk_index` is not a timestamp; retrieve `transcript --timestamps` for timing.
+Semantic search requires a query, shortlists titles, and ranks transcript passages by their best similarity to any query. Configure `EMBEDDING_API_KEY` with `youtube setup --embeddings` or through the environment; optional settings are `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`, and `EMBEDDING_CONCURRENCY` (default 16, maximum 50). Results are passages by default, or videos ranked by their best passage with `--return video`. `--return chunk` requires semantic mode. A passage's `chunk_index` is not a timestamp; retrieve `transcript --timestamps` for timing.
 
 Semantic search reads captions only and never invokes STT. It summarizes partial caption or embedding failures in `warnings`; these summaries may name only a subset of skipped items. If no transcript passage can be embedded, the command fails; an empty result list means no passage passed the similarity threshold. Duplicate texts share an embedding request within a stage. Embeddings and rankings are kept only for the current search.
 
@@ -66,6 +66,16 @@ The transcript command uses a cloud provider when its key is set, otherwise a lo
 The local model is a Hugging Face ASR model ID for the `transformers` `automatic-speech-recognition` pipeline: `nvidia/parakeet-tdt-0.6b-v3` by default, or the model named by `STT_LOCAL_MODEL`. It downloads on first use. The default model covers 25 European languages only; treat its output for other languages as unreliable. An unknown `STT_PROVIDER`, or a configured local model that cannot be loaded, falls back to the default with a warning on stderr.
 
 Install with `uv run python scripts/install.py`; add `--vision` for visual extraction dependencies, `--stt` for local speech-to-text, or both. Install `ffmpeg` separately for these optional capabilities.
+
+`youtube setup` interactively saves embedding and STT settings for this application; `--embeddings` or `--stt` limits the prompts, and both flags select both capabilities.
+Keys use hidden prompts rather than command-line flags, so let the user enter secrets directly and never echo them into commands or chat.
+Enter keeps an existing saved value; `-` removes a saved override; cancellation saves nothing.
+Setup saves `.env`-format settings in `config.env` under `~/Library/Application Support/youtube-toolkit/` on macOS, `${XDG_CONFIG_HOME:-~/.config}/youtube-toolkit/` on Linux, or `%APPDATA%/youtube-toolkit/` on Windows, with access restricted to the current user on POSIX systems.
+`XDG_CONFIG_HOME` overrides the configuration directory on Linux and macOS.
+This is a local settings file, not OS keychain storage, and setup changes no shell startup files or `PATH` settings.
+Nonblank environment values override saved settings, then existing defaults apply.
+File values are read literally without expanding `${VARIABLE}` references or exporting them to the process environment.
+Prompts go to stderr and final JSON reports the configuration path and saved setting names without values; setup makes no API calls or model downloads.
 
 `youtube doctor` reports readiness and the artifact path without creating files, loading a model, or contacting services. `youtube stt-setup` reports both STT routes and, when local dependencies and `ffmpeg` are available, downloads the local model if needed and runs a short recording through it. `youtube stt-setup --cloud-test` also sends a two-second recording to the cloud provider, a real request the provider bills, so run it only when asked to verify the key.
 
