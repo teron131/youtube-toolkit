@@ -5,7 +5,6 @@ import json
 
 import pytest
 
-import youtube_toolkit.search.workflow as search_workflow
 from youtube_toolkit.cli import commands, health, output
 from youtube_toolkit.cli.__main__ import main
 from youtube_toolkit.cli.parser import build_parser
@@ -356,11 +355,11 @@ def test_search_command_group_accepts_plural_filter_aliases() -> None:
 def test_search_command_builds_default_youtube_request(monkeypatch) -> None:
     requests = []
 
-    def fake_run_search_request(request: SearchRequest) -> list[dict]:
+    def fake_search_videos(request: SearchRequest) -> list[dict]:
         requests.append(request)
         return [{"id": "aaaaaaaaaaa"}]
 
-    monkeypatch.setattr(search_workflow, "search", fake_run_search_request)
+    monkeypatch.setattr(commands, "search_videos", fake_search_videos)
     payload = commands.search(
         argparse.Namespace(
             queries=["agents", "agent skills", "tool use"],
@@ -403,11 +402,11 @@ def test_search_command_builds_default_youtube_request(monkeypatch) -> None:
 def test_search_command_builds_channel_request(monkeypatch) -> None:
     requests = []
 
-    def fake_run_search_request(request: SearchRequest) -> list[dict]:
+    def fake_search_videos(request: SearchRequest) -> list[dict]:
         requests.append(request)
         return [{"id": "aaaaaaaaaaa"}]
 
-    monkeypatch.setattr(search_workflow, "search", fake_run_search_request)
+    monkeypatch.setattr(commands, "search_videos", fake_search_videos)
     payload = commands.search(
         argparse.Namespace(
             queries=["agents"],
@@ -482,6 +481,8 @@ def test_doctor_reports_local_artifacts_without_creating_them(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("EMBEDDING_API_KEY", raising=False)
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    monkeypatch.setattr(health, "local_stt_installed", lambda: False)
     payload = health.run_doctor(argparse.Namespace())
     assert payload["artifacts"] == str(tmp_path / ".cache" / "youtube-toolkit")
     assert payload["embedding"]["status"] == "missing"
@@ -489,7 +490,65 @@ def test_doctor_reports_local_artifacts_without_creating_them(
     assert main(["doctor"]) == 0
     report = capsys.readouterr().out
     assert str(tmp_path / ".cache" / "youtube-toolkit") in report
+    assert "Set XAI_API_KEY" in report
     assert "database" not in report
+
+
+def test_stt_setup_reports_both_routes_and_bills_only_when_asked(monkeypatch) -> None:
+    """Without --cloud-test nothing is sent to the provider; without the local libraries the local model is not loaded."""
+    local_check = {"model": "example/speech-model", "device": "cpu", "working": True}
+    status = {"provider": "xAI", "model": "example-model", "key_set": True}
+    monkeypatch.setattr(commands, "cloud_stt_status", lambda: status)
+    monkeypatch.setattr(
+        commands, "check_cloud_stt", lambda: {**status, "working": True}
+    )
+    monkeypatch.setattr(commands, "check_local_stt", lambda: local_check)
+
+    monkeypatch.setattr(commands, "local_stt_installed", lambda: True)
+    plain = commands.stt_setup(build_parser().parse_args(["stt-setup"]))
+    assert plain == {"cloud": status, "local": local_check}
+
+    monkeypatch.setattr(commands, "local_stt_installed", lambda: False)
+    tested = commands.stt_setup(
+        build_parser().parse_args(["stt-setup", "--cloud-test"])
+    )
+    assert tested == {
+        "cloud": {**status, "working": True},
+        "local": {"installed": False},
+    }
+
+
+@pytest.mark.parametrize(
+    ("environment", "installed", "downloaded", "expected"),
+    [
+        ({"XAI_API_KEY": "test-key"}, True, True, "Configured (xAI API)"),
+        ({}, False, False, "Set XAI_API_KEY, or install youtube-toolkit[stt]"),
+        ({}, True, False, "nvidia/parakeet-tdt-0.6b-v3 downloads on first use"),
+        (
+            {"STT_LOCAL_MODEL": "example/speech-model"},
+            True,
+            True,
+            "Configured (local example/speech-model)",
+        ),
+        (
+            {"STT_PROVIDER": "nobody", "XAI_API_KEY": "test-key"},
+            True,
+            True,
+            "Configured (xAI API)",
+        ),
+    ],
+)
+def test_doctor_names_the_speech_to_text_route_or_the_next_step(
+    monkeypatch, environment, installed, downloaded, expected
+) -> None:
+    for name in ("XAI_API_KEY", "STT_PROVIDER", "STT_LOCAL_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(health, "local_stt_installed", lambda: installed)
+    monkeypatch.setattr(health, "local_model_downloaded", lambda _model: downloaded)
+
+    assert expected in health.stt_health()
 
 
 def test_vision_requires_dependencies_before_fetch(monkeypatch, capsys) -> None:

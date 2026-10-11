@@ -32,6 +32,7 @@ def render_doctor(report: DoctorReport) -> str:
             f"  vision     {'available' if report['vision'] else 'not installed'}",
             f"  ffmpeg     {'available' if report['ffmpeg'] else 'not installed'}",
             f"  embedding  {report['embedding']['detail']}",
+            f"  stt        {report['stt']}",
         ]
     )
 

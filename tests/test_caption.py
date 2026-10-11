@@ -8,8 +8,12 @@ import urllib.error
 import pytest
 
 from youtube_toolkit.artifacts import write_artifact
-from youtube_toolkit.schemas import TranscriptChunk, TranscriptDocument, VideoMetadata
-from youtube_toolkit.stt import SpeechTranscription
+from youtube_toolkit.schemas import (
+    SpeechTranscription,
+    TranscriptChunk,
+    TranscriptDocument,
+    VideoMetadata,
+)
 from youtube_toolkit.youtube.caption import (
     CaptionTranscriptUnavailable,
     fetch_caption_payload,
@@ -58,7 +62,7 @@ def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
             assert video_id == "JpSHyEIZ_bo"
             return audio_path
 
-    def fake_transcribe_audio_details(path: Path) -> SpeechTranscription:
+    def fake_transcribe_in_cloud(path: Path) -> SpeechTranscription:
         assert path == audio_path
         return SpeechTranscription(
             text="数据库",
@@ -66,9 +70,10 @@ def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
         )
 
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("XAI_API_KEY", "test-key")
     monkeypatch.setattr(
-        "youtube_toolkit.transcript.transcribe_audio_details",
-        fake_transcribe_audio_details,
+        "youtube_toolkit.transcript.transcribe_in_cloud",
+        fake_transcribe_in_cloud,
     )
 
     document = fetch_transcript(
@@ -186,8 +191,9 @@ def test_stt_fallback_removes_downloaded_audio_after_failure(
     def fail_transcription(_path: Path) -> SpeechTranscription:
         raise RuntimeError("STT unavailable")
 
+    monkeypatch.setenv("XAI_API_KEY", "test-key")
     monkeypatch.setattr(
-        "youtube_toolkit.transcript.transcribe_audio_details",
+        "youtube_toolkit.transcript.transcribe_in_cloud",
         fail_transcription,
     )
 
@@ -543,6 +549,70 @@ def test_caption_only_policy_never_uses_stt(
         fetch_transcript(
             video_id, options=TranscriptOptions(allow_stt=False), client=FakeClient()
         )
+
+
+def test_stt_without_any_route_keeps_caption_failure_without_audio_work(
+    monkeypatch, tmp_path
+) -> None:
+    """With no cloud key and no local libraries installed retrieval is captions-only: the caption failure surfaces and no audio is downloaded."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    monkeypatch.setattr("youtube_toolkit.transcript.local_stt_installed", lambda: False)
+
+    class FakeClient:
+        def metadata(self, _ref):
+            return {"id": "JpSHyEIZ_bo", "automatic_captions": {}, "subtitles": {}}
+
+        def download_transcription_audio(self, _ref):
+            pytest.fail("an unconfigured STT fallback must not download audio")
+
+    with pytest.raises(CaptionTranscriptUnavailable):
+        fetch_transcript("JpSHyEIZ_bo", client=FakeClient())
+
+
+@pytest.mark.parametrize(
+    ("cloud_key", "expected_text", "expected_language"),
+    [(None, "local text", "de"), ("test-key", "cloud text", "en")],
+)
+def test_stt_prefers_cloud_and_falls_back_to_the_local_model(
+    monkeypatch, tmp_path, cloud_key, expected_text, expected_language
+) -> None:
+    """The cloud provider wins when its key is set; otherwise the local model transcribes and the video's reported language labels the result."""
+    audio_path = tmp_path / "JpSHyEIZ_bo.m4a"
+    audio_path.write_bytes(b"audio")
+    monkeypatch.chdir(tmp_path)
+    if cloud_key is None:
+        monkeypatch.delenv("XAI_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("XAI_API_KEY", cloud_key)
+    monkeypatch.setattr("youtube_toolkit.transcript.local_stt_installed", lambda: True)
+    monkeypatch.setattr(
+        "youtube_toolkit.transcript.transcribe_locally",
+        lambda _path: SpeechTranscription(text="local text"),
+    )
+    monkeypatch.setattr(
+        "youtube_toolkit.transcript.transcribe_in_cloud",
+        lambda _path: SpeechTranscription(text="cloud text", language="en"),
+    )
+
+    class FakeClient:
+        def metadata(self, _ref):
+            return {
+                "id": "JpSHyEIZ_bo",
+                "language": "de",
+                "automatic_captions": {},
+                "subtitles": {},
+            }
+
+        def download_transcription_audio(self, _ref):
+            return audio_path
+
+    document = fetch_transcript("JpSHyEIZ_bo", client=FakeClient())
+
+    assert document.source == "speech-to-text"
+    assert document.text == expected_text
+    assert document.language == expected_language
+    assert not audio_path.exists()
 
 
 def test_supplied_transcript_metadata_must_match_video(monkeypatch, tmp_path) -> None:

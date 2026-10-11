@@ -16,6 +16,16 @@ MAX_CONCURRENT_METADATA_FETCHES = 8
 DEFAULT_VISION_MAX_FRAMES = 6
 MAX_VISION_FRAMES = 96
 
+DEFAULT_STT_PROVIDER = "xai"
+DEFAULT_ELEVENLABS_STT_MODEL = "scribe_v2"
+DEFAULT_GEMINI_STT_MODEL = "gemini-3.5-transcribe"
+DEFAULT_OPENAI_STT_MODEL = "gpt-transcribe"
+# Vercel AI Gateway serves many providers' models under one key; this is its id for xAI's speech-to-text.
+DEFAULT_VERCEL_STT_MODEL = "spacexai/grok-stt"
+DEFAULT_XAI_STT_MODEL = "grok-voice-transcribe-2.0"
+# A Hugging Face ASR model ID; STT_LOCAL_MODEL can name any other model that runs in the transformers automatic-speech-recognition pipeline.
+DEFAULT_LOCAL_STT_MODEL = "nvidia/parakeet-tdt-0.6b-v3"
+
 DEFAULT_EMBEDDING_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
 DEFAULT_EMBEDDING_DIMENSIONALITY = 1536
@@ -73,8 +83,18 @@ def embedding_concurrency(job_count: int) -> int:
     return min(job_count, max(1, min(configured, MAX_EMBEDDING_CONCURRENCY)))
 
 
+def stt_provider_name() -> str:
+    """Name the cloud speech-to-text provider chosen with STT_PROVIDER."""
+    return config_value("STT_PROVIDER") or DEFAULT_STT_PROVIDER
+
+
+def local_stt_model() -> str:
+    """Return the Hugging Face ASR model ID chosen with STT_LOCAL_MODEL for local speech-to-text."""
+    return config_value("STT_LOCAL_MODEL") or DEFAULT_LOCAL_STT_MODEL
+
+
 def config_value(name: str) -> str | None:
-    """Read one embedding setting from the process environment, treating blank values as unset."""
+    """Read one setting from the process environment, treating blank values as unset."""
     value = os.environ.get(name, "").strip()
     return value or None
 

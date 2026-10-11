@@ -6,6 +6,7 @@ import argparse
 
 from ..config import (
     DEFAULT_LAST_VIDEOS,
+    DEFAULT_LOCAL_STT_MODEL,
     DEFAULT_SEARCH_MAX_DURATION,
     DEFAULT_SEARCH_MIN_DURATION,
     DEFAULT_SEARCH_MIN_VIEWS,
@@ -49,6 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_video_commands(subparsers)
     _add_search_command(subparsers)
     _add_channel_command(subparsers)
+    _add_stt_setup_command(subparsers)
     _add_doctor_command(subparsers)
     return parser
 
@@ -197,6 +199,20 @@ def _add_channel_command(subparsers: argparse._SubParsersAction) -> None:
         "--days", type=int, help="Return videos uploaded in the last N days"
     )
     channel_parser.set_defaults(handler=commands.channel)
+
+
+def _add_stt_setup_command(subparsers: argparse._SubParsersAction) -> None:
+    """Register the speech-to-text setup report, with its local model check and optional billed cloud test."""
+    setup_parser = subparsers.add_parser(
+        "stt-setup",
+        help=f"Report the speech-to-text setup; download the Hugging Face ASR model named by STT_LOCAL_MODEL (default: {DEFAULT_LOCAL_STT_MODEL}) and check that it runs",
+    )
+    setup_parser.add_argument(
+        "--cloud-test",
+        action="store_true",
+        help="Also send a two-second test recording to the cloud provider (a real request, billed by the provider)",
+    )
+    setup_parser.set_defaults(handler=commands.stt_setup)
 
 
 def _add_doctor_command(subparsers: argparse._SubParsersAction) -> None:

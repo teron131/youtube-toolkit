@@ -2,23 +2,23 @@
 
 from collections.abc import Callable
 from contextlib import nullcontext
+from threading import Barrier
 from types import SimpleNamespace
 from typing import Any, cast
-from threading import Barrier
 
 import pytest
 
-import youtube_toolkit.search.semantic as search_semantic
+from youtube_toolkit.schemas import TranscriptChunk, TranscriptDocument, VideoMetadata
 import youtube_toolkit.search.discovery as search_discovery
-import youtube_toolkit.search.workflow as search_workflow
+from youtube_toolkit.search.preprocessing import VideoResult
 from youtube_toolkit.search.request import (
     ChannelTarget,
     SearchRequest,
     parse_duration,
 )
-from youtube_toolkit.search.preprocessing import VideoResult
-from youtube_toolkit.search.workflow import search
-from youtube_toolkit.schemas import TranscriptChunk, TranscriptDocument, VideoMetadata
+import youtube_toolkit.search.semantic as search_semantic
+import youtube_toolkit.search.workflow as search_workflow
+from youtube_toolkit.search.workflow import search_videos
 
 
 def use_embeddings(monkeypatch, embed: Callable[[str], list[float]]) -> None:
@@ -69,9 +69,9 @@ def search_transcript_side_effects(monkeypatch) -> dict[str, Any]:
     }
 
 
-def search_videos(request: SearchRequest) -> list[VideoResult]:
+def video_results(request: SearchRequest) -> list[VideoResult]:
     """Run a search the test knows returns videos, so video-only fields type-check."""
-    return cast(list[VideoResult], search(request))
+    return cast(list[VideoResult], search_videos(request))
 
 
 def test_parse_duration_accepts_seconds_and_colon_values() -> None:
@@ -91,7 +91,7 @@ def test_native_youtube_search_does_not_fetch_transcripts(
 ) -> None:
     calls = {}
 
-    def fake_youtube_search(
+    def fake_search_youtube(
         query: str,
         *,
         fetch_limit: int,
@@ -127,9 +127,9 @@ def test_native_youtube_search_does_not_fetch_transcripts(
             },
         ]
 
-    monkeypatch.setattr(search_discovery, "youtube_search", fake_youtube_search)
+    monkeypatch.setattr(search_discovery, "search_youtube", fake_search_youtube)
 
-    assert search(
+    assert search_videos(
         SearchRequest(
             queries=("agent skills",),
             limit=3,
@@ -184,7 +184,7 @@ def test_default_filters_run_before_youtube_date_metadata_fetch(
     monkeypatch,
     search_transcript_side_effects,
 ) -> None:
-    def fake_youtube_search(
+    def fake_search_youtube(
         query: str,
         *,
         fetch_limit: int,
@@ -220,10 +220,10 @@ def test_default_filters_run_before_youtube_date_metadata_fetch(
                 "duration": 600,
             }
 
-    monkeypatch.setattr(search_discovery, "youtube_search", fake_youtube_search)
+    monkeypatch.setattr(search_discovery, "search_youtube", fake_search_youtube)
     monkeypatch.setattr(search_workflow, "YtDlpClient", FakeYtDlpClient)
 
-    results = search_videos(
+    results = video_results(
         SearchRequest(
             queries=("Claude Fable 5",),
             limit=5,
@@ -259,7 +259,7 @@ def test_youtube_relevance_search_interlaces_queries(
         ],
     }
 
-    def fake_youtube_search(
+    def fake_search_youtube(
         query: str,
         *,
         fetch_limit: int,
@@ -269,9 +269,9 @@ def test_youtube_relevance_search_interlaces_queries(
         ready.wait(timeout=2)
         return results_by_query[query]
 
-    monkeypatch.setattr(search_discovery, "youtube_search", fake_youtube_search)
+    monkeypatch.setattr(search_discovery, "search_youtube", fake_search_youtube)
 
-    results = search_videos(
+    results = video_results(
         SearchRequest(
             queries=("alpha", "beta", "gamma", "alpha"),
             limit=5,
@@ -318,7 +318,7 @@ def test_youtube_popularity_search_dedupes_and_sorts_by_popularity(
         ],
     }
 
-    def fake_youtube_search(
+    def fake_search_youtube(
         query: str,
         *,
         fetch_limit: int,
@@ -328,9 +328,9 @@ def test_youtube_popularity_search_dedupes_and_sorts_by_popularity(
         assert sort == "popularity"
         return results_by_query[query]
 
-    monkeypatch.setattr(search_discovery, "youtube_search", fake_youtube_search)
+    monkeypatch.setattr(search_discovery, "search_youtube", fake_search_youtube)
 
-    results = search(
+    results = search_videos(
         SearchRequest(
             queries=("alpha", "beta"),
             limit=3,
@@ -394,7 +394,7 @@ def test_channel_search_fetches_channel_listing(
         search_discovery, "fetch_channel_videos", fake_fetch_channel_videos
     )
 
-    results = search(
+    results = search_videos(
         SearchRequest(
             queries=(),
             limit=30,
@@ -423,7 +423,7 @@ def test_channel_search_resolves_names_before_fetching_listings(monkeypatch) -> 
     search_queries = []
     listing_calls = []
 
-    def fake_youtube_search(
+    def fake_search_youtube(
         query: str,
         *,
         fetch_limit: int,
@@ -459,12 +459,12 @@ def test_channel_search_resolves_names_before_fetching_listings(monkeypatch) -> 
             ],
         }
 
-    monkeypatch.setattr(search_discovery, "youtube_search", fake_youtube_search)
+    monkeypatch.setattr(search_discovery, "search_youtube", fake_search_youtube)
     monkeypatch.setattr(
         search_discovery, "fetch_channel_videos", fake_fetch_channel_videos
     )
 
-    results = search_videos(
+    results = video_results(
         SearchRequest(
             queries=(),
             limit=5,
@@ -480,7 +480,7 @@ def test_channel_search_resolves_names_before_fetching_listings(monkeypatch) -> 
 def test_channel_search_uses_explicit_handles_without_name_lookup(monkeypatch) -> None:
     listing_calls = []
 
-    def fail_youtube_search(
+    def fail_search_youtube(
         query: str,
         *,
         fetch_limit: int,
@@ -508,12 +508,12 @@ def test_channel_search_uses_explicit_handles_without_name_lookup(monkeypatch) -
             ],
         }
 
-    monkeypatch.setattr(search_discovery, "youtube_search", fail_youtube_search)
+    monkeypatch.setattr(search_discovery, "search_youtube", fail_search_youtube)
     monkeypatch.setattr(
         search_discovery, "fetch_channel_videos", fake_fetch_channel_videos
     )
 
-    search(
+    search_videos(
         SearchRequest(
             queries=(),
             limit=5,
@@ -590,7 +590,7 @@ def test_channel_search_dedupes_and_sorts_by_recency(monkeypatch) -> None:
     )
     monkeypatch.setattr(search_workflow, "YtDlpClient", UnavailableYtDlpClient)
 
-    results = search_videos(
+    results = video_results(
         SearchRequest(
             queries=(),
             limit=30,
@@ -665,7 +665,7 @@ def test_channel_search_can_sort_by_popularity(monkeypatch) -> None:
     )
     monkeypatch.setattr(search_workflow, "YtDlpClient", UnavailableYtDlpClient)
 
-    results = search(
+    results = search_videos(
         SearchRequest(
             queries=(),
             limit=30,
@@ -720,7 +720,7 @@ def test_channel_search_fetches_metadata_missing_from_flat_listings(
     )
     monkeypatch.setattr(search_workflow, "YtDlpClient", FakeYtDlpClient)
 
-    results = search_videos(
+    results = video_results(
         SearchRequest(
             queries=(),
             limit=30,
@@ -769,7 +769,7 @@ def test_channel_date_filter_stops_hydrating_after_listing_passes_cutoff(
     )
     monkeypatch.setattr(search_workflow, "YtDlpClient", FakeYtDlpClient)
 
-    results = search(
+    results = search_videos(
         SearchRequest(
             queries=(),
             limit=2,
@@ -815,7 +815,7 @@ def test_native_channel_query_filters_video_titles(monkeypatch) -> None:
         search_discovery, "fetch_channel_videos", fake_fetch_channel_videos
     )
 
-    results = search(
+    results = search_videos(
         SearchRequest(
             queries=("capex",),
             limit=30,
@@ -878,7 +878,7 @@ def test_channel_search_can_sort_by_semantic_relevance(
     )
     use_embeddings(monkeypatch, fake_embed_text)
 
-    results = search(
+    results = search_videos(
         SearchRequest(
             queries=("GPU capex",),
             mode="semantic",
@@ -973,7 +973,7 @@ def test_semantic_channel_search_prefilters_by_title_embeddings(
     )
     use_embeddings(monkeypatch, fake_embed_text)
 
-    results = search(
+    results = search_videos(
         SearchRequest(
             queries=("product announcements",),
             mode="semantic",
@@ -1038,7 +1038,7 @@ def test_semantic_video_search_returns_only_scored_videos(
     )
     use_embeddings(monkeypatch, fake_embed_text)
 
-    results = search(
+    results = search_videos(
         SearchRequest(
             queries=("GPU capex",),
             limit=10,
@@ -1097,7 +1097,7 @@ def test_date_filter_runs_before_transcript_fetch(
     )
     monkeypatch.setattr(search_workflow, "YtDlpClient", FakeYtDlpClient)
 
-    results = search(
+    results = search_videos(
         SearchRequest(
             queries=("GPU capex",),
             limit=10,
@@ -1173,7 +1173,7 @@ def test_semantic_video_results_include_partial_transcript_warnings(
     )
     monkeypatch.setattr(search_semantic, "fetch_transcript", fake_fetch_transcript)
 
-    results = search(
+    results = search_videos(
         SearchRequest(
             queries=("GPU capex",),
             limit=10,
@@ -1249,7 +1249,7 @@ def test_semantic_search_defaults_to_chunk_results(
     monkeypatch.setattr(search_semantic, "fetch_transcript", fake_fetch_transcript)
     use_embeddings(monkeypatch, fake_embed_text)
 
-    results = search(
+    results = search_videos(
         SearchRequest(
             queries=("GPU capex",),
             mode="semantic",
@@ -1320,7 +1320,7 @@ def test_live_semantic_search_fetches_transcripts_concurrently(
     )
     monkeypatch.setattr(search_semantic, "fetch_transcript", fake_fetch_live_transcript)
 
-    results = search(
+    results = search_videos(
         SearchRequest(
             queries=("frontier model analysis",),
             mode="semantic",
@@ -1343,7 +1343,7 @@ def test_live_semantic_search_fetches_transcripts_concurrently(
 
 def test_chunk_results_require_semantic_mode() -> None:
     with pytest.raises(ValueError, match="chunk return requires semantic mode"):
-        search(
+        search_videos(
             SearchRequest(
                 queries=("GPU capex",),
                 limit=10,
@@ -1368,7 +1368,7 @@ def test_search_query_is_optional_only_for_native_channel_search(monkeypatch) ->
         search_discovery, "fetch_channel_videos", fake_fetch_channel_videos
     )
 
-    search(
+    search_videos(
         SearchRequest(
             queries=(),
             limit=10,
@@ -1376,14 +1376,14 @@ def test_search_query_is_optional_only_for_native_channel_search(monkeypatch) ->
         )
     )
     with pytest.raises(ValueError, match="search query must be non-empty"):
-        search(
+        search_videos(
             SearchRequest(
                 queries=(),
                 limit=10,
             )
         )
     with pytest.raises(ValueError, match="search query must be non-empty"):
-        search(
+        search_videos(
             SearchRequest(
                 queries=(),
                 limit=10,
@@ -1421,7 +1421,7 @@ def test_native_channel_search_keeps_titles_matching_any_query(monkeypatch) -> N
         search_discovery, "fetch_channel_videos", fake_fetch_channel_videos
     )
 
-    results = search(
+    results = search_videos(
         SearchRequest(
             queries=("capex", "agent"),
             limit=10,
@@ -1445,7 +1445,7 @@ def test_semantic_search_scores_passages_by_their_closest_query(monkeypatch) -> 
         monkeypatch, lambda text: [1.0, 0.0] if text == "alpha" else [0.0, 1.0]
     )
 
-    results = search(
+    results = search_videos(
         SearchRequest(
             queries=("alpha", "beta"),
             limit=5,
@@ -1461,7 +1461,7 @@ def test_semantic_search_scores_passages_by_their_closest_query(monkeypatch) -> 
 
 def test_native_youtube_search_rejects_recency() -> None:
     with pytest.raises(ValueError, match="does not support --sort recency"):
-        search(
+        search_videos(
             SearchRequest(
                 queries=("agents",),
                 limit=10,
@@ -1513,7 +1513,7 @@ def test_search_request_rejects_invalid_metadata_filters(
     message: str,
 ) -> None:
     with pytest.raises(ValueError, match=message):
-        search(search_request)
+        search_videos(search_request)
 
 
 @pytest.mark.parametrize(
@@ -1550,7 +1550,7 @@ def test_search_request_rejects_invalid_literal_values(
     message: str,
 ) -> None:
     with pytest.raises(ValueError, match=message):
-        search(search_request)
+        search_videos(search_request)
 
 
 def test_semantic_search_reports_when_no_transcripts_can_be_prepared(
@@ -1590,7 +1590,7 @@ def test_semantic_search_reports_when_no_transcripts_can_be_prepared(
     monkeypatch.setattr(search_semantic, "fetch_transcript", fail_fetch_transcript)
 
     with pytest.raises(RuntimeError, match="captions unavailable"):
-        search(
+        search_videos(
             SearchRequest(
                 queries=("GPU capex",),
                 limit=10,
@@ -1659,7 +1659,7 @@ def test_channel_search_limits_after_merge_and_sort(monkeypatch) -> None:
         search_discovery, "fetch_channel_videos", fake_fetch_channel_videos
     )
 
-    results = search(
+    results = search_videos(
         SearchRequest(
             queries=(),
             channels=(
@@ -1681,7 +1681,7 @@ def test_search_result_keeps_raw_metadata_when_transcript_fetch_fails(
     monkeypatch,
     search_transcript_side_effects,
 ) -> None:
-    def fake_youtube_search(
+    def fake_search_youtube(
         query: str,
         *,
         fetch_limit: int,
@@ -1702,10 +1702,10 @@ def test_search_result_keeps_raw_metadata_when_transcript_fetch_fails(
     ) -> TranscriptDocument:
         raise RuntimeError("captions unavailable")
 
-    monkeypatch.setattr(search_discovery, "youtube_search", fake_youtube_search)
+    monkeypatch.setattr(search_discovery, "search_youtube", fake_search_youtube)
     monkeypatch.setattr(search_semantic, "fetch_transcript", fail_fetch_transcript)
 
-    assert search(
+    assert search_videos(
         SearchRequest(
             queries=("agents",),
             limit=1,
@@ -1745,8 +1745,8 @@ def test_search_preserves_provider_handle_for_filters_and_results(
             }
         ]
 
-    monkeypatch.setattr(search_discovery, "youtube_search", discover)
-    results = search(
+    monkeypatch.setattr(search_discovery, "search_youtube", discover)
+    results = search_videos(
         SearchRequest(
             queries=("agents",), mode=mode, limit=1, include_channel=("@CreatorHandle",)
         )

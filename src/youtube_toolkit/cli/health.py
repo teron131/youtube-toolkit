@@ -12,6 +12,13 @@ from ..config import (
     DEFAULT_EMBEDDING_MODEL,
     config_value,
     embedding_config_from_env,
+    local_stt_model,
+)
+from ..stt import (
+    cloud_provider,
+    cloud_stt_configured,
+    local_model_downloaded,
+    local_stt_installed,
 )
 
 VISION_MODULES = ("numpy", "PIL", "cv2", "scenedetect")
@@ -34,6 +41,7 @@ class DoctorReport(TypedDict):
     vision: bool
     ffmpeg: bool
     embedding: EmbeddingHealthResult
+    stt: str
 
 
 def run_doctor(args: argparse.Namespace) -> DoctorReport:
@@ -47,6 +55,7 @@ def run_doctor(args: argparse.Namespace) -> DoctorReport:
         "vision": vision_available(),
         "ffmpeg": shutil.which("ffmpeg") is not None,
         "embedding": embedding_api_health(),
+        "stt": stt_health(),
     }
 
 
@@ -70,6 +79,19 @@ def embedding_api_health() -> EmbeddingHealthResult:
         "status": "configured",
         "detail": f"Configured ({model})",
     }
+
+
+def stt_health() -> str:
+    """Describe which speech-to-text route videos without captions would take, without sending API requests or loading a model."""
+    provider = cloud_provider()
+    if cloud_stt_configured():
+        return f"Configured ({provider.label} API); `youtube stt-setup --cloud-test` sends a billed test"
+    if not local_stt_installed():
+        return f"Set {provider.api_key_env}, or install youtube-toolkit[stt] and ffmpeg for local models"
+    model = local_stt_model()
+    if not local_model_downloaded(model):
+        return f"Local {model} downloads on first use, or now with `youtube stt-setup`"
+    return f"Configured (local {model}); `youtube stt-setup` checks that it runs"
 
 
 def vision_available() -> bool:

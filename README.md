@@ -18,6 +18,12 @@ For visual extraction, install its optional dependencies and install `ffmpeg` se
 uv run python scripts/install.py --vision
 ```
 
+For local speech-to-text on videos without captions, install its optional dependencies (Hugging Face `transformers` and PyTorch) and install `ffmpeg` separately:
+
+```bash
+uv run python scripts/install.py --stt
+```
+
 The installer replaces the installed `youtube` tool. To run the checkout directly, use `uv run youtube`.
 
 ## Examples
@@ -32,10 +38,11 @@ youtube transcript <url-or-id>
 youtube transcript <url-or-id> --timestamps
 youtube transcript <url-or-id> --export
 youtube vision <url-or-id>
+youtube stt-setup
 youtube doctor
 ```
 
-Commands return JSON except `doctor`. Metadata includes descriptions, thumbnails, and chapters. Transcripts return text by default or timed chunks with `--timestamps`; `--export` writes a text file in the working directory, and `--force` allows overwriting it. Transcripts are in English or Chinese when the video has those subtitles, otherwise in the video's own language. Videos without captions fall back to xAI speech-to-text, which needs `XAI_API_KEY`.
+Commands return JSON except `doctor`. Metadata includes descriptions, thumbnails, and chapters. Transcripts return text by default or timed chunks with `--timestamps`; `--export` writes a text file in the working directory, and `--force` allows overwriting it. Transcripts are in English or Chinese when the video has those subtitles, otherwise in the video's own language. Videos without captions fall back to [speech-to-text](#speech-to-text) when it is set up, and otherwise fail with a no-captions error.
 
 Search defaults: at least 10,000 views, duration 3 minutes to 8 hours, and 10 results (30 for channel searches). Use `youtube search --help` for filters and overrides.
 
@@ -53,6 +60,33 @@ youtube search "model evals" --channels @OpenAI --mode semantic --return video
 ```
 
 Set `EMBEDDING_API_KEY` in the environment. Optional settings are `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL`, and `EMBEDDING_DIMENSIONS`. Semantic results are chunks by default; `--return video` returns ranked videos.
+
+## Speech-to-text
+
+Videos without captions are transcribed by the first route that is set up: a cloud provider when its key is set, otherwise the local model when it is installed with `--stt`.
+
+`STT_PROVIDER` chooses the cloud provider, and each one needs its own key:
+
+| `STT_PROVIDER` | Key | Model |
+| --- | --- | --- |
+| `elevenlabs` | `ELEVENLABS_API_KEY` | `scribe_v2` |
+| `gemini` | `GEMINI_API_KEY` | `gemini-3.5-transcribe` |
+| `openai` | `OPENAI_API_KEY` | `gpt-transcribe` |
+| `vercel` | `AI_GATEWAY_API_KEY` | `spacexai/grok-stt` through Vercel AI Gateway |
+| `xai` (default) | `XAI_API_KEY` | `grok-voice-transcribe-2.0` |
+
+Gemini and the Vercel gateway each transcribed an hour of audio in under a minute. Gemini accepts recordings up to one hour, and OpenAI accepts files up to 25 MB, which is about 25 minutes of YouTube audio.
+
+The local model is `nvidia/parakeet-tdt-0.6b-v3`, or the Hugging Face ASR model ID in `STT_LOCAL_MODEL`. The local route runs any model that works in the `transformers` `automatic-speech-recognition` pipeline, on an Nvidia GPU, an Apple GPU, or the CPU. The model downloads the first time it is needed. An unknown `STT_PROVIDER`, or a local model that cannot be loaded, falls back to the default with a warning on stderr.
+
+Parakeet covers 25 European languages only and returns noise for others such as Chinese. For those, use the cloud route or set `STT_LOCAL_MODEL=openai/whisper-large-v3-turbo`. On an Apple M5, Parakeet transcribed an hour of audio in 45 seconds and Whisper large-v3-turbo took about 4 minutes.
+
+```bash
+youtube stt-setup
+youtube stt-setup --cloud-test
+```
+
+`stt-setup` reports both routes, downloads the local model if needed, and runs it once. `--cloud-test` also sends a two-second recording to the cloud provider, which is a real request the provider bills.
 
 ## Agent skill
 

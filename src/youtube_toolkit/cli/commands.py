@@ -8,15 +8,25 @@ from typing import Any
 
 from ..config import DEFAULT_CHANNEL_SEARCH_LIMIT, DEFAULT_YOUTUBE_SEARCH_LIMIT
 from ..schemas import VideoMetadata
-from ..search.preprocessing import ChunkResult, VideoResult
-from ..search.request import ChannelTarget, SearchRequest
+from ..search import (
+    ChannelTarget,
+    ChunkResult,
+    SearchRequest,
+    VideoResult,
+    search_videos,
+)
+from ..stt import (
+    check_cloud_stt,
+    check_local_stt,
+    cloud_stt_status,
+    local_stt_installed,
+)
 from ..transcript import (
     TranscriptExportResult,
     fetch_transcript,
     write_transcript_export,
 )
-from ..youtube.channels import ChannelOptions, fetch_channel_videos
-from ..youtube.client import YtDlpClient
+from ..youtube import ChannelOptions, YtDlpClient, fetch_channel_videos
 from .health import require_vision
 
 
@@ -58,10 +68,19 @@ def channel(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def stt_setup(args: argparse.Namespace) -> dict[str, Any]:
+    """Report the cloud and local speech-to-text setup.
+
+    The local model is downloaded if needed and run once whenever its libraries are installed.
+    The cloud provider is only described unless --cloud-test asks for a real request, because the provider bills for it.
+    """
+    cloud = check_cloud_stt() if args.cloud_test else cloud_stt_status()
+    local = check_local_stt() if local_stt_installed() else {"installed": False}
+    return {"cloud": cloud, "local": local}
+
+
 def search(args: argparse.Namespace) -> list[VideoResult] | list[ChunkResult]:
     """Translate parsed CLI arguments into the public search request contract."""
-    from ..search import workflow
-
     limit = args.limit
     if limit is None:
         limit = (
@@ -69,7 +88,7 @@ def search(args: argparse.Namespace) -> list[VideoResult] | list[ChunkResult]:
             if args.channels
             else DEFAULT_YOUTUBE_SEARCH_LIMIT
         )
-    return workflow.search(
+    return search_videos(
         SearchRequest(
             queries=tuple(query for query in args.queries if query),
             mode=args.mode,
