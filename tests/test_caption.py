@@ -14,16 +14,16 @@ from youtube_toolkit.schemas import (
     TranscriptDocument,
     VideoMetadata,
 )
+from youtube_toolkit.transcript import (
+    DEFAULT_TRANSCRIPT_LANGUAGES,
+    TranscriptOptions,
+    fetch_transcript,
+)
 from youtube_toolkit.youtube.caption import (
     CaptionTranscriptUnavailable,
     fetch_caption_payload,
     remove_sponsorblock_chunks,
     select_caption_track,
-)
-from youtube_toolkit.transcript import (
-    DEFAULT_TRANSCRIPT_LANGUAGES,
-    TranscriptOptions,
-    fetch_transcript,
 )
 
 
