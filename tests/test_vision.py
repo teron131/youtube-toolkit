@@ -10,14 +10,14 @@ import numpy as np
 from PIL import Image, JpegImagePlugin
 import pytest
 
+from youtube_toolkit import vision
 from youtube_toolkit.cli import commands
 from youtube_toolkit.cli.parser import build_parser
-from youtube_toolkit import vision
 from youtube_toolkit.schemas import TranscriptChunk, TranscriptDocument, VideoMetadata
 from youtube_toolkit.vision import frames as frame_selection, workflow
+from youtube_toolkit.vision.windows import TranscriptWindow
 from youtube_toolkit.youtube.caption import CaptionTranscriptUnavailable
 from youtube_toolkit.youtube.client import VISION_VIDEO_FORMAT_SELECTOR, YtDlpClient
-from youtube_toolkit.vision.windows import TranscriptWindow
 
 VIDEO_ID = "JpSHyEIZ_bo"
 
