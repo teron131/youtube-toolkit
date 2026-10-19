@@ -2,7 +2,7 @@
 
 A YouTube CLI for agents with directory-local request archives: search videos and comments, read transcripts, inspect metadata, and extract visual context through yt-dlp.
 
-![Retrieval routes through yt-dlp, captions, optional embeddings, and cloud speech-to-text, alongside local readiness checks.](docs/architecture.svg)
+![Retrieval routes including keyword comment search with Top/likes interleaving through yt-dlp, captions, optional embeddings, and cloud speech-to-text, alongside local readiness checks.](docs/architecture.svg)
 
 ## Install
 
