@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="744" viewBox="0 0 1120 744" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="844" viewBox="0 0 1120 844" role="img" aria-labelledby="title desc">
   <title id="title">YouTube Toolkit retrieval routes</title>
-  <desc id="desc">A route map of retrieval commands and doctor. Each illustrated command is a colored line running left to right through the local parts and services it uses. search runs through filter and rank, then yt-dlp; with --mode semantic it also reads captions and calls the embedding API (dashed). transcript fetches and archives a transcript, preferring captions; when usable captions are missing and a cloud key is configured, it downloads audio through yt-dlp for cloud speech-to-text (dashed). The README also describes the local STT alternative and the separate stt-setup command. vision uses FFmpeg and OpenCV to pick frames, guided by captions when available, and never invokes speech-to-text. metadata and channel share one line to yt-dlp. doctor ends at local readiness checks without network access. Retrieval reaches YouTube through yt-dlp and caption downloads; fresh metadata and listing responses are archived, and a shared trunk carries the retrieval lines to YouTube.</desc>
+  <desc id="desc">A route map of retrieval commands and doctor. Each illustrated command is a colored line connecting the local parts and services it uses, rather than a sequence of execution steps. search uses filter and rank and yt-dlp; with --mode semantic it also reads captions and calls the embedding API (dashed). transcript fetches and archives a transcript, preferring captions; when usable captions are missing and a cloud key is configured, it downloads audio through yt-dlp for cloud speech-to-text (dashed). The README also describes the local STT alternative and the separate stt-setup command. vision uses FFmpeg and OpenCV to pick frames, guided by captions when available, and never invokes speech-to-text. comments fetches and archives one bounded Top sample through yt-dlp, then optionally filters comment text by keyword and interleaves Top and descending like-count order within that sample, returning each match once. metadata and channel share one line to yt-dlp. doctor ends at local readiness checks without network access. Retrieval reaches YouTube through yt-dlp and caption downloads; fresh responses are archived, and a shared trunk carries the retrieval lines to YouTube.</desc>
   <defs>
     <style>
       /* Barlow (c) 2017 The Barlow Project Authors, SIL Open Font License 1.1; Basic Latin subset. */
@@ -19,13 +19,13 @@
       .branch { fill: none; stroke-width: 4; stroke-dasharray: 9 7; stroke-linecap: round; stroke-linejoin: round; }
     </style>
   </defs>
-  <rect x="0.5" y="0.5" width="1119" height="743" rx="16" fill="#FFFFFF" stroke="#D6DAE2"/>
+  <rect x="0.5" y="0.5" width="1119" height="843" rx="16" fill="#FFFFFF" stroke="#D6DAE2"/>
   <g id="header">
     <text x="44" y="62" class="title">Retrieval routes</text>
     <text x="44" y="92" class="lede">Retrieval and doctor routes are shown. Dashed lines mark optional paths; services in the shaded zone require network access.</text>
   </g>
   <g id="zones">
-    <rect x="800" y="120" width="292" height="592" fill="#EEF0F4" rx="12"/>
+    <rect x="800" y="120" width="292" height="692" fill="#EEF0F4" rx="12"/>
     <text x="44" y="142" class="zone">On your machine</text>
     <text x="822" y="142" class="zone">Over the network</text>
     <text x="172" y="194" class="detail" text-anchor="end">youtube &lt;command&gt;</text>
@@ -37,23 +37,26 @@
     <path d="M540 330 L570 300 L862 300" class="branch" stroke="#1B2238"/>
     <path d="M190 368 L716 368" class="route" stroke="#2E63E6"/>
     <path d="M190 438 L716 438" class="route" stroke="#C77C00"/>
-    <path d="M190 528 L238 528 L262 552 L716 552" class="route" stroke="#8A4FD8"/>
-    <path d="M190 576 L238 576 L262 552" class="route" stroke="#8A4FD8"/>
-    <path d="M190 660 L344 660" class="route" stroke="#8C93A3"/>
+    <path id="comments-route" d="M190 538 L716 538" class="route" stroke="#C44773"/>
+    <path d="M190 628 L238 628 L262 652 L716 652" class="route" stroke="#8A4FD8"/>
+    <path d="M190 676 L238 676 L262 652" class="route" stroke="#8A4FD8"/>
+    <path d="M190 760 L344 760" class="route" stroke="#8C93A3"/>
     <path d="M716 403H862" fill="none" stroke="#1B2238" stroke-width="14"/>
   </g>
   <g id="stations">
     <rect x="186" y="230" width="8" height="28" fill="#0F9D74" rx="2"/>
     <rect x="186" y="354" width="8" height="28" fill="#2E63E6" rx="2"/>
     <rect x="186" y="424" width="8" height="28" fill="#C77C00" rx="2"/>
-    <rect x="186" y="514" width="8" height="28" fill="#8A4FD8" rx="2"/>
-    <rect x="186" y="562" width="8" height="28" fill="#8A4FD8" rx="2"/>
-    <rect x="186" y="646" width="8" height="28" fill="#8C93A3" rx="2"/>
+    <rect x="186" y="524" width="8" height="28" fill="#C44773" rx="2"/>
+    <rect x="186" y="614" width="8" height="28" fill="#8A4FD8" rx="2"/>
+    <rect x="186" y="662" width="8" height="28" fill="#8A4FD8" rx="2"/>
+    <rect x="186" y="746" width="8" height="28" fill="#8C93A3" rx="2"/>
     <circle cx="344" cy="244" r="11" fill="#FFFFFF" stroke="#1B2238" stroke-width="3.5"/>
     <circle cx="344" cy="438" r="11" fill="#FFFFFF" stroke="#1B2238" stroke-width="3.5"/>
-    <circle cx="344" cy="660" r="11" fill="#FFFFFF" stroke="#1B2238" stroke-width="3.5"/>
+    <circle cx="344" cy="538" r="11" fill="#FFFFFF" stroke="#1B2238" stroke-width="3.5"/>
+    <circle cx="344" cy="760" r="11" fill="#FFFFFF" stroke="#1B2238" stroke-width="3.5"/>
     <rect x="527" y="325" width="26" height="126" fill="#FFFFFF" rx="13" stroke="#1B2238" stroke-width="3.5"/>
-    <rect x="703" y="231" width="26" height="334" fill="#FFFFFF" rx="13" stroke="#1B2238" stroke-width="3.5"/>
+    <rect x="703" y="231" width="26" height="434" fill="#FFFFFF" rx="13" stroke="#1B2238" stroke-width="3.5"/>
     <circle cx="862" cy="186" r="11" fill="#FFFFFF" stroke="#1B2238" stroke-width="3.5"/>
     <circle cx="862" cy="300" r="11" fill="#FFFFFF" stroke="#1B2238" stroke-width="3.5"/>
     <rect x="847" y="359" width="30" height="88" fill="#E5302A" rx="15"/>
@@ -62,9 +65,10 @@
     <text x="172" y="251" class="command" text-anchor="end">search</text>
     <text x="172" y="375" class="command" text-anchor="end">transcript</text>
     <text x="172" y="445" class="command" text-anchor="end">vision</text>
-    <text x="172" y="535" class="command" text-anchor="end">metadata</text>
-    <text x="172" y="583" class="command" text-anchor="end">channel</text>
-    <text x="172" y="667" class="command" text-anchor="end">doctor</text>
+    <text x="172" y="545" class="command" text-anchor="end">comments</text>
+    <text x="172" y="635" class="command" text-anchor="end">metadata</text>
+    <text x="172" y="683" class="command" text-anchor="end">channel</text>
+    <text x="172" y="767" class="command" text-anchor="end">doctor</text>
     <text x="336" y="280" class="station" text-anchor="end">Filter and rank</text>
     <text x="336" y="300" class="detail" text-anchor="end">views, length, date</text>
     <text x="416" y="220" class="mode" style="fill: #0F9D74">--mode semantic</text>
@@ -73,16 +77,19 @@
     <text x="566" y="426" class="detail">captions only</text>
     <text x="540" y="478" class="station" text-anchor="middle">Transcripts</text>
     <text x="540" y="498" class="detail" text-anchor="middle">fresh, archived</text>
-    <text x="716" y="592" class="station" text-anchor="middle">yt-dlp</text>
-    <text x="716" y="612" class="detail" text-anchor="middle">plus caption downloads</text>
-    <text x="716" y="630" class="detail" text-anchor="middle">fresh, archived</text>
-    <text x="368" y="666" class="station">Readiness checks</text>
-    <text x="520.6" y="666" class="detail">no network</text>
+    <text x="344" y="574" class="station" text-anchor="middle">Filter and interleave</text>
+    <text x="344" y="594" class="detail" text-anchor="middle">keyword, Top / likes</text>
+    <text x="716" y="692" class="station" text-anchor="middle">yt-dlp</text>
+    <text x="716" y="712" class="detail" text-anchor="middle">plus caption downloads</text>
+    <text x="716" y="730" class="detail" text-anchor="middle">fresh, archived</text>
+    <text x="368" y="766" class="station">Readiness checks</text>
+    <text x="520.6" y="766" class="detail">no network</text>
     <text x="890" y="192" class="station">Embedding API</text>
     <text x="890" y="212" class="detail">semantic search only</text>
     <text x="890" y="306" class="station">Cloud speech-to-text</text>
     <text x="890" y="326" class="detail">only if captions are missing</text>
     <text x="890" y="405" class="terminus">YouTube</text>
-    <text x="890" y="427" class="detail">metadata, captions, media</text>
+    <text x="890" y="427" class="detail">metadata, comments,</text>
+    <text x="890" y="447" class="detail">captions, media</text>
   </g>
 </svg>
