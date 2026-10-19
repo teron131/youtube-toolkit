@@ -1,6 +1,6 @@
 # YouTube Toolkit
 
-A YouTube CLI for agents with directory-local request archives: search, read transcripts, inspect metadata, and extract visual context through yt-dlp.
+A YouTube CLI for agents with directory-local request archives: search videos and comments, read transcripts, inspect metadata, and extract visual context through yt-dlp.
 
 ![Retrieval routes through yt-dlp, captions, optional embeddings, and cloud speech-to-text, alongside local readiness checks.](docs/architecture.svg)
 
@@ -68,6 +68,7 @@ youtube search --channels @OpenAI --limit 5
 youtube channel @OpenAI --last 5
 youtube channel @OpenAI --days 7
 youtube metadata <url-or-id>
+youtube comments <url-or-id> "pricing"
 youtube transcript <url-or-id>
 youtube transcript <url-or-id> --timestamps
 youtube transcript <url-or-id> --export
@@ -128,6 +129,44 @@ Results are passages by default; `--return video` ranks videos by their best mat
 
 Semantic search reads captions only and never invokes speech-to-text. Partial caption or embedding failures are summarized in result `warnings`; the command fails if no transcript passage can be embedded. An empty result list means no passage met the similarity threshold. Passage `chunk_index` values are not timestamps; use `transcript --timestamps` for caption timing.
 
+## Comment search
+
+Search a video's Top comments for a keyword or phrase in one command:
+
+```bash
+youtube comments <url-or-id> "pricing"
+youtube comments <url-or-id> "training data" --limit 250
+youtube comments <url-or-id> "pricing" | jq '.comments[] | select((.like_count // 0) >= 10)'
+```
+
+The command fetches up to 100 top-level comments in YouTube's Top order by default, excludes replies, and then matches the optional query as a case-insensitive literal substring of comment text, like `rg -i -F`.
+The query is one keyword or phrase; regex and OR expressions are not interpreted.
+`--limit` accepts 1-1000 and defaults to 100; values outside that range fail before contacting YouTube.
+It controls how many comments are fetched before filtering, not the number of matches; sparse matches never trigger more retrievals.
+For an intentional unfiltered sample, use `youtube comments <url-or-id>`; passing an empty query has the same effect.
+No model API or API key is required.
+
+After filtering, results alternate between the next unseen comment in YouTube's Top order and the next unseen comment ranked by descending likes.
+Comments are deduplicated internally by ID.
+Within the like-count ranking, ties preserve Top order and unavailable counts sort last.
+This interleaving changes the order within the fetched sample, not retrieval coverage or the number of network requests.
+
+JSON output contains only `title`, `url`, and `comments`; each comment contains only `text` and `like_count`.
+Unavailable like counts are `null`, and no matches or no available comments produces `comments: []`.
+
+```json
+{
+  "title": "Example video",
+  "url": "https://www.youtube.com/watch?v=VIDEO_ID",
+  "comments": [
+    {"text": "The pricing comparison was helpful.", "like_count": 12}
+  ]
+}
+```
+
+Every fetch saves the unfiltered sample in its original Top order under `.cache/youtube-toolkit/comments/`, using the same lean JSON fields as stdout.
+Timestamped filenames keep each retrieval separate; the saved JSON has no metadata wrapper.
+
 ## Metadata and transcripts
 
 Metadata includes descriptions, thumbnails, and chapters. Transcripts return a JSON string by default or timed chunks with `--timestamps`. Manual English or Chinese subtitles are preferred, with the video's language family tried first; otherwise the toolkit uses original-language automatic captions. It excludes machine-translated tracks, converts Chinese transcript text to Taiwan Traditional, and removes caption spans overlapping SponsorBlock segments.
@@ -187,7 +226,7 @@ If the local dependencies or `ffmpeg` are unavailable, `stt-setup` reports that 
 
 ## Local artifacts
 
-Run commands from the directory where their research artifacts belong. Fresh yt-dlp metadata, search listings, channel listings, and normalized transcript documents are archived under `.cache/youtube-toolkit/`, with a UTC timestamp and a readable identifier in each filename. JSON artifacts contain `request`, `fetched_at`, and `payload`; repeated retrievals preserve earlier copies.
+Run commands from the directory where their research artifacts belong. Fresh yt-dlp metadata, comments, search listings, channel listings, and normalized transcript documents are archived under `.cache/youtube-toolkit/`, with a UTC timestamp and a readable identifier in each filename. Comment archives contain only `title`, `url`, and `comments`, with `text` and `like_count` per comment; other JSON artifacts contain `request`, `fetched_at`, and `payload`. Repeated retrievals preserve earlier copies.
 
 Saved copies are never automatically reused or expired. Semantic rankings and embeddings stay in memory for the current search. Long text fields in JSON stdout are capped at 400,000 characters; transcript exports and archived documents retain the complete text.
 

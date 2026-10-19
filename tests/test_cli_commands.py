@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+from types import SimpleNamespace
 import warnings
 
 import pytest
@@ -100,6 +101,190 @@ def test_video_metadata_command_returns_normalized_video_facts(monkeypatch) -> N
             {"title": "Demo", "start_seconds": 60.0, "end_seconds": None},
         ],
     }
+
+
+@pytest.fixture
+def comment_response(monkeypatch, tmp_path):
+    """Replace only the yt-dlp process so comment tests exercise real parsing, filtering, ordering, and archives."""
+    payload = {"id": "JpSHyEIZ_bo"}
+    calls = []
+
+    def run(command, **_kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(payload))
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("youtube_toolkit.youtube.client.subprocess.run", run)
+    return payload, calls
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected_ids", "limit"),
+    [
+        (["PRICING"], ["first", "second"], 100),
+        (["pricing details", "--limit", "1000"], ["first"], 1000),
+        (["[pricing]"], ["second"], 100),
+        (["STRASSE"], ["second"], 100),
+        ([], ["first", "second", "third"], 100),
+        ([""], ["first", "second", "third"], 100),
+        (["   "], ["first", "second", "third"], 100),
+        (["unmatched"], [], 100),
+    ],
+)
+def test_comments_search_filters_text_and_archives_the_full_sample(
+    comment_response, tmp_path, capsys, arguments, expected_ids, limit
+) -> None:
+    """CLI filtering keeps original text in a lean document and archives every fetched comment without bookkeeping fields."""
+    payload, calls = comment_response
+    payload.update(
+        title="Example",
+        comments=[
+            {
+                "id": "first",
+                "parent": "root",
+                "text": "Pricing details\nCosts $20.",
+                "like_count": 42,
+            },
+            {
+                "id": "second",
+                "parent": "root",
+                "text": "Straße [pricing] discussion",
+                "is_pinned": True,
+            },
+            {"id": "third", "parent": "root", "author": "pricing", "text": None},
+        ],
+        formats=[{"format_id": "provider-internal"}],
+    )
+
+    assert main(["comments", "JpSHyEIZ_bo", *arguments]) == 0
+
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    assert result == {
+        "title": "Example",
+        "url": "https://www.youtube.com/watch?v=JpSHyEIZ_bo",
+        "comments": [
+            {"text": comment.get("text") or "", "like_count": comment.get("like_count")}
+            for comment in payload["comments"]
+            if comment["id"] in expected_ids
+        ],
+    }
+    assert captured.err == ""
+    assert len(calls) == 1
+    command = calls[0]
+    assert "--skip-download" in command
+    assert "--no-playlist" in command
+    assert "--write-comments" in command
+    assert command[command.index("--extractor-args") + 1] == (
+        f"youtube:comment_sort=top;max_comments={limit},all,0,0,1"
+    )
+    archive_path = next((tmp_path / ".cache/youtube-toolkit/comments").glob("*.json"))
+    archive = json.loads(archive_path.read_text(encoding="utf-8"))
+    assert archive == {
+        "title": "Example",
+        "url": "https://www.youtube.com/watch?v=JpSHyEIZ_bo",
+        "comments": [
+            {"text": "Pricing details\nCosts $20.", "like_count": 42},
+            {"text": "Straße [pricing] discussion", "like_count": None},
+            {"text": "", "like_count": None},
+        ],
+    }
+
+
+@pytest.mark.parametrize("comments", [None, []])
+def test_comments_search_returns_an_empty_array_when_none_are_available(
+    comment_response, capsys, comments
+) -> None:
+    """Absent or disabled comments remain a jq-friendly empty result."""
+    payload, _calls = comment_response
+    payload["comments"] = comments
+
+    assert main(["comments", "JpSHyEIZ_bo", "pricing"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["comments"] == []
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_texts"),
+    [
+        ("", ["A", "D match", "B match", "E", "C match", "F match"]),
+        ("match", ["B match", "D match", "C match", "F match"]),
+    ],
+)
+def test_comments_interleaves_next_unseen_ranked_matches(
+    comment_response, capsys, query, expected_texts
+) -> None:
+    """Each ranking gets its next unseen match; filtering happens before blending and duplicate IDs appear once."""
+    comments = [
+        {"id": "a", "text": "A", "like_count": 100},
+        {"id": "b", "text": "B match", "like_count": 40},
+        {"id": "c", "text": "C match", "like_count": 30},
+        {"id": "d", "text": "D match", "like_count": 90},
+        {"id": "e", "text": "E", "like_count": 80},
+        {"id": "f", "text": "F match", "like_count": 70},
+    ]
+    payload, _calls = comment_response
+    payload["comments"] = [*comments, comments[0]]
+
+    assert main(["comments", "JpSHyEIZ_bo", query]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert [comment["text"] for comment in result["comments"]] == expected_texts
+
+
+def test_comments_preserves_like_ties_and_unknown_counts(
+    comment_response, capsys
+) -> None:
+    """Known zero likes rank ahead of unknown counts, ties keep Top order, and equal text is not a duplicate ID."""
+    payload, _calls = comment_response
+    payload["comments"] = [
+        {"id": "a", "text": "Same text", "like_count": 1},
+        {"id": "b", "text": "B", "like_count": None},
+        {"id": "c", "text": "C", "like_count": 0},
+        {"id": "d", "text": "D", "like_count": 0},
+        {"id": "e", "text": "Same text", "like_count": 0},
+    ]
+    assert main(["comments", "JpSHyEIZ_bo"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["comments"] == [
+        {"text": "Same text", "like_count": 1},
+        {"text": "C", "like_count": 0},
+        {"text": "B", "like_count": None},
+        {"text": "D", "like_count": 0},
+        {"text": "Same text", "like_count": 0},
+    ]
+
+
+def test_comments_refetches_and_preserves_lean_archive_history(
+    comment_response, tmp_path
+) -> None:
+    """Each retrieval contacts yt-dlp and saves a separate lean archive."""
+    payload, calls = comment_response
+    payload["comments"] = [{"id": "a", "text": "A", "like_count": 1}]
+    assert main(["comments", "JpSHyEIZ_bo"]) == 0
+    directory = tmp_path / ".cache/youtube-toolkit/comments"
+    first_path = next(directory.glob("*.json"))
+    first_copy = first_path.read_bytes()
+    payload["comments"][0]["like_count"] = 2
+    assert main(["comments", "JpSHyEIZ_bo"]) == 0
+    assert len(calls) == 2
+    assert first_path.read_bytes() == first_copy
+    assert sorted(
+        json.loads(path.read_text())["comments"][0]["like_count"]
+        for path in directory.glob("*.json")
+    ) == [1, 2]
+
+
+@pytest.mark.parametrize("limit", ["0", "-1", "1001"])
+def test_comments_rejects_out_of_range_fetch_limits_before_retrieval(
+    comment_response, capsys, limit
+) -> None:
+    _payload, calls = comment_response
+
+    assert main(["comments", "JpSHyEIZ_bo", "pricing", "--limit", limit]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "--limit must be between 1 and 1000" in captured.err
+    assert calls == []
 
 
 def test_video_transcript_command_selects_plain_or_timestamped_output(

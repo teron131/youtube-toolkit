@@ -24,6 +24,8 @@ STT_AUDIO_FORMAT_SELECTOR = "bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio[ext
 VISION_VIDEO_FORMAT_SELECTOR = "bestvideo[height<=720][ext=mp4]/bestvideo[height<=720]"
 # A metadata, search, or listing request that takes over a minute is stuck.
 YTDLP_REQUEST_TIMEOUT_SECONDS = 60
+# Keep comment pagination bounded even when a caller overrides the normal sample size.
+MAX_COMMENT_LIMIT = 1000
 # A download can simply be slow: YouTube was measured as low as 0.5 MB/s, and a two-hour 720p video is about 300 MB.
 YTDLP_DOWNLOAD_TIMEOUT_SECONDS = 10 * 60
 # YouTube refuses requests in short bursts, so a refused process is retried three times, after 5, 10, and 15 seconds.
@@ -60,6 +62,25 @@ class YtDlpClient:
             identifier=require_video_id(video_ref),
             error_message="yt-dlp metadata request failed",
             prepare=_drop_translated_captions,
+        )
+
+    def comments(self, video_ref: VideoRef, *, limit: int) -> dict[str, Any]:
+        """Fetch up to limit Top comments without replies or media; the comment workflow owns the lean archive."""
+        if not 1 <= limit <= MAX_COMMENT_LIMIT:
+            raise ValueError(f"--limit must be between 1 and {MAX_COMMENT_LIMIT}")
+        return _request_json(
+            [
+                *YTDLP_COMMAND,
+                "--ignore-config",
+                "-J",
+                "--skip-download",
+                "--no-playlist",
+                "--write-comments",
+                "--extractor-args",
+                f"youtube:comment_sort=top;max_comments={limit},all,0,0,1",
+                normalize_youtube_url(video_ref),
+            ],
+            error_message="yt-dlp comments request failed",
         )
 
     def search(
@@ -209,22 +230,28 @@ class YtDlpClient:
     ) -> dict[str, Any]:
         """Fetch a fresh yt-dlp response, apply any response policy, and archive the result without consulting previous requests."""
         request = {"arguments": command[len(YTDLP_COMMAND) :]}
-        result = _run(
-            command,
-            action="request",
-            timeout_seconds=YTDLP_REQUEST_TIMEOUT_SECONDS,
-            failure_message=error_message,
-        )
-        try:
-            data = json.loads(result.stdout)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError("yt-dlp did not return valid JSON") from exc
-        if not isinstance(data, dict):
-            raise RuntimeError("yt-dlp returned a non-object JSON payload")
+        data = _request_json(command, error_message=error_message)
         if prepare is not None:
             data = prepare(data)
         write_artifact(namespace, identifier, request, data)
         return data
+
+
+def _request_json(command: list[str], *, error_message: str) -> dict[str, Any]:
+    """Run a bounded metadata request and reject malformed JSON before a workflow can archive it."""
+    result = _run(
+        command,
+        action="request",
+        timeout_seconds=YTDLP_REQUEST_TIMEOUT_SECONDS,
+        failure_message=error_message,
+    )
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("yt-dlp did not return valid JSON") from exc
+    if not isinstance(data, dict):
+        raise RuntimeError("yt-dlp returned a non-object JSON payload")
+    return data
 
 
 def _drop_translated_captions(metadata: dict[str, Any]) -> dict[str, Any]:

@@ -1,6 +1,6 @@
 ---
 name: youtube
-description: Use the YouTube toolkit for search with directory-local request archives, transcripts, metadata, and visual context.
+description: Use the YouTube toolkit to search videos and comment text, read transcripts and metadata, and extract visual context with directory-local request archives.
 ---
 
 # YouTube
@@ -27,6 +27,29 @@ Transcript returns one JSON text string, or timed chunks with `--timestamps`. Ma
 `--export` writes metadata and transcript to `<normalized-title>_<normalized-channel>.txt` in the working directory and returns the path. Add `--timestamps` for a timed export or `--force` to replace an existing export; `--force` requires `--export`. Long text fields in JSON stdout are capped at 400,000 characters, so use the export or archived transcript when complete long-form text is needed.
 
 `channel` lists recent uploads without search filters. `--last N` selects a count (10 by default), while `--days N` uses a UTC date cutoff and adds `upload_date` to each entry. The day window fetches per-video metadata and omits videos it cannot date; `--last` then controls the initial listing size rather than the final result count.
+
+## Search comments
+
+Use `comments` to find a keyword or phrase in a video's comments; pass a query when the task asks about a topic, claim, or audience reaction.
+
+```bash
+youtube comments <url-or-id> "pricing"
+youtube comments <url-or-id> "training data" --limit 250
+youtube comments <url-or-id> "pricing" | jq '.comments[] | select((.like_count // 0) >= 10)'
+```
+
+This fetches up to 100 top-level comments in YouTube's Top order, excludes replies, and matches comment text as a case-insensitive literal substring, like `rg -i -F`.
+The optional query is one keyword or phrase; regex and OR expressions are not interpreted.
+`--limit` accepts 1-1000, defaults to 100, and bounds the sample before filtering; out-of-range values fail before contacting YouTube.
+A query never causes more fetching to fill a match quota.
+Omit the query or pass `""` only when intentionally requesting the entire fetched sample.
+After filtering, results alternate between the next unseen comment in Top order and the next unseen comment ranked by descending likes, deduplicating IDs internally.
+Within the like-count ranking, ties preserve Top order and unavailable counts sort last; unavailable counts remain `null` in the output.
+Interleaving changes ordering within the sample, not retrieval coverage or network request count.
+The output contains only `title`, `url`, and `comments`, with only `text` and `like_count` per comment.
+Use `jq` for additional filtering on those fields.
+The unfiltered sample is archived in original Top order under `.cache/youtube-toolkit/comments/` using the same lean JSON fields and no metadata wrapper.
+An empty `comments` array means no matches or no available comments, not that the topic is absent from every comment on the video.
 
 ## Visual context
 
@@ -81,6 +104,6 @@ Prompts go to stderr and final JSON reports the configuration path and saved set
 
 ## Artifacts
 
-Fresh yt-dlp metadata, search listings, channel listings, and normalized transcript documents are saved as separate JSON artifacts. Filenames contain a UTC datetime and video ID, query slug, or channel identifier; the JSON records `request`, `fetched_at`, and `payload`. Search archives contain the retrieved listings; final rankings and embeddings live only in the current invocation. Saved copies are never automatically reused or expired. Transcript exports and archived documents retain complete text beyond the stdout cap.
+Fresh yt-dlp metadata, search listings, channel listings, and normalized transcript documents are saved as separate JSON artifacts. Filenames contain a UTC datetime and video ID, query slug, or channel identifier; the JSON records `request`, `fetched_at`, and `payload`. Comment archives use timestamped filenames but contain only `title`, `url`, and `comments`, with `text` and `like_count` per comment, in unfiltered Top order. Search archives contain the retrieved listings; final rankings and embeddings live only in the current invocation. Saved copies are never automatically reused or expired. Transcript exports and archived documents retain complete text beyond the stdout cap.
 
 Retrieval is directory-local; there is no database, collection administration, watchlist, scheduled sync, or persistent embedding index. The calling agent owns synthesis; summarize when the user requests analysis or a summary.

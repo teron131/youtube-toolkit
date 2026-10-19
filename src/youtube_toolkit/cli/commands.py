@@ -26,7 +26,12 @@ from ..transcript import (
     fetch_transcript,
     write_transcript_export,
 )
-from ..youtube import ChannelOptions, YtDlpClient, fetch_channel_videos
+from ..youtube import (
+    ChannelOptions,
+    YtDlpClient,
+    fetch_channel_videos,
+    search_comments,
+)
 from .health import require_vision
 
 
@@ -59,6 +64,11 @@ def vision(args: argparse.Namespace) -> dict[str, Any]:
     from ..vision import sample_vision
 
     return sample_vision(args.video_ref, max_frames=args.max_frames)
+
+
+def comments(args: argparse.Namespace) -> dict[str, Any]:
+    """Search comment text, or return the full fetched sample when the query is empty."""
+    return search_comments(args.video_ref, args.query, limit=args.limit)
 
 
 def channel(args: argparse.Namespace) -> dict[str, Any]:
