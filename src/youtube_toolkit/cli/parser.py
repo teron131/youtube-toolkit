@@ -13,6 +13,7 @@ from ..config import (
     DEFAULT_VISION_MAX_FRAMES,
     MAX_VISION_FRAMES,
 )
+from ..youtube import DEFAULT_COMMENT_LIMIT, MAX_COMMENT_LIMIT
 from . import commands
 from .health import run_doctor
 from .setup import run_setup
@@ -58,7 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _add_video_commands(subparsers: argparse._SubParsersAction) -> None:
-    """Register the metadata, transcript, and vision commands."""
+    """Register metadata, comment search, transcript, and vision commands for one video."""
     metadata_parser = subparsers.add_parser(
         "metadata", help="Fetch video metadata JSON"
     )
@@ -66,6 +67,28 @@ def _add_video_commands(subparsers: argparse._SubParsersAction) -> None:
         "video_ref", metavar="url", help="YouTube video URL or ID"
     )
     metadata_parser.set_defaults(handler=commands.metadata)
+
+    comments_parser = subparsers.add_parser(
+        "comments",
+        help="Search text within a video's Top comments",
+        description="Search a bounded sample of top-level comments by a case-insensitive literal keyword or phrase. Results alternate between YouTube's Top order and highest likes, skipping duplicates; replies are excluded.",
+    )
+    comments_parser.add_argument(
+        "video_ref", metavar="url", help="YouTube video URL or ID"
+    )
+    comments_parser.add_argument(
+        "query",
+        nargs="?",
+        default="",
+        help="Text to find in comments; omit or pass an empty string to return the full fetched sample",
+    )
+    comments_parser.add_argument(
+        "--limit",
+        type=int,
+        default=DEFAULT_COMMENT_LIMIT,
+        help=f"Maximum top-level comments to fetch before filtering (1-{MAX_COMMENT_LIMIT}; default: %(default)s)",
+    )
+    comments_parser.set_defaults(handler=commands.comments)
 
     transcript_parser = subparsers.add_parser(
         "transcript", help="Fetch a normalized transcript"
