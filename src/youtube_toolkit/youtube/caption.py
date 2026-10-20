@@ -89,7 +89,7 @@ def select_caption_track(
     available_summary = ", ".join(sorted({*manual, *automatic})) or "none"
     requested = ", ".join(languages)
     raise CaptionTranscriptUnavailable(
-        f"No caption track found for requested languages [{requested}]. Available languages: {available_summary}"
+        f"No JSON3 caption track found for requested languages [{requested}]. Available languages: {available_summary}"
     )
 
 
@@ -221,8 +221,12 @@ def _original_language_keys(language: str | None, automatic: dict) -> list[str]:
 
 
 def _track_url(tracks: list[dict]) -> str | None:
-    usable = [track for track in tracks if track.get("url")]
-    preferred = next((track for track in usable if track.get("ext") == "json3"), None)
-    if preferred is not None:
-        return preferred["url"]
-    return usable[0]["url"] if usable else None
+    # Only JSON3 can be parsed, so a language without it counts as unavailable and leaves room for the speech-to-text fallback.
+    return next(
+        (
+            track["url"]
+            for track in tracks
+            if track.get("ext") == "json3" and track.get("url")
+        ),
+        None,
+    )

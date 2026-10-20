@@ -63,7 +63,7 @@ def test_video_metadata_command_returns_normalized_video_facts(monkeypatch) -> N
                 "id": "JpSHyEIZ_bo",
                 "title": "Example",
                 "uploader": "Example Channel",
-                "channel_id": "UC123",
+                "channel_id": "UC1234567890123456789012",
                 "channel_handle": "@example",
                 "upload_date": "20260716",
                 "duration": 125.5,
@@ -85,7 +85,7 @@ def test_video_metadata_command_returns_normalized_video_facts(monkeypatch) -> N
         "url": "https://www.youtube.com/watch?v=JpSHyEIZ_bo",
         "title": "Example",
         "channel": "Example Channel",
-        "channel_id": "UC123",
+        "channel_id": "UC1234567890123456789012",
         "channel_handle": "@example",
         "upload_date": "2026-07-16",
         "duration_seconds": 125.5,
@@ -342,7 +342,7 @@ def test_video_transcript_export_writes_metadata_and_plain_transcript(
             url="https://www.youtube.com/watch?v=JpSHyEIZ_bo",
             title="What is DARKMATTER ?",
             channel="Example Channel",
-            channel_id="UC123",
+            channel_id="UC1234567890123456789012",
             channel_handle="@example",
             upload_date="2026-07-16",
             duration_seconds=5025,
@@ -459,7 +459,7 @@ def test_search_command_group_parses_channel_search() -> None:
             "--channels",
             "@OpenAI",
             "--channels",
-            "UC123",
+            "UC1234567890123456789012",
             "--limit",
             "2",
             "--sort",
@@ -468,7 +468,7 @@ def test_search_command_group_parses_channel_search() -> None:
     )
 
     assert search_args.command == "search"
-    assert search_args.channels == ["@OpenAI", "UC123"]
+    assert search_args.channels == ["@OpenAI", "UC1234567890123456789012"]
     assert search_args.limit == 2
     assert search_args.sort == "popularity"
 
@@ -591,7 +591,7 @@ def test_search_command_builds_channel_request(monkeypatch) -> None:
             uploaded_within_days=None,
             mode="native",
             return_type=None,
-            channels=["@OpenAI", "UC123"],
+            channels=["@OpenAI", "UC1234567890123456789012"],
             limit=None,
             sort="popularity",
             min_views=5000,
@@ -612,7 +612,7 @@ def test_search_command_builds_channel_request(monkeypatch) -> None:
             return_type=None,
             channels=(
                 ChannelTarget(channel_handle="@OpenAI"),
-                ChannelTarget(youtube_channel_id="UC123"),
+                ChannelTarget(youtube_channel_id="UC1234567890123456789012"),
             ),
             limit=commands.DEFAULT_CHANNEL_SEARCH_LIMIT,
             sort="popularity",

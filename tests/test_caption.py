@@ -251,6 +251,23 @@ def test_any_caption_source_falls_back_to_manual_subtitles() -> None:
     )
 
 
+def test_language_without_json3_track_counts_as_unavailable() -> None:
+    metadata = {
+        "automatic_captions": {},
+        "subtitles": {
+            "en": [
+                {
+                    "ext": "vtt",
+                    "url": "https://www.youtube.com/api/timedtext?v=example&fmt=vtt",
+                }
+            ]
+        },
+    }
+
+    with pytest.raises(CaptionTranscriptUnavailable):
+        select_caption_track(metadata, ["en"], "any")
+
+
 def test_default_languages_include_chinese_caption_fallbacks() -> None:
     metadata = {
         "automatic_captions": {},

@@ -28,7 +28,8 @@ ALLOWED_CHANNEL_HOSTS = {
     "music.youtube.com",
 }
 VIDEO_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{11}$")
-CHANNEL_ID_PATTERN = re.compile(r"^UC[A-Za-z0-9_-]+$")
+# Channel IDs are always UC plus 22 characters, so a short name such as UCLA stays a handle.
+CHANNEL_ID_PATTERN = re.compile(r"^UC[A-Za-z0-9_-]{22}$")
 VIDEO_PATH_PREFIXES = ("/shorts/", "/embed/", "/live/", "/v/")
 CHANNEL_PREFIXES = ("/@", "/channel/", "/user/", "/c/")
 VIDEO_ID_URL_PATTERNS = (
