@@ -37,10 +37,9 @@ def sample_vision(
     output_dir: Path | None = None,
     max_frames: int = DEFAULT_VISION_MAX_FRAMES,
 ) -> dict[str, Any]:
-    """Use timed captions to shortlist windows, then select images without model APIs or STT charges.
+    """No model API or speech-to-text is used: timed captions shortlist the windows, and missing, untimed, or unavailable captions fall back to evenly spaced visual windows.
 
-    Missing, untimed, or unavailable captions fall back to evenly distributed visual windows.
-    Only the requested windows are decoded; downloaded media is removed after collages publish.
+    Without output_dir, collages go to a new directory in the working directory's archive; an explicit output_dir has this video's earlier collages replaced.
     """
     if not 1 <= max_frames <= MAX_VISION_FRAMES:
         raise ValueError(f"max_frames must be between 1 and {MAX_VISION_FRAMES}")
@@ -125,7 +124,6 @@ def sample_vision(
 
 
 def format_timestamp(timestamp_seconds: float) -> str:
-    """Format a frame timestamp compactly for its visible footer."""
     total_seconds = round(timestamp_seconds)
     hours, remainder = divmod(total_seconds, 3600)
     minutes, remaining_seconds = divmod(remainder, 60)
@@ -138,7 +136,6 @@ def add_timestamp_footer(
     frame: np.ndarray,
     timestamp_seconds: float,
 ) -> np.ndarray:
-    """Append a Pillow-rendered timestamp without covering frame content."""
     footer = np.full(
         (TIMESTAMP_FOOTER_HEIGHT, frame.shape[1], 3), (15, 17, 21), dtype=np.uint8
     )
@@ -159,7 +156,6 @@ def add_timestamp_footer(
 def render_timestamped_collages(
     frames: list[SelectedFrame], output_stem: Path
 ) -> list[Path]:
-    """Assemble six chronological 360p screenshots per page without decoding the video again."""
     tile_height = FRAME_HEIGHT + TIMESTAMP_FOOTER_HEIGHT
     collage_width = FRAME_WIDTH * COLLAGE_COLUMNS + COLLAGE_PADDING * (
         COLLAGE_COLUMNS + 1
@@ -195,7 +191,6 @@ def publish_collages(
     destination: Path,
     video_id: str,
 ) -> list[Path]:
-    """Replace the previous collage set only after every new page renders."""
     for stale_path in destination.glob(f"{video_id}_vision_page*.jpg"):
         stale_path.unlink()
     published: list[Path] = []

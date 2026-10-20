@@ -1,4 +1,4 @@
-"""Transcript retrieval policy: prefer captions, fall back to cloud and then local speech-to-text when allowed and set up, archive each fresh document, and export readable text with overwrite protection."""
+"""Transcript retrieval policy: prefer captions, fall back to cloud and then local speech-to-text when allowed and set up, convert Chinese text to Taiwan Traditional, archive each fresh document, and export readable text with overwrite protection."""
 
 from __future__ import annotations
 
@@ -67,10 +67,7 @@ REPEATED_UNDERSCORES = re.compile(r"_+")
 
 @dataclass(frozen=True, slots=True)
 class TranscriptOptions:
-    """Caller policy for caption language, source, and permission to fall back to untimed STT.
-
-    Languages rank manual subtitles; automatic captions are used only in the spoken language of the video, never as machine translations.
-    """
+    """Languages rank manual subtitles; automatic captions are used only in the spoken language of the video, never as machine translations."""
 
     languages: tuple[str, ...] = DEFAULT_TRANSCRIPT_LANGUAGES
     source: str = "any"
@@ -78,20 +75,14 @@ class TranscriptOptions:
 
 
 class TranscriptClient(Protocol):
-    """yt-dlp surface for caption metadata and the speech-to-text audio fallback."""
-
-    def metadata(self, video_ref: VideoRef, /) -> dict[str, Any]:
-        """Fetch raw video metadata containing caption URLs and fallback STT identity."""
-        ...
+    def metadata(self, video_ref: VideoRef, /) -> dict[str, Any]: ...
 
     def download_transcription_audio(self, video_ref: VideoRef, /) -> Path:
-        """Download one temporary audio file for the transcript STT fallback."""
+        """The caller deletes the returned file."""
         ...
 
 
 class TranscriptExportResult(TypedDict):
-    """File created by an explicit transcript export request."""
-
     video_id: str
     path: str
 
@@ -103,10 +94,7 @@ def fetch_transcript(
     client: TranscriptClient | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> TranscriptDocument:
-    """Prefer captions, fall back to STT when allowed and set up, and archive the new document.
-
-    With neither a cloud key nor the local libraries installed the caption failure stands, so retrieval behaves as captions-only and downloads no audio.
-    Text from either source is returned in Taiwan Traditional script.
+    """With neither a cloud key nor the local libraries installed the caption failure stands, so retrieval behaves as captions-only and downloads no audio.
 
     Supplied metadata must be a response the current operation fetched for this video; otherwise metadata is fetched fresh.
     """
@@ -150,7 +138,6 @@ def write_transcript_export(
     timestamps: bool,
     force: bool,
 ) -> TranscriptExportResult:
-    """Write one deterministic UTF-8 transcript file without silently replacing an existing export."""
     path = Path.cwd() / _export_filename(document.metadata)
     try:
         with path.open(
@@ -172,10 +159,6 @@ def write_transcript_export(
 
 
 def _stt_transcriber() -> Callable[[Path], SpeechTranscription] | None:
-    """Choose how to transcribe an uncaptioned video, or nothing when no route is set up.
-
-    The cloud provider wins whenever its key is set; otherwise the local model is used when its libraries are installed.
-    """
     if cloud_stt_configured():
         return transcribe_in_cloud
     if local_stt_installed():
@@ -189,10 +172,6 @@ def _fetch_stt_transcript(
     client: TranscriptClient,
     transcribe: Callable[[Path], SpeechTranscription],
 ) -> TranscriptDocument:
-    """Download temporary audio, run STT, and return its untimed text as one transcript chunk.
-
-    The document's language is the one the transcriber detected, else the one yt-dlp reported for the video.
-    """
     metadata = VideoMetadata.from_yt_dlp(metadata_payload)
     audio_path = client.download_transcription_audio(metadata.video_id)
     try:
@@ -216,7 +195,7 @@ def _fetch_stt_transcript(
 
 
 def _export_filename(metadata: VideoMetadata) -> str:
-    """Build a portable title-and-channel filename without exposing the video ID."""
+    """`What is "AI"?  Part 1/2` by `Open AI` exports as `What_is_AI_Part_12_Open_AI.txt`; the video ID never appears."""
     title = _normalize_filename_component(metadata.title or "") or "transcript"
     channel = _normalize_filename_component(metadata.channel or "")
     stem = "_".join(part for part in (title, channel) if part)
@@ -224,7 +203,6 @@ def _export_filename(metadata: VideoMetadata) -> str:
 
 
 def _normalize_filename_component(value: str) -> str:
-    """Normalize human-readable metadata for a portable filename component."""
     normalized = unicodedata.normalize("NFKC", value)
     normalized = UNSAFE_FILENAME_CHARACTERS.sub("", normalized)
     normalized = FILENAME_WHITESPACE.sub("_", normalized)
@@ -237,7 +215,6 @@ def _render_export(
     *,
     timestamps: bool,
 ) -> str:
-    """Render normalized metadata followed by plain or timestamped transcript text."""
     metadata = document.metadata
     lines = [f"Title: {metadata.title or metadata.video_id}"]
     if metadata.channel:
@@ -273,7 +250,6 @@ def _render_export(
 
 
 def _format_timestamp(seconds: float) -> str:
-    """Format a non-negative second offset as a stable HH:MM:SS timestamp."""
     total_seconds = max(0, int(seconds))
     hours, remainder = divmod(total_seconds, 3600)
     minutes, remaining_seconds = divmod(remainder, 60)

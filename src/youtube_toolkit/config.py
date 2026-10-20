@@ -120,10 +120,7 @@ def config_int_value(
 
 def config_path() -> Path:
     """Locate per-user settings outside the installed package and research directories so reinstalls preserve keys."""
-    return (
-        user_config_path("youtube-toolkit", appauthor=False, roaming=True)
-        / "config.env"
-    )
+    return user_config_path("youtube-toolkit", appauthor=False, roaming=True) / ".env"
 
 
 def read_config() -> dict[str, str]:

@@ -1,9 +1,6 @@
-"""Search workflow orchestration for channel scope, mode, and return-type choices.
+"""Search workflow: collect candidates from YouTube search or the named channels, hydrate and filter them, then rank natively or hand them to semantic search.
 
-Candidate videos come from YouTube search, or from channel listings when the request names channels.
-Native mode stays metadata-first and returns video objects after local filters, ranking, and limits.
-Relevance order is delegated to YouTube: each query's results keep YouTube's ranking, and several queries are interleaved rather than rescored.
-Semantic mode runs title, transcript, chunk-index, and scoring stages, then returns chunks by default.
+Native mode stays metadata-first: relevance keeps YouTube's order, while recency and popularity sort locally.
 Full transcript output remains an explicit transcript command rather than a search side effect.
 """
 
@@ -33,7 +30,6 @@ DATE_FILTER_OVERSAMPLE_FACTOR = 12
 
 
 def search_videos(request: SearchRequest) -> list[VideoResult] | list[ChunkResult]:
-    """Run the public search workflow across the requested channel scope, filters, and result shapes."""
     resolved = resolve_request(request)
 
     candidates = collect_candidates(resolved)
@@ -58,10 +54,7 @@ def search_videos(request: SearchRequest) -> list[VideoResult] | list[ChunkResul
 
 
 def collect_candidates(resolved: ResolvedRequest) -> list[dict[str, Any]]:
-    """Collect candidates from the requested channels, or from YouTube search when none are named, hydrated with any metadata the filters or sort need.
-
-    Collection oversamples more under an upload-date filter because it discards candidates afterwards.
-    """
+    """Collection oversamples more under an upload-date filter because it discards candidates afterwards."""
     request = resolved.request
     fields = required_fields(resolved)
     date_filtered = resolved.upload_cutoff is not None
@@ -86,7 +79,6 @@ def collect_candidates(resolved: ResolvedRequest) -> list[dict[str, Any]]:
 
 
 def required_fields(resolved: ResolvedRequest) -> frozenset[str]:
-    """Name the candidate fields that active filters or native result ordering compare."""
     request = resolved.request
     native_sort = resolved.sort if request.mode == "native" else None
     fields: set[str] = set()
@@ -109,12 +101,11 @@ def hydrate_candidates(
     fields: frozenset[str],
     newest_first: bool = False,
 ) -> list[dict[str, Any]]:
-    """Fetch full metadata for candidates that pass the known filters but lack a field the filters or sort need.
+    """Flat listings can omit fields (channel listings omit upload dates), so unknown values pass a lenient prefilter, and only survivors missing a needed field are fetched.
 
-    Flat listings can omit fields (channel listings omit upload dates), so unknown values pass a lenient prefilter and only its survivors are fetched, concurrently and in order.
     A newest-first listing under an upload cutoff is fetched in batches that stop at the first video older than the cutoff, because every later video is older too.
     Failed fetches leave candidates unhydrated for the strict filter to judge.
-    Hydrated candidates also keep the raw response under "metadata", so later stages of this search reuse it instead of requesting it again.
+    Hydrated candidates keep the raw response under "metadata", so later stages of this search reuse it instead of requesting it again.
     """
     survivors = filter_candidates(candidates, resolved, allow_missing=True)
     stop_before = resolved.upload_cutoff if newest_first else None

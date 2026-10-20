@@ -11,8 +11,6 @@ from .identity import extract_channel_identity
 
 @dataclass(frozen=True, slots=True)
 class VideoMetadata:
-    """Normalized metadata shape for a YouTube video for search and transcript documents."""
-
     video_id: str
     url: str
     title: str | None = None
@@ -29,7 +27,6 @@ class VideoMetadata:
 
     @classmethod
     def from_yt_dlp(cls, metadata: dict[str, Any]) -> VideoMetadata:
-        """Translate yt-dlp video metadata into the toolkit's normalized video metadata contract."""
         video_id = str(metadata.get("id") or "").strip()
         if not video_id:
             raise ValueError("yt-dlp metadata did not include a video id")
@@ -57,15 +54,12 @@ class VideoMetadata:
 
 @dataclass(frozen=True, slots=True)
 class VideoChapter:
-    """Source chapter titles and time boundaries remain available independently of transcript text."""
-
     title: str
     start_seconds: float
     end_seconds: float | None
 
     @classmethod
     def from_yt_dlp(cls, chapter: dict[str, Any]) -> VideoChapter:
-        """Normalize source chapter times while retaining chapters without a known end."""
         return cls(
             title=str(chapter.get("title") or "Untitled chapter"),
             start_seconds=float(chapter.get("start_time") or 0),
@@ -77,8 +71,6 @@ class VideoChapter:
 
 @dataclass(frozen=True, slots=True)
 class TranscriptChunk:
-    """Timed transcript text span used for document rendering and semantic chunking."""
-
     start_seconds: float
     end_seconds: float
     text: str
@@ -86,7 +78,7 @@ class TranscriptChunk:
 
 @dataclass(frozen=True, slots=True)
 class SpeechTranscription:
-    """Speech-to-text result shared by the cloud and local routes: the text and, when the route detects it, the language."""
+    """`language` is None when the route reports no detected language."""
 
     text: str
     language: str | None = None
@@ -94,7 +86,7 @@ class SpeechTranscription:
 
 @dataclass(frozen=True, slots=True)
 class TranscriptDocument:
-    """Transcript document boundary returned by caption and STT workflows."""
+    """A speech-to-text document holds one untimed chunk at 0 seconds, and its `language` is `speech-to-text` when no language was detected or reported."""
 
     metadata: VideoMetadata
     language: str
@@ -107,7 +99,6 @@ class TranscriptDocument:
 
 
 def normalize_upload_date(upload_date: Any) -> str | None:
-    """Normalize yt-dlp YYYYMMDD dates to ISO dates while preserving already textual dates."""
     if not isinstance(upload_date, str):
         return None
     stripped_upload_date = upload_date.strip()
@@ -124,7 +115,6 @@ def normalize_text(value: Any) -> str | None:
 
 
 def normalize_title(value: Any) -> str | None:
-    """Normalize title text and convert Chinese script to the toolkit's Taiwan Traditional policy."""
     normalized_text = normalize_text(value)
     if normalized_text is None:
         return None
@@ -132,7 +122,6 @@ def normalize_title(value: Any) -> str | None:
 
 
 def normalize_count(count: Any) -> int | None:
-    """Accept integer counters from external metadata while rejecting booleans."""
     if isinstance(count, bool):
         return None
     if isinstance(count, int):
@@ -141,7 +130,6 @@ def normalize_count(count: Any) -> int | None:
 
 
 def normalize_number(value: Any) -> float | None:
-    """Accept numeric metadata values as floats while rejecting booleans."""
     if isinstance(value, bool):
         return None
     if isinstance(value, int | float):

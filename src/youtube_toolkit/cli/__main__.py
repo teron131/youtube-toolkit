@@ -1,4 +1,4 @@
-"""CLI entrypoint and command dispatch."""
+"""CLI entrypoint: command results go to stdout, and expected failures become one stderr line with exit status 1."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ from .parser import build_parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Dispatch parsed CLI commands and keep user-facing failures on stderr."""
     parser = build_parser()
     args = parser.parse_args(argv)
     try:

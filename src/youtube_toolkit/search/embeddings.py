@@ -11,14 +11,11 @@ from ..execution import collect_concurrently
 
 
 class EmbeddingError(RuntimeError):
-    """Raised when the configured embedding API cannot return a usable vector."""
+    """Covers invalid embedding configuration as well as failed or empty API responses."""
 
 
 class EmbeddingClient:
-    """One configured embedding endpoint shared by concurrent requests until closed.
-
-    A fresh SDK client per text would open a new TLS connection for every request; sharing the pool keeps connections alive between requests.
-    """
+    """A fresh SDK client per text would open a new TLS connection for every request; one shared client keeps connections alive between them."""
 
     def __init__(self, config: EmbeddingConfig | None = None) -> None:
         try:
@@ -49,11 +46,7 @@ class EmbeddingClient:
     def embed(
         self, text: str | list[str]
     ) -> list[float] | tuple[dict[str, list[float]], dict[str, str]]:
-        """Embed a string as one vector, or a list as text-keyed successes and failures.
-
-        Lists request each distinct text once, concurrently, and retain partial failures without discarding successful vectors.
-        Each request has a 60-second timeout and two retries; results are never cached across calls.
-        """
+        """A list never raises for individual texts: each distinct text is requested once, and failures come back as messages beside the successful vectors."""
         if isinstance(text, list):
             if not text:
                 return {}, {}

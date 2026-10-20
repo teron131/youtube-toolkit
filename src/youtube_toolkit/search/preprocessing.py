@@ -14,8 +14,6 @@ SortableValue = str | int | float | tuple[int | float, ...]
 
 
 class SearchVideoFields(TypedDict):
-    """Video facts every search result carries, whether it is a video or a chunk of one."""
-
     title: str | None
     channel_id: str | None
     channel_handle: str | None
@@ -26,7 +24,7 @@ class SearchVideoFields(TypedDict):
 
 
 class VideoResult(SearchVideoFields):
-    """One video in search output; `score` appears only for semantic search and `warnings` only when preparation degraded."""
+    """`score` appears only for semantic search, and `warnings` only when preparation degraded."""
 
     type: Literal["video"]
     video_id: str | None
@@ -36,8 +34,6 @@ class VideoResult(SearchVideoFields):
 
 
 class ChunkResult(TypedDict):
-    """One transcript passage in semantic search output, with its video's facts nested under `video`."""
-
     type: Literal["chunk"]
     video_id: str
     chunk_index: int
@@ -50,9 +46,8 @@ class ChunkResult(TypedDict):
 def interlace_relevance(
     candidate_lists: list[list[dict[str, Any]]],
 ) -> list[dict[str, Any]]:
-    """Merge each query's result list by taking turns, deduping by video ID.
+    """This is the ranking for multi-query search, not just a merge: every list arrives in YouTube's own relevance order, and nothing is scored locally because that would mean fetching and processing every candidate.
 
-    This is the ranking for multi-query search, not just a merge: every list arrives in YouTube's own relevance order, and nothing is scored locally because that would mean fetching and processing every candidate.
     Taking the next result from each list in turn assumes equal ranks are equally relevant, which keeps the merged order roughly descending at no cost.
     """
     merged: list[dict[str, Any]] = []
@@ -72,7 +67,6 @@ def interlace_relevance(
 
 
 def dedupe_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Keep the first occurrence of each resolvable video candidate and normalize its ID field."""
     merged: list[dict[str, Any]] = []
     seen_video_ids: set[str] = set()
     for candidate in candidates:
@@ -85,7 +79,6 @@ def dedupe_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def candidate_id(candidate: dict[str, Any]) -> str | None:
-    """Resolve a candidate's video ID from the known yt-dlp and URL fields."""
     for key in ("id", "video_id", "url", "webpage_url"):
         value = candidate.get(key)
         if isinstance(value, str):
@@ -100,7 +93,6 @@ def video_result(
     *,
     warnings: list[str] | None = None,
 ) -> VideoResult:
-    """Video results expose the stable public key set plus preparation warnings when transcript work degraded."""
     result: VideoResult = {
         "type": "video",
         "video_id": candidate_id(candidate),
@@ -115,7 +107,7 @@ def video_result(
 
 
 def video_fields(candidate: dict[str, Any]) -> SearchVideoFields:
-    """Project shared video facts, retaining a handle supplied under yt-dlp's uploader identity fields."""
+    """yt-dlp may supply the handle only under uploader_id or a channel URL, so it is extracted rather than read from channel_handle."""
     return {
         "title": candidate.get("title"),
         "channel_id": candidate.get("channel_id"),
@@ -132,7 +124,6 @@ def rank_by_value(
     *,
     value: Callable[[dict[str, Any]], Any],
 ) -> list[dict[str, Any]]:
-    """Sort candidates by a derived value while preserving unsortable candidates at the end."""
     present: list[tuple[SortableValue, dict[str, Any]]] = []
     missing: list[dict[str, Any]] = []
     for candidate in candidates:
@@ -150,7 +141,6 @@ def rank_by_value(
 
 
 def sortable(value: Any) -> SortableValue | None:
-    """Normalize supported ranking values and reject booleans or unorderable payloads."""
     if isinstance(value, bool):
         return None
     if isinstance(value, int | float):
@@ -169,7 +159,6 @@ def sortable(value: Any) -> SortableValue | None:
 
 
 def popularity(candidate: dict[str, Any]) -> tuple[float, float] | None:
-    """Popularity sorts by views first and likes second while treating absent counters as zero."""
     view_count = normalize_number(candidate.get("view_count"))
     like_count = normalize_number(candidate.get("like_count"))
     if view_count is None and like_count is None:
@@ -183,7 +172,6 @@ def filter_candidates(
     *,
     allow_missing: bool = False,
 ) -> list[dict[str, Any]]:
-    """Keep the candidates that pass every metadata filter of the resolved request."""
     return [
         candidate
         for candidate in candidates
@@ -197,10 +185,7 @@ def passes_filters(
     *,
     allow_missing: bool,
 ) -> bool:
-    """Decide whether one candidate satisfies every metadata filter of the resolved request.
-
-    With allow_missing, absent view counts, durations, and upload dates pass so callers can fetch them before strict filtering.
-    """
+    """With allow_missing, absent view counts, durations, and upload dates pass so callers can fetch them before strict filtering."""
     if candidate_id(candidate) is None:
         return False
     request = resolved.request
@@ -286,7 +271,6 @@ def text_matches(
     value: Any,
     needles: tuple[str, ...],
 ) -> bool:
-    """Require every configured substring to match case-insensitively."""
     if not needles:
         return True
     haystack = str(value or "").casefold()
@@ -297,7 +281,6 @@ def text_excluded(
     value: Any,
     needles: tuple[str, ...],
 ) -> bool:
-    """Reject text when any configured substring matches case-insensitively."""
     if not needles:
         return False
     haystack = str(value or "").casefold()
@@ -305,7 +288,6 @@ def text_excluded(
 
 
 def normalized_upload_date(value: Any) -> str | None:
-    """Normalize candidate upload dates from yt-dlp or ISO text for comparisons."""
     if not isinstance(value, str):
         return None
     stripped_value = value.strip()

@@ -22,6 +22,7 @@ def test_saved_settings_are_used_without_exporting_them(monkeypatch) -> None:
         monkeypatch.delenv(name, raising=False)
     before = dict(os.environ)
 
+    assert config.config_path().name == ".env"
     assert config.read_config() == {}
     assert not config.config_path().exists()
     config.save_config(settings)

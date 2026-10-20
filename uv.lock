@@ -1985,7 +1985,7 @@ wheels = [
 
 [[package]]
 name = "youtube-toolkit"
-version = "0.24.1"
+version = "0.24.2"
 source = { editable = "." }
 dependencies = [
     { name = "openai" },

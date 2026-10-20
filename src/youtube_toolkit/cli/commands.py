@@ -38,7 +38,6 @@ from .health import require_vision
 def transcript(
     args: argparse.Namespace,
 ) -> str | list[dict[str, Any]] | TranscriptExportResult:
-    """Return transcript data or export the same resolved document to the working directory."""
     if args.force and not args.export:
         raise ValueError("--force requires --export")
     document = fetch_transcript(args.video_ref)
@@ -54,12 +53,10 @@ def transcript(
 
 
 def metadata(args: argparse.Namespace) -> dict[str, Any]:
-    """Return normalized video facts without exposing the raw yt-dlp payload."""
     return asdict(VideoMetadata.from_yt_dlp(YtDlpClient().metadata(args.video_ref)))
 
 
 def vision(args: argparse.Namespace) -> dict[str, Any]:
-    """Return bounded timestamped visual context and its local collage paths."""
     require_vision()
     from ..vision import sample_vision
 
@@ -67,30 +64,22 @@ def vision(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def comments(args: argparse.Namespace) -> dict[str, Any]:
-    """Search comment text, or return the full fetched sample when the query is empty."""
     return search_comments(args.video_ref, args.query, limit=args.limit)
 
 
 def channel(args: argparse.Namespace) -> dict[str, Any]:
-    """Request a channel listing with the parsed count or date window."""
     return fetch_channel_videos(
         args.channel_ref, options=ChannelOptions(last=args.last, days=args.days)
     )
 
 
 def stt_setup(args: argparse.Namespace) -> dict[str, Any]:
-    """Report the cloud and local speech-to-text setup.
-
-    The local model is downloaded if needed and run once whenever its libraries are installed.
-    The cloud provider is only described unless --cloud-test asks for a real request, because the provider bills for it.
-    """
     cloud = check_cloud_stt() if args.cloud_test else cloud_stt_status()
     local = check_local_stt() if local_stt_installed() else {"installed": False}
     return {"cloud": cloud, "local": local}
 
 
 def search(args: argparse.Namespace) -> list[VideoResult] | list[ChunkResult]:
-    """Translate parsed CLI arguments into the public search request contract."""
     limit = args.limit
     if limit is None:
         limit = (

@@ -32,7 +32,6 @@ def test_split_transcript_chunks_uses_overlap() -> None:
 
 
 def test_embedding_client_uses_config_and_one_sdk_client(monkeypatch) -> None:
-    """The real SDK sends configured credentials, endpoint, dimensions, and float encoding through one reused client."""
     requests = []
 
     def respond(request):
@@ -75,7 +74,6 @@ def test_embedding_client_uses_config_and_one_sdk_client(monkeypatch) -> None:
 
 
 def test_embedding_request_retries_transient_network_failures(monkeypatch) -> None:
-    """SDK retries retain three total attempts and close the client after recovery."""
     attempts = 0
 
     def respond(request):
@@ -103,7 +101,6 @@ def test_embedding_request_retries_transient_network_failures(monkeypatch) -> No
 def test_embedding_batches_share_text_without_losing_results_or_failures(
     monkeypatch,
 ) -> None:
-    """Lists share one request per distinct text, keep partial failures, and fetch fresh embeddings on later calls."""
     requests = []
 
     def respond(request):
@@ -149,8 +146,6 @@ def test_embedding_batches_share_text_without_losing_results_or_failures(
     ],
 )
 def test_embedding_failures_remain_search_errors(monkeypatch, status, payload) -> None:
-    """API rejection and missing vectors stay within the caller's existing error contract."""
-
     def create_client(**kwargs):
         return OpenAI(
             **kwargs,

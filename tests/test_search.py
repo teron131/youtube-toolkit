@@ -1338,7 +1338,6 @@ def test_semantic_search_defaults_to_chunk_results(
 def test_live_semantic_search_fetches_transcripts_concurrently(
     monkeypatch,
 ) -> None:
-    """Independent caption work should overlap instead of serializing the semantic pipeline."""
     all_fetches_started = Barrier(4)
 
     def fake_fetch_channel_videos(

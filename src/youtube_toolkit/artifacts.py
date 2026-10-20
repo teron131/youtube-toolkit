@@ -11,7 +11,6 @@ from typing import Any
 
 
 def artifact_root() -> Path:
-    """Resolve local artifact storage without creating directories or consulting global settings."""
     return Path.cwd() / ".cache" / "youtube-toolkit"
 
 
@@ -21,10 +20,7 @@ def write_artifact(
     request: dict[str, Any] | None,
     payload: dict[str, Any],
 ) -> Path:
-    """Save each retrieval independently, preserving prior copies even when filenames collide.
-
-    A missing request saves the payload itself as a complete document, without a request or fetch-time wrapper.
-    """
+    """A None request saves the payload alone, without the request and fetched_at envelope."""
     fetched_at = datetime.now(UTC)
     document = (
         {"request": request, "fetched_at": fetched_at.isoformat(), "payload": payload}
@@ -51,7 +47,6 @@ def write_artifact(
 
 
 def create_artifact_directory(namespace: str, identifier: str) -> Path:
-    """Reserve a separate output directory so repeated visual extractions retain their prior collages."""
     directory = artifact_root() / namespace
     directory.mkdir(parents=True, exist_ok=True)
     stems = _artifact_stems(identifier, datetime.now(UTC))
@@ -65,7 +60,7 @@ def create_artifact_directory(namespace: str, identifier: str) -> Path:
 
 
 def _artifact_stems(identifier: str, fetched_at: datetime) -> Iterator[str]:
-    """Keep identifiers readable and path-safe, with numbered suffixes for same-time collisions."""
+    """`@Open AI/videos` fetched at 09:05:07.123456 UTC yields `2026-10-20T090507.123456Z-@Open_AI_videos`, then that stem with `-2`, `-3`, and so on."""
     label = re.sub(r"[^\w.@-]+", "_", identifier).strip(" ._")[:48] or "request"
     stem = f"{fetched_at.strftime('%Y-%m-%dT%H%M%S.%fZ')}-{label}"
     yield stem

@@ -40,8 +40,6 @@ VIDEO_ID_URL_PATTERNS = (
 
 @dataclass(frozen=True, slots=True)
 class ChannelIdentity:
-    """Public channel identity that may carry a durable ID, a handle, or both."""
-
     youtube_channel_id: str | None
     channel_handle: str | None
 
@@ -54,7 +52,7 @@ def validate_url(
     *,
     allowed_hosts: set[str] | tuple[str, ...],
 ) -> None:
-    """Reject URLs outside the scheme and host allowlist before external fetches."""
+    """Each allowed host also admits its subdomains."""
     parsed = urlparse(url)
     if parsed.scheme not in {"https", "http"}:
         raise ValueError(f"Unsupported URL scheme: {parsed.scheme or 'missing'}")
@@ -76,7 +74,6 @@ def is_channel_id(value: str) -> bool:
 
 
 def extract_video_id(video_ref: VideoRef) -> str | None:
-    """Extract a YouTube video ID from accepted ID, URL, or embedded URL forms."""
     candidate = video_ref.strip()
     if is_video_id(candidate):
         return candidate
@@ -114,7 +111,6 @@ def normalize_youtube_url(video_ref: VideoRef) -> str:
 
 
 def require_video_id(video_ref: VideoRef) -> str:
-    """Extract a video ID or raise with the public validation error for bad video refs."""
     video_id = extract_video_id(video_ref)
     if video_id is None:
         raise ValueError("Could not find a YouTube video ID")
@@ -153,7 +149,6 @@ def parse_channel_ref(channel_ref: ChannelRef) -> ChannelIdentity:
 
 
 def extract_channel_id(channel_ref: str) -> str | None:
-    """Extract a durable channel ID only when the reference matches YouTube channel-ID shape."""
     channel_id = normalize_channel_id(channel_ref)
     if channel_id is None or not is_channel_id(channel_id):
         return None
@@ -161,7 +156,7 @@ def extract_channel_id(channel_ref: str) -> str | None:
 
 
 def normalize_channel_url(channel_ref: ChannelRef) -> str:
-    """Canonicalize accepted channel references to the videos tab URL required by yt-dlp."""
+    """Canonicalize to the videos tab URL that yt-dlp lists, treating a bare name as a handle: `OpenAI` and `https://youtube.com/@OpenAI` both become `https://www.youtube.com/@OpenAI/videos`."""
     candidate = channel_ref.strip()
     if not candidate:
         raise ValueError("Expected a non-empty YouTube channel reference")
@@ -195,7 +190,6 @@ def extract_channel_identity(
     fallback_channel_id: str | None = None,
     fallback_channel_handle: str | None = None,
 ) -> ChannelIdentity:
-    """Extract the best durable channel identity from metadata with explicit fallback ownership."""
     youtube_channel_id = (
         normalize_channel_id(metadata.get("channel_id")) or fallback_channel_id
     )
@@ -224,7 +218,6 @@ def extract_channel_identity(
 
 
 def normalize_handle(handle: Any) -> str | None:
-    """Normalize channel handles from handles, usernames, or channel URLs while rejecting IDs."""
     if not isinstance(handle, str):
         return None
     stripped_handle = handle.strip()
@@ -244,7 +237,6 @@ def normalize_handle(handle: Any) -> str | None:
 
 
 def normalize_channel_id(channel_id: Any) -> str | None:
-    """Store channel IDs as caller-provided text after stripping empty external values."""
     if not isinstance(channel_id, str):
         return None
     stripped_channel_id = channel_id.strip()

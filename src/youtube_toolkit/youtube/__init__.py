@@ -1,4 +1,4 @@
-"""YouTube acquisition adapters."""
+"""The only code that talks to YouTube: yt-dlp commands, caption downloads, comment samples, and channel listings, each fetched fresh."""
 
 from .caption import CaptionTranscriptUnavailable, fetch_caption_transcript
 from .channels import ChannelOptions, fetch_channel_videos

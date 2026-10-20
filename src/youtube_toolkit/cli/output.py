@@ -14,7 +14,7 @@ LONG_STDOUT_TEXT_FIELDS = frozenset(
 
 
 def emit_json(payload: object) -> None:
-    """Agent-readable command payloads go through stdout text caps before JSON emission."""
+    """Strings under LONG_STDOUT_TEXT_FIELDS keys, and a bare string payload, are cut to MAX_STDOUT_TEXT_FIELD_CHARS without a marker."""
     root_key = "text" if isinstance(payload, str) else None
     json.dump(
         stdout_payload(payload, key=root_key), sys.stdout, indent=2, ensure_ascii=False
@@ -23,7 +23,6 @@ def emit_json(payload: object) -> None:
 
 
 def render_doctor(report: DoctorReport) -> str:
-    """Render the health-check report for humans while other commands keep JSON output."""
     return "\n".join(
         [
             "YouTube Toolkit",
@@ -39,7 +38,6 @@ def render_doctor(report: DoctorReport) -> str:
 
 
 def stdout_payload(payload: object, *, key: str | None = None) -> object:
-    """Cap only known long text fields while preserving valid JSON payloads."""
     if isinstance(payload, dict):
         return {
             item_key: stdout_payload(item_value, key=str(item_key))

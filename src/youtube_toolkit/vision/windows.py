@@ -13,7 +13,6 @@ from ..schemas import TranscriptChunk, TranscriptDocument
 PASSAGE_SECONDS = 25
 CAPTION_GAP_SECONDS = 5
 REDUNDANCY_THRESHOLD = 0.92
-# Function words contribute little to topical relevance; no visual-reference phrases are matched.
 STOP_WORDS = frozenset(
     """
     a an and are as at be been but by can could did do does for from had has have
@@ -29,7 +28,7 @@ SPONSOR_TITLE = re.compile(r"\b(?:sponsor(?:ed|ship)?|advertisement|ad break)\b"
 
 @dataclass(frozen=True, slots=True)
 class TranscriptWindow:
-    """A real caption time range with chapter relevance, not semantic importance or confidence."""
+    """Times come from real captions; `text_score` is TF-IDF similarity to its chapter's centroid, not semantic importance or confidence."""
 
     start_seconds: float
     end_seconds: float
@@ -48,11 +47,13 @@ class _Section:
 def select_transcript_windows(
     document: TranscriptDocument, *, max_windows: int = DEFAULT_VISION_MAX_FRAMES
 ) -> list[TranscriptWindow]:
-    """Select representative passages across chapters without inventing timing for untimed STT.
+    """Windows come back in time order and only from timed captions, so an untimed speech-to-text transcript yields none.
 
-    Captions are grouped at chapter boundaries and long pauses before sublinear TF-IDF ranks them against their chapter centroid.
-    Each chapter receives a first opportunity before additional, nonredundant passages fill the remaining allowance.
-    Missing chapters use equal time sections to retain coverage without pretending to infer topics.
+    1. Cut the timeline into sections at chapter boundaries, skipping sponsor chapters, or into equal sections when there are no chapters.
+    2. Group each section's captions into passages, breaking at pauses over CAPTION_GAP_SECONDS or once a passage spans PASSAGE_SECONDS.
+    3. Score each passage by sublinear TF-IDF similarity to its section's centroid.
+    4. Take each section's best passage, from evenly spaced sections when there are more sections than max_windows.
+    5. Fill the remaining allowance with nonoverlapping, nonredundant passages, least-represented sections first.
     """
     if max_windows < 1:
         return []
@@ -101,7 +102,6 @@ def select_transcript_windows(
         )
         offset += len(group)
 
-    # Choose evenly spaced chapter slots when the chapter count exceeds the allowance.
     if len(ranked) > max_windows:
         slots = (
             [len(ranked) // 2]
@@ -131,7 +131,6 @@ def select_transcript_windows(
         ]
         if not eligible:
             break
-        # Fill chapters with the fewest selections first, then use chapter-local relevance.
         group_number, index = min(
             eligible,
             key=lambda item: (

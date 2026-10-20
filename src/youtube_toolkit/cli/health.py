@@ -1,4 +1,7 @@
-"""CLI readiness checks, optional dependency guards, and local environment reporting."""
+"""CLI readiness checks, optional dependency guards, and local environment reporting.
+
+Checks inspect configuration and installed packages only: they send no API requests, load no models, create no files, and report no secret values.
+"""
 
 from __future__ import annotations
 
@@ -20,8 +23,6 @@ VISION_MODULES = ("numpy", "PIL", "cv2", "scenedetect")
 
 
 class EmbeddingHealthResult(TypedDict):
-    """Embedding readiness without exposing secrets or sending API requests."""
-
     ok: bool
     model: str
     status: Literal["configured", "missing", "invalid"]
@@ -29,8 +30,6 @@ class EmbeddingHealthResult(TypedDict):
 
 
 class DoctorReport(TypedDict):
-    """Runtime, artifact location, and optional capability readiness for the doctor command."""
-
     yt_dlp_version: str
     config: str
     artifacts: str
@@ -41,7 +40,6 @@ class DoctorReport(TypedDict):
 
 
 def run_doctor(args: argparse.Namespace) -> DoctorReport:
-    """Inspect the current working directory and optional retrieval capabilities without creating files."""
     del args
     import yt_dlp.version
 
@@ -57,7 +55,6 @@ def run_doctor(args: argparse.Namespace) -> DoctorReport:
 
 
 def embedding_api_health() -> EmbeddingHealthResult:
-    """Validate effective configuration for optional semantic search without exposing keys."""
     model = config.config_value("EMBEDDING_MODEL") or config.DEFAULT_EMBEDDING_MODEL
     if config.config_value("EMBEDDING_API_KEY") is None:
         return {
@@ -79,7 +76,6 @@ def embedding_api_health() -> EmbeddingHealthResult:
 
 
 def stt_health() -> str:
-    """Describe which speech-to-text route videos without captions would take, without sending API requests or loading a model."""
     provider = cloud_provider()
     if cloud_stt_configured():
         return f"Configured ({provider.label} API); `youtube stt-setup --cloud-test` sends a billed test"
@@ -92,7 +88,6 @@ def stt_health() -> str:
 
 
 def vision_available() -> bool:
-    """Check that every vision dependency can be located without loading the packages."""
     try:
         return all(find_spec(module) is not None for module in VISION_MODULES)
     except (ImportError, ValueError):
@@ -100,7 +95,6 @@ def vision_available() -> bool:
 
 
 def require_vision() -> None:
-    """Stop the vision command with installation guidance when dependencies are missing."""
     if vision_available():
         return
     raise RuntimeError(

@@ -41,13 +41,13 @@ Keys use hidden prompts, and there are no command-line key flags.
 Press Enter to keep an existing saved value, or enter `-` to remove its saved override.
 Canceling before completion saves nothing.
 
-Settings are saved in an application-specific `config.env` using `.env` syntax (`KEY=value`):
+Settings are saved in an application-specific `.env` file using `KEY=value` syntax:
 
 | Platform | Configuration file |
 | --- | --- |
-| macOS | `~/Library/Application Support/youtube-toolkit/config.env` |
-| Linux | `${XDG_CONFIG_HOME:-~/.config}/youtube-toolkit/config.env` |
-| Windows | `%APPDATA%/youtube-toolkit/config.env` |
+| macOS | `~/Library/Application Support/youtube-toolkit/.env` |
+| Linux | `${XDG_CONFIG_HOME:-~/.config}/youtube-toolkit/.env` |
+| Windows | `%APPDATA%/youtube-toolkit/.env` |
 
 `XDG_CONFIG_HOME` overrides the configuration directory on both Linux and macOS.
 Setup changes no shell startup files or `PATH` settings.

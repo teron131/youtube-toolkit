@@ -44,7 +44,6 @@ def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
     monkeypatch,
     tmp_path,
 ) -> None:
-    """Normal transcript acquisition should use STT when captions are unavailable."""
     audio_path = tmp_path / "JpSHyEIZ_bo.m4a"
     audio_path.write_bytes(b"audio")
 
@@ -90,8 +89,6 @@ def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
 
 
 def test_fetch_transcript_fetches_and_archives_captions(monkeypatch, tmp_path) -> None:
-    """Public transcript retrieval saves captions in the current directory archive."""
-
     class FakeClient:
         def metadata(self, video_ref: str) -> dict:
             return {
@@ -137,8 +134,6 @@ def test_fetch_transcript_fetches_and_archives_captions(monkeypatch, tmp_path) -
 def test_caption_text_is_converted_to_taiwan_traditional(
     monkeypatch, tmp_path, language, caption, expected
 ) -> None:
-    """Captions follow the same script policy as speech-to-text: Taiwan Traditional characters, original wording."""
-
     class FakeClient:
         def metadata(self, video_ref: str) -> dict:
             return {
@@ -173,7 +168,6 @@ def test_stt_fallback_removes_downloaded_audio_after_failure(
     monkeypatch,
     tmp_path,
 ) -> None:
-    """A failed stateless STT fallback must not leave downloaded audio behind."""
     audio_path = tmp_path / "JpSHyEIZ_bo.m4a"
     audio_path.write_bytes(b"audio")
 
@@ -204,7 +198,6 @@ def test_stt_fallback_removes_downloaded_audio_after_failure(
 
 
 def test_fetch_caption_payload_retries_transient_network_failures(monkeypatch) -> None:
-    """Caption downloads should retry transient failures and preserve bounded backoff."""
     attempts = 0
     delays: list[float] = []
 
@@ -239,7 +232,6 @@ def test_fetch_caption_payload_retries_transient_network_failures(monkeypatch) -
 
 
 def test_any_caption_source_falls_back_to_manual_subtitles() -> None:
-    """Default caption selection can use manual subtitles when automatic captions are absent."""
     metadata = {
         "automatic_captions": {},
         "subtitles": {
@@ -260,7 +252,6 @@ def test_any_caption_source_falls_back_to_manual_subtitles() -> None:
 
 
 def test_default_languages_include_chinese_caption_fallbacks() -> None:
-    """Default transcript language selection includes common Chinese caption codes."""
     metadata = {
         "automatic_captions": {},
         "subtitles": {
@@ -283,7 +274,6 @@ def test_default_languages_include_chinese_caption_fallbacks() -> None:
 
 
 def test_default_languages_prefer_hong_kong_and_cantonese_before_simplified() -> None:
-    """Default transcript language selection prefers Traditional/HK keys before Simplified Chinese."""
     metadata = {
         "automatic_captions": {},
         "subtitles": {
@@ -312,7 +302,6 @@ def test_default_languages_prefer_hong_kong_and_cantonese_before_simplified() ->
 
 
 def test_default_languages_prefer_manual_english_before_automatic_chinese() -> None:
-    """Default transcript language selection prefers English even across caption sources."""
     metadata = {
         "automatic_captions": {
             "zh-Hant": [
@@ -356,7 +345,6 @@ def caption_track(lang: str, translated_to: str | None = None) -> dict:
 def test_default_languages_prefer_original_captions_over_machine_translations(
     language, expected_key, expected_lang
 ) -> None:
-    """Without English or Chinese originals, the spoken language wins over YouTube's machine translations, even on dubbed videos."""
     metadata = {
         "language": language,
         "automatic_captions": {
@@ -387,7 +375,6 @@ def test_default_languages_prefer_original_captions_over_machine_translations(
 def test_manual_subtitles_follow_spoken_language_before_automatic_captions(
     language, manual, expected
 ) -> None:
-    """Manual English or Chinese comes first, led by the spoken language; a video without automatic captions counts as Chinese."""
     spoken = language or "zh"
     metadata = {
         "language": language,
@@ -404,7 +391,6 @@ def test_manual_subtitles_follow_spoken_language_before_automatic_captions(
 
 
 def test_metadata_drops_machine_translated_captions(monkeypatch, tmp_path) -> None:
-    """Translations are removed before metadata is returned or archived, keeping the original tracks."""
     import json
 
     from youtube_toolkit.youtube.client import YtDlpClient
@@ -447,7 +433,6 @@ def test_metadata_drops_machine_translated_captions(monkeypatch, tmp_path) -> No
 def test_transcript_archives_preserve_timing_and_retrieval_options(
     monkeypatch, tmp_path, options
 ) -> None:
-    """Equivalent video URLs fetch fresh documents and preserve each retrieval policy."""
     from youtube_toolkit.schemas import TranscriptDocument, VideoChapter, VideoMetadata
 
     monkeypatch.chdir(tmp_path)
@@ -517,7 +502,6 @@ def test_transcript_archives_preserve_timing_and_retrieval_options(
 def test_caption_only_policy_never_uses_stt(
     monkeypatch, tmp_path, archived_stt
 ) -> None:
-    """Caption-only retrieval ignores saved speech transcripts and never triggers paid audio work."""
     video_id = "JpSHyEIZ_bo"
     monkeypatch.chdir(tmp_path)
     if archived_stt:
@@ -554,7 +538,6 @@ def test_caption_only_policy_never_uses_stt(
 def test_stt_without_any_route_keeps_caption_failure_without_audio_work(
     monkeypatch, tmp_path
 ) -> None:
-    """With no cloud key and no local libraries installed retrieval is captions-only: the caption failure surfaces and no audio is downloaded."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     monkeypatch.setattr("youtube_toolkit.transcript.local_stt_installed", lambda: False)
@@ -577,7 +560,6 @@ def test_stt_without_any_route_keeps_caption_failure_without_audio_work(
 def test_stt_prefers_cloud_and_falls_back_to_the_local_model(
     monkeypatch, tmp_path, cloud_key, expected_text, expected_language
 ) -> None:
-    """The cloud provider wins when its key is set; otherwise the local model transcribes and the video's reported language labels the result."""
     audio_path = tmp_path / "JpSHyEIZ_bo.m4a"
     audio_path.write_bytes(b"audio")
     monkeypatch.chdir(tmp_path)
@@ -616,7 +598,6 @@ def test_stt_prefers_cloud_and_falls_back_to_the_local_model(
 
 
 def test_supplied_transcript_metadata_must_match_video(monkeypatch, tmp_path) -> None:
-    """A caller cannot archive another video's captions under the requested video ID."""
     monkeypatch.chdir(tmp_path)
     with pytest.raises(
         ValueError, match="Supplied metadata does not match requested video"

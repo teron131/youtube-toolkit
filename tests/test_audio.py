@@ -10,7 +10,6 @@ from youtube_toolkit.youtube.client import STT_AUDIO_FORMAT_SELECTOR, YtDlpClien
 
 
 def test_stt_audio_format_prefers_xai_and_elevenlabs_compatible_containers() -> None:
-    """Audio downloads prefer documented STT upload containers without conversion."""
     assert (
         STT_AUDIO_FORMAT_SELECTOR
         == "bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio[ext=aac]"
@@ -21,7 +20,6 @@ def test_download_transcription_audio_uses_unique_artifact_stem(
     monkeypatch,
     tmp_path,
 ) -> None:
-    """Audio download paths include the video ID without sharing a mutable output file."""
     monkeypatch.chdir(tmp_path)
     commands = []
 
@@ -32,7 +30,6 @@ def test_download_transcription_audio_uses_unique_artifact_stem(
         check,
         timeout,
     ):
-        """Capture yt-dlp args and create the expected output file."""
         assert timeout == 600
         commands.append(command)
         output_pattern = Path(command[command.index("--output") + 1])
@@ -60,7 +57,6 @@ def test_download_transcription_audio_uses_unique_artifact_stem(
 
 
 def test_channel_videos_omits_playlist_end_when_unlimited(monkeypatch) -> None:
-    """Unlimited channel fetches should stay flat and avoid playlist caps."""
     calls = {}
 
     def fake_json(
@@ -107,7 +103,6 @@ def test_channel_videos_omits_playlist_end_when_unlimited(monkeypatch) -> None:
 def test_identical_requests_refetch_and_preserve_history(
     monkeypatch, tmp_path, namespace, identifier, retrieve
 ) -> None:
-    """Every retrieval contacts yt-dlp and keeps earlier responses searchable by identifier."""
     import json
 
     from youtube_toolkit.artifacts import artifact_root
@@ -144,7 +139,6 @@ def test_identical_requests_refetch_and_preserve_history(
 def test_artifact_names_sanitize_identifiers_and_preserve_same_time_copies(
     monkeypatch, tmp_path
 ) -> None:
-    """Unsafe identifiers stay within their namespace and same-time writes keep every payload."""
     from datetime import UTC, datetime
     import json
 
@@ -183,7 +177,6 @@ def test_artifact_names_sanitize_identifiers_and_preserve_same_time_copies(
 def test_failed_audio_download_cleans_only_its_own_partial_files(
     monkeypatch, tmp_path, timed_out
 ) -> None:
-    """Failures and timeouts release this download's partial files without deleting other audio."""
     from youtube_toolkit.artifacts import artifact_root
 
     monkeypatch.chdir(tmp_path)
@@ -216,7 +209,6 @@ def test_failed_audio_download_cleans_only_its_own_partial_files(
 def test_refused_downloads_are_rerun_after_a_pause(
     monkeypatch, tmp_path, refusals, expected_calls, expected_delays
 ) -> None:
-    """An HTTP 403 from YouTube is retried three times with backoff, then the refusal is surfaced."""
     monkeypatch.chdir(tmp_path)
     calls = []
     delays: list[float] = []

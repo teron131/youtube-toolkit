@@ -20,10 +20,7 @@ TONE_FREQUENCY_HZ = 440
 
 @contextmanager
 def tone_recording() -> Generator[Path]:
-    """Yield a temporary WAV file holding a quiet two-second tone, removing it afterwards.
-
-    A tone has no words, so a check that uses it proves a route accepts and processes audio, not that its transcripts are accurate.
-    """
+    """A tone has no words, so a check that uses it proves a route accepts and processes audio, not that its transcripts are accurate."""
     samples = array(
         "h",
         (

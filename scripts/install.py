@@ -15,7 +15,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 def run(
     *arguments: str, capture_output: bool = False
 ) -> subprocess.CompletedProcess[str]:
-    """Run one required installation command from the repository root."""
     return subprocess.run(  # noqa: S603
         arguments,
         cwd=REPO_ROOT,
@@ -26,7 +25,6 @@ def run(
 
 
 def built_wheel_path() -> Path:
-    """Resolve the wheel name from project metadata after the build completes."""
     project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
         "project"
     ]
@@ -38,13 +36,11 @@ def built_wheel_path() -> Path:
 def wheel_requirement(
     wheel_path: Path, *, vision: bool = False, stt: bool = False
 ) -> str:
-    """Select the optional capabilities to install with the wheel."""
     extras = [name for name, wanted in (("vision", vision), ("stt", stt)) if wanted]
     return f"{wheel_path}[{','.join(extras)}]" if extras else str(wheel_path)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    """Parse the optional capability installation flags."""
     parser = argparse.ArgumentParser(
         description="Install the YouTube Toolkit system command."
     )
@@ -62,7 +58,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Replace the installed system command and report retrieval readiness."""
     args = parse_args(argv)
     run("uv", "build", "--wheel", "--python", sys.executable)
     wheel_path = built_wheel_path()

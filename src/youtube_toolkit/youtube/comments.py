@@ -16,11 +16,9 @@ DEFAULT_COMMENT_LIMIT = 100
 def search_comments(
     video_ref: VideoRef, query: str = "", *, limit: int = DEFAULT_COMMENT_LIMIT
 ) -> dict[str, Any]:
-    """Match a literal phrase case-insensitively within freshly fetched top-level comments.
+    """An omitted or blank query returns the entire fetched sample.
 
-    An omitted or blank query returns the entire fetched sample.
     The limit applies before filtering; sparse matches never trigger additional retrievals.
-    Matching comments alternate between Top and descending like-count order, with each comment returned once.
     The archive retains the unfiltered sample in Top order using the same lean fields as the output.
     """
     payload = YtDlpClient().comments(video_ref, limit=limit)
@@ -43,7 +41,6 @@ def search_comments(
 
 
 def _project(comments: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Keep original text and available like counts in both output and saved comment rows."""
     return [
         {"text": comment.get("text") or "", "like_count": comment.get("like_count")}
         for comment in comments
@@ -51,9 +48,8 @@ def _project(comments: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _interleave(comments: list[dict[str, Any]]) -> Iterator[dict[str, Any]]:
-    """Take the next unseen comment from each ranking in turn, starting with Top.
+    """Like-count ties preserve Top order, and unknown counts sort last.
 
-    Like-count ties preserve Top order, and unknown counts sort last.
     Both rankings contain the same sample, so exhausting either means every comment has been emitted.
     """
     by_likes = sorted(

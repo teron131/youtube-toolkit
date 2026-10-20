@@ -49,15 +49,12 @@ class VisualScores:
 
 @dataclass(frozen=True, slots=True)
 class SelectedFrame:
-    """Keep one owned RGB image and the evidence explaining its selection."""
-
     timestamp_seconds: float
     image: np.ndarray = field(repr=False, compare=False)
     transcript: TranscriptWindow | None
     visual_scores: VisualScores
 
     def to_dict(self) -> dict[str, Any]:
-        """Project selection evidence without exposing the in-memory image buffer."""
         return {
             "timestamp_seconds": self.timestamp_seconds,
             "transcript": asdict(self.transcript) if self.transcript else None,
@@ -73,7 +70,6 @@ def select_frames(
     duration: float,
     max_frames: int = DEFAULT_VISION_MAX_FRAMES,
 ) -> list[SelectedFrame]:
-    """Decode bounded windows and retain distinct representatives using image measurements alone."""
     detector = cv2.CascadeClassifier(
         str(Path(cv_data.haarcascades) / "haarcascade_frontalface_default.xml")
     )
@@ -124,7 +120,10 @@ def select_frames(
 def decode_window(
     video_path: Path, start: float, stop: float, ffmpeg_path: str
 ) -> np.ndarray:
-    """Seek before decoding so analysis cost depends on shortlisted intervals, not full video length."""
+    """Seek before decoding so analysis cost depends on shortlisted intervals, not full video length.
+
+    Frames are sampled once per second, so callers read a frame's index as its offset in seconds from start.
+    """
     output = run_ffmpeg(
         ffmpeg_path,
         [
@@ -152,8 +151,6 @@ def decode_window(
 
 @dataclass(frozen=True, slots=True)
 class _Candidate:
-    """One clear shot representative and its prepared duplicate-comparison statistics."""
-
     index: int
     scores: VisualScores
     thumbnail: _ThumbnailStats
@@ -167,10 +164,13 @@ def choose_frame(
     retained: list[_ThumbnailStats],
     face_detector: cv2.CascadeClassifier,
 ) -> _Candidate | None:
-    """Prefer sustained, nonduplicate shots and clear stable representatives, with a portrait preference.
+    """None means every candidate duplicates an earlier pick.
 
-    Clarity is compared within each shot so diagrams do not compete with photographic texture.
-    Large faces are downweighted only when another sustained shot exists; no text phrases enter this stage.
+    1. Cut the clip into shots with an adaptive scene detector.
+    2. In each shot overlapping the window, drop low-contrast frames, then the blurriest quarter and the less stable half; clarity is compared within the shot so diagrams do not compete with photographic texture.
+    3. Represent each shot by its most typical remaining frame, or use the window's middle frame when no shot qualifies.
+    4. Drop candidates that duplicate earlier picks, then set aside large-face shots when a sustained alternative exists.
+    5. Return the candidate whose shot overlaps the window longest.
     """
     small = [
         cv2.resize(
@@ -285,7 +285,6 @@ def _candidate(
     retained: list[_ThumbnailStats],
     face_detector: cv2.CascadeClassifier,
 ) -> _Candidate:
-    """Attach raw quality and duplicate measurements to one representative."""
     thumbnail = _ThumbnailStats.from_image(
         cv2.resize(
             image,
@@ -358,7 +357,6 @@ def run_ffmpeg(
     ffmpeg_path: str,
     arguments: list[str],
 ) -> bytes:
-    """Run one bounded FFmpeg operation and preserve its diagnostic failure."""
     try:
         result = subprocess.run(  # noqa: S603 - executable is resolved from the local PATH and arguments are internally assembled.
             [

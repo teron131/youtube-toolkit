@@ -28,17 +28,13 @@ SAMPLE_RATE = 16_000
 # The pipeline's own chunking is right for Whisper and CTC models but repeats text for Parakeet, and without it Whisper refuses long audio and Parakeet stalls.
 # Pieces under Whisper's 30-second window were correct for all three model families, and Parakeet dropped whole sentences from three-minute pieces that it kept at this length.
 MAX_PIECE_SECONDS = 28
-# How far back from a piece's length limit to look for the quietest moment to cut at.
 CUT_SEARCH_SECONDS = 5
 # Decoding even a multi-hour track to PCM takes well under a minute, so ten minutes means ffmpeg is stuck.
 FFMPEG_TIMEOUT_SECONDS = 10 * 60
 
 
 def local_stt_installed() -> bool:
-    """Check that the model libraries and ffmpeg can be located without loading the libraries.
-
-    Installing them is what switches the local route on; the model itself has a default.
-    """
+    """Installing the libraries and ffmpeg is what switches the local route on; the model itself has a default."""
     try:
         libraries_installed = all(
             find_spec(module) is not None for module in ("transformers", "torch")
@@ -49,7 +45,6 @@ def local_stt_installed() -> bool:
 
 
 def local_model_downloaded(model: str) -> bool:
-    """Report whether a model is already on this machine, without loading it."""
     if not local_stt_installed():
         return False
     if Path(model).is_dir():
@@ -60,10 +55,9 @@ def local_model_downloaded(model: str) -> bool:
 
 
 def check_local_stt() -> dict[str, Any]:
-    """Load the configured model and run the test tone through the same decoding and recognition as a real recording.
+    """Run the test tone through the same decoding and recognition as a real recording, downloading the model first if needed.
 
     A failure anywhere, from the download to ffmpeg to the device, raises instead of returning.
-    This shows the route works on this machine; it does not measure transcript quality.
     """
     recognizer = load_recognizer()
     with tone_recording() as tone_path:
@@ -78,10 +72,7 @@ def check_local_stt() -> dict[str, Any]:
 
 
 def transcribe_locally(audio_path: Path) -> SpeechTranscription:
-    """Transcribe one audio file on this machine with the configured model.
-
-    The language is left for the model to work out, as with the cloud providers, so the result carries none.
-    """
+    """The language is left for the model to work out, as with the cloud providers, so the result carries none."""
     pieces = split_at_quiet_points(decode_audio(audio_path))
     recognizer = load_recognizer()
     # Pieces run one at a time: batching them on an Apple GPU returned truncated text.
@@ -97,10 +88,7 @@ def transcribe_locally(audio_path: Path) -> SpeechTranscription:
 
 
 def load_recognizer() -> Any:
-    """Build the speech recognizer for the configured model, falling back to the default model with a warning when the configured one cannot be loaded.
-
-    A mistyped or unsuitable STT_LOCAL_MODEL therefore still produces a transcript, from the default model, and the warning on stderr says so.
-    """
+    """A configured model that cannot be loaded falls back to the default with a warning, so a mistyped or unsuitable STT_LOCAL_MODEL still produces a transcript."""
     model = local_stt_model()
     try:
         return _build_recognizer(model)
@@ -117,10 +105,6 @@ def load_recognizer() -> Any:
 
 
 def _build_recognizer(model: str) -> Any:
-    """Build the transformers ASR pipeline for one model on the fastest device this machine has.
-
-    transformers downloads a model that is not cached yet, showing its progress on stderr, and reuses the cache afterwards.
-    """
     downloaded = local_model_downloaded(model)
     import torch
     from transformers import pipeline
@@ -145,10 +129,7 @@ def _build_recognizer(model: str) -> Any:
 
 
 def decode_audio(audio_path: Path) -> np.ndarray:
-    """Decode any audio container to the 16 kHz mono samples speech models read.
-
-    ffmpeg reads the file itself because some containers cannot be decoded from a pipe, which is how transformers would feed it.
-    """
+    """ffmpeg reads the file itself because some containers cannot be decoded from a pipe, which is how transformers would feed it."""
     import numpy as np
 
     try:
@@ -191,9 +172,8 @@ def decode_audio(audio_path: Path) -> np.ndarray:
 def split_at_quiet_points(
     samples: np.ndarray, *, max_seconds: int = MAX_PIECE_SECONDS
 ) -> list[np.ndarray]:
-    """Cut audio into consecutive pieces no longer than max_seconds without splitting words.
+    """Each cut lands on the quietest tenth of a second in the last CUT_SEARCH_SECONDS before the limit, usually a pause between sentences, so words are not split.
 
-    Each cut lands on the quietest tenth of a second in the last few seconds before the limit, which is usually a pause between sentences.
     Pieces do not overlap, so their transcripts join without any merging.
     """
     limit = max_seconds * SAMPLE_RATE
