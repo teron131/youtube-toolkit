@@ -49,7 +49,6 @@ def chart(heights=(20, 30, 40, 50)) -> np.ndarray:
 def test_sample_vision_returns_evidence_and_cleans_up(
     monkeypatch, tmp_path, captions, explicit_output
 ) -> None:
-    """Both caption-guided and fallback retrieval preserve artifact cleanup and explain selection."""
     window = TranscriptWindow(5, 25, "A diagram explains the circuit", 0.5, "Circuits")
     selected = make_frame(12)
     selected = frame_selection.SelectedFrame(
@@ -147,7 +146,6 @@ def test_sample_vision_rejects_long_video_before_download(
 def test_transcript_windows_limit_decoding_and_frames_own_pixels(
     monkeypatch, tmp_path
 ) -> None:
-    """Only the shortlisted interval is decoded, and retained frames do not hold whole windows alive."""
     window = TranscriptWindow(100, 120, "Protein structure", 0.7, "Proteins")
     images = np.repeat(chart()[None], 27, axis=0)
     calls = []
@@ -262,7 +260,6 @@ def test_decode_window_rejects_truncated_rgb(monkeypatch, tmp_path) -> None:
 
 
 def test_timestamp_footer_preserves_frame_and_renders_text() -> None:
-    """Timestamp rendering adds visible text below rather than over the sampled frame."""
     frame = np.full(
         (frame_selection.FRAME_HEIGHT, frame_selection.FRAME_WIDTH, 3),
         127,
@@ -286,7 +283,6 @@ def test_timestamp_footer_preserves_frame_and_renders_text() -> None:
 def test_collage_renderer_uses_six_360p_frames_per_progressive_jpeg(
     monkeypatch, tmp_path
 ) -> None:
-    """Publishing consumes retained images without another full-video decode."""
     frames = [make_frame(float(index), value=index * 20) for index in range(7)]
     monkeypatch.setattr(
         frame_selection,
@@ -304,7 +300,6 @@ def test_collage_renderer_uses_six_360p_frames_per_progressive_jpeg(
 def test_download_video_for_vision_uses_bounded_720p_video_only_preset(
     monkeypatch, tmp_path
 ) -> None:
-    """The yt-dlp adapter owns video-only format, size, fragment, and timeout policy."""
     calls: list[list[str]] = []
 
     def fake_run(command, capture_output, text, check, timeout):
@@ -335,8 +330,6 @@ def test_download_video_for_vision_uses_bounded_720p_video_only_preset(
 def test_vision_subprocess_timeouts_become_user_facing_runtime_errors(
     monkeypatch, tmp_path
 ) -> None:
-    """Both external process boundaries translate timeout exceptions for CLI handling."""
-
     def time_out(*_args, **_kwargs):
         raise subprocess.TimeoutExpired(["command"], timeout=1)
 
@@ -354,8 +347,6 @@ def test_vision_subprocess_timeouts_become_user_facing_runtime_errors(
 def test_vision_subprocess_start_failures_become_user_facing_runtime_errors(
     monkeypatch, tmp_path
 ) -> None:
-    """Missing or unlaunchable executables retain boundary-specific error context."""
-
     def fail_start(*_args, **_kwargs):
         raise OSError("cannot execute")
 
@@ -373,7 +364,6 @@ def test_vision_subprocess_start_failures_become_user_facing_runtime_errors(
 
 
 def test_video_vision_cli_routes_to_public_extraction(monkeypatch) -> None:
-    """The vision command returns the public operation's JSON-ready result."""
     args = build_parser().parse_args(["vision", VIDEO_ID, "--max-frames", "12"])
     expected = {
         "video_id": VIDEO_ID,

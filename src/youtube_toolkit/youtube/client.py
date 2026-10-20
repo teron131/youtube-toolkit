@@ -1,4 +1,7 @@
-"""Small subprocess wrapper around the installed yt-dlp package."""
+"""Subprocess adapter that owns every yt-dlp command.
+
+Metadata, search, and listing responses are archived as fetched; archives are never read back as a cache.
+"""
 
 from __future__ import annotations
 
@@ -17,8 +20,8 @@ from ..execution import retry_transient
 from ..identity import VideoRef, normalize_youtube_url, require_video_id
 
 SEARCH_SORT_PARAMS = {
-    "relevance": "EgIQAQ==",  # boolean "true"
-    "popularity": "CAMSAhAB",  # sort search results by view count in descending order
+    "relevance": "EgIQAQ==",  # videos only
+    "popularity": "CAMSAhAB",  # videos only, most viewed first
 }
 STT_AUDIO_FORMAT_SELECTOR = "bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio[ext=aac]"
 VISION_VIDEO_FORMAT_SELECTOR = "bestvideo[height<=720][ext=mp4]/bestvideo[height<=720]"
@@ -37,18 +40,12 @@ TRANSLATED_TRACK_URL = re.compile(r"[?&]tlang=")
 YTDLP_COMMAND = (sys.executable, "-m", "yt_dlp", "--no-cache-dir")
 
 
-class YtDlpForbidden(RuntimeError):
-    """Raised when YouTube refuses a yt-dlp process with HTTP 403, which usually clears on a later attempt."""
+class YtDlpForbidden(RuntimeError): ...
 
 
 class YtDlpClient:
-    """Subprocess adapter that owns all direct yt-dlp command construction."""
-
     def metadata(self, video_ref: VideoRef) -> dict[str, Any]:
-        """Fetch full yt-dlp metadata for one validated YouTube video reference.
-
-        Machine-translated caption tracks are dropped before the response is returned or archived.
-        """
+        """Machine-translated caption tracks are dropped before the response is returned or archived."""
         return self._json(
             [
                 *YTDLP_COMMAND,
@@ -65,7 +62,10 @@ class YtDlpClient:
         )
 
     def comments(self, video_ref: VideoRef, *, limit: int) -> dict[str, Any]:
-        """Fetch up to limit Top comments without replies or media; the comment workflow owns the lean archive."""
+        """The extractor arguments fetch up to `limit` Top-sorted comments and no replies.
+
+        The response is not archived here; the comment workflow archives a lean copy.
+        """
         if not 1 <= limit <= MAX_COMMENT_LIMIT:
             raise ValueError(f"--limit must be between 1 and {MAX_COMMENT_LIMIT}")
         return _request_json(
@@ -90,7 +90,6 @@ class YtDlpClient:
         fetch: int,
         sort: str,
     ) -> dict[str, Any]:
-        """Fetch a flat YouTube search result page through yt-dlp."""
         search_params = {
             "search_query": query,
             "sp": SEARCH_SORT_PARAMS[sort],
@@ -118,7 +117,6 @@ class YtDlpClient:
         *,
         last: int | None,
     ) -> dict[str, Any]:
-        """Fetch a flat channel videos listing through yt-dlp with optional playlist truncation."""
         command = [
             *YTDLP_COMMAND,
             "--quiet",
@@ -143,7 +141,6 @@ class YtDlpClient:
         )
 
     def download_transcription_audio(self, video_ref: VideoRef) -> Path:
-        """Bound STT audio acquisition and clean partial files; the caller owns the returned complete file."""
         video_id = require_video_id(video_ref)
         output_stem = artifact_root() / "audio" / f"{video_id}-{uuid4().hex}"
         output_stem.parent.mkdir(parents=True, exist_ok=True)
@@ -189,7 +186,6 @@ class YtDlpClient:
         *,
         max_bytes: int,
     ) -> Path:
-        """Download one bounded temporary video with the vision format preset."""
         output_path.parent.mkdir(parents=True, exist_ok=True)
         _run(
             [
@@ -228,7 +224,6 @@ class YtDlpClient:
         error_message: str,
         prepare: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """Fetch a fresh yt-dlp response, apply any response policy, and archive the result without consulting previous requests."""
         request = {"arguments": command[len(YTDLP_COMMAND) :]}
         data = _request_json(command, error_message=error_message)
         if prepare is not None:
@@ -238,7 +233,6 @@ class YtDlpClient:
 
 
 def _request_json(command: list[str], *, error_message: str) -> dict[str, Any]:
-    """Run a bounded metadata request and reject malformed JSON before a workflow can archive it."""
     result = _run(
         command,
         action="request",
@@ -255,10 +249,7 @@ def _request_json(command: list[str], *, error_message: str) -> dict[str, Any]:
 
 
 def _drop_translated_captions(metadata: dict[str, Any]) -> dict[str, Any]:
-    """Keep only original automatic-caption tracks.
-
-    YouTube offers each recognized track machine-translated into every supported language, which can make up over 90% of a metadata payload.
-    """
+    """YouTube offers each recognized track machine-translated into every supported language, which can make up over 90% of a metadata payload."""
     captions = metadata.get("automatic_captions")
     if not isinstance(captions, dict):
         return metadata
@@ -283,10 +274,7 @@ def _run(
     timeout_seconds: int,
     failure_message: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run one bounded yt-dlp process, translating timeouts, launch errors, and exit codes into RuntimeError.
-
-    A process YouTube refuses with HTTP 403 is rerun after a pause, because a fresh run requests new media URLs.
-    """
+    """A process YouTube refuses with HTTP 403 is rerun after a pause, because a fresh run requests new media URLs."""
 
     def attempt() -> subprocess.CompletedProcess[str]:
         try:

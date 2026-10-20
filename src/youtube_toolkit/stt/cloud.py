@@ -44,10 +44,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class CloudProvider:
-    """Everything that differs between cloud speech-to-text providers; the sending and parsing code is shared per request style.
-
-    No language is sent, so the provider detects it; a fixed language would bias the transcription toward it.
-    """
+    """No language is sent, so the provider detects it; a fixed language would bias the transcription toward it."""
 
     label: str
     url: str
@@ -129,13 +126,12 @@ AUDIO_CONTENT_TYPES = {
 
 
 def cloud_provider() -> CloudProvider:
-    """Look up the provider chosen with STT_PROVIDER, falling back to the default when the name is unknown."""
+    """An unknown STT_PROVIDER falls back to the default provider, with one warning per process."""
     return PROVIDERS[_known_provider(stt_provider_name())]
 
 
 @cache
 def _known_provider(name: str) -> str:
-    """Map a configured name to a provider this module has settings for, warning once per process about an unknown one."""
     if name in PROVIDERS:
         return name
     logger.warning(
@@ -148,12 +144,10 @@ def _known_provider(name: str) -> str:
 
 
 def cloud_stt_configured() -> bool:
-    """Report whether the chosen provider's API key is set, so callers can choose another route instead of failing on it."""
     return config_value(cloud_provider().api_key_env) is not None
 
 
 def transcribe_in_cloud(audio_path: Path) -> SpeechTranscription:
-    """Send one audio file to the chosen provider and return its transcript and detected language."""
     if not audio_path.is_file():
         raise ValueError(f"audio file does not exist: {audio_path}")
     provider = cloud_provider()
@@ -166,7 +160,6 @@ def transcribe_in_cloud(audio_path: Path) -> SpeechTranscription:
 
 
 def cloud_stt_status() -> dict[str, Any]:
-    """Describe the cloud route without sending anything: the provider, its model, and whether its API key is set."""
     provider = cloud_provider()
     return {
         "provider": provider.label,
@@ -176,11 +169,9 @@ def cloud_stt_status() -> dict[str, Any]:
 
 
 def check_cloud_stt() -> dict[str, Any]:
-    """Send a two-second test tone to the chosen provider, proving it accepts the key, the endpoint, and the model.
+    """This is a real request that the provider bills, so it runs only when the user asks for it.
 
-    This is a real request that the provider bills, so it runs only when the user asks for it.
-    A rejected request raises with the provider's reason.
-    The check looks only at whether the request was accepted, not at the transcript.
+    A rejected key, endpoint, or model raises with the provider's reason.
     """
     provider = cloud_provider()
     with tone_recording() as tone_path:
@@ -189,7 +180,7 @@ def check_cloud_stt() -> dict[str, Any]:
 
 
 def _send(audio_path: Path, provider: CloudProvider) -> SpeechTranscription | None:
-    """Send one audio file in the provider's request style and return what it transcribed, or nothing when it heard no speech."""
+    """None means the provider heard no speech."""
     api_key = config_value(provider.api_key_env)
     if api_key is None:
         raise ValueError(
@@ -206,9 +197,8 @@ def _send(audio_path: Path, provider: CloudProvider) -> SpeechTranscription | No
 def _send_to_gemini(
     audio_path: Path, provider: CloudProvider, auth: dict[str, str]
 ) -> SpeechTranscription | None:
-    """Upload the file to Gemini's file store, transcribe it by reference, then delete the stored copy.
+    """The file store takes recordings of any size; sending audio inside the request is capped at about 20 MB.
 
-    The file store takes recordings of any size; sending audio inside the request is capped at about 20 MB.
     Gemini reports no detected language, so the result carries none.
     """
     uploaded = _request(
@@ -240,10 +230,7 @@ def _send_to_gemini(
 def _delete_gemini_file(
     name: str, provider: CloudProvider, auth: dict[str, str]
 ) -> None:
-    """Delete an uploaded recording from Gemini's file store, warning instead of failing when the delete is refused.
-
-    Stored files expire by themselves after two days, so a failed delete must not cost the transcript.
-    """
+    """Stored files expire by themselves after two days, so a failed delete must not cost the transcript."""
     try:
         _request(provider, f"{provider.url}/v1beta/{name}", None, auth, method="DELETE")
     except RuntimeError as error:
@@ -253,7 +240,6 @@ def _delete_gemini_file(
 def _send_to_vercel(
     audio_path: Path, provider: CloudProvider, auth: dict[str, str]
 ) -> SpeechTranscription | None:
-    """Send base64 audio inside JSON with the model named in a header; the gateway accepts no file uploads."""
     body = json.dumps(
         {
             "audio": base64.b64encode(audio_path.read_bytes()).decode(),
@@ -274,7 +260,6 @@ def _send_to_vercel(
 def _send_multipart(
     audio_path: Path, provider: CloudProvider, auth: dict[str, str]
 ) -> SpeechTranscription | None:
-    """Upload the file as a multipart form, the style ElevenLabs, OpenAI, and xAI share."""
     body, content_type = encode_multipart_form(
         fields={provider.model_field: provider.model, **provider.extra_fields},
         file_path=audio_path,
@@ -288,10 +273,9 @@ def _send_multipart(
 def parse_transcription(
     response: dict[str, Any], provider: CloudProvider
 ) -> SpeechTranscription | None:
-    """Translate a response with a top-level text into the shared result, or nothing when there is no text.
+    """Per-channel transcripts are joined when there is no single text.
 
-    Per-channel transcripts are joined when there is no single text.
-    The language is a plain code for most providers and a list of codes for OpenAI, whose first entry is used.
+    The language is a plain code for most providers; OpenAI sends a list of entries, and the first entry's code is used.
     """
     text = normalize_text(response.get("text"))
     transcripts = response.get("transcripts")
@@ -312,7 +296,6 @@ def parse_transcription(
 
 
 def audio_content_type(audio_path: Path) -> str:
-    """Name the media type for an audio file from its extension, falling back to a generic binary type."""
     return AUDIO_CONTENT_TYPES.get(
         audio_path.suffix.casefold(), "application/octet-stream"
     )
@@ -326,7 +309,6 @@ def _request(
     *,
     method: str = "POST",
 ) -> dict[str, Any]:
-    """Run one request against a provider and return its decoded JSON response."""
     request = urllib.request.Request(  # noqa: S310 - fixed HTTPS API endpoints from the provider table.
         url, data=data, headers=headers, method=method
     )
@@ -336,8 +318,6 @@ def _request(
 def run_json_request(
     request: urllib.request.Request, *, provider_name: str
 ) -> dict[str, Any]:
-    """Run one provider request with bounded retries for transient and malformed responses."""
-
     def request_payload() -> dict[str, Any]:
         with urllib.request.urlopen(  # noqa: S310 - fixed HTTPS API endpoint.
             request, timeout=REQUEST_TIMEOUT_SECONDS
@@ -375,7 +355,7 @@ def encode_multipart_form(
     fields: dict[str, str],
     file_path: Path,
 ) -> tuple[bytes, str]:
-    """Build the multipart payload shared by providers, with the audio under the `file` field they all expect, without leaking boundary details to callers."""
+    """Every multipart provider expects the audio under the `file` field."""
     boundary = f"----youtube-toolkit-{uuid4().hex}"
     chunks: list[bytes] = []
     for name, value in fields.items():

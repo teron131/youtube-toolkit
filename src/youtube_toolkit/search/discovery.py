@@ -20,10 +20,7 @@ def youtube_candidates(
     *,
     fetch_limit: int,
 ) -> list[dict[str, Any]]:
-    """Run one YouTube search per query and merge the result lists for the resolved ranking policy.
-
-    The fetch budget is split across the queries, since each supplies only its share of the merged results.
-    """
+    """The fetch budget is split across the queries, since each supplies only its share of the merged results."""
     youtube_sort = "popularity" if resolved.sort == "popularity" else "relevance"
     queries = tuple(dict.fromkeys(resolved.request.queries))
     per_query_limit = -(-fetch_limit // len(queries))
@@ -50,7 +47,6 @@ def search_youtube(
     fetch_limit: int,
     sort: str,
 ) -> list[dict[str, Any]]:
-    """Run one query through YouTube's own search and return its raw entries; search_videos builds the full workflow on top of this."""
     client = YtDlpClient()
     payload = client.search(
         query,
@@ -65,7 +61,7 @@ def channel_listings(
     *,
     limit: int,
 ) -> list[list[dict[str, Any]]]:
-    """Fetch channels concurrently while retaining separate newest-first lists in the requested channel order."""
+    """Lists stay separate per channel and in YouTube's newest-first order, which the upload-cutoff early stop in hydrate_candidates relies on."""
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_DISCOVERY_FETCHES) as executor:
         return list(
             executor.map(partial(_channel_listing, limit=limit), request.channels)
@@ -73,7 +69,6 @@ def channel_listings(
 
 
 def _channel_listing(selection: ChannelTarget, *, limit: int) -> list[dict[str, Any]]:
-    """Resolve and fetch one channel without mixing its chronology with other channels."""
     channel_ref, channel_identity = resolve_channel_listing(selection)
     metadata = fetch_channel_videos(channel_ref, options=ChannelOptions(last=limit))
     return [
@@ -85,7 +80,6 @@ def _channel_listing(selection: ChannelTarget, *, limit: int) -> list[dict[str, 
 
 
 def resolve_channel_listing(selection: ChannelTarget) -> tuple[str, ChannelIdentity]:
-    """Resolve a channel target to a concrete channel ref plus identity for listing fetches."""
     if selection.channel_name is None:
         return (
             selection.channel_ref(),
@@ -123,7 +117,6 @@ def resolve_channel_listing(selection: ChannelTarget) -> tuple[str, ChannelIdent
 
 
 def normalized_channel_name(value: str) -> str:
-    """Normalize channel names for fuzzy YouTube-search confirmation."""
     return " ".join(value.casefold().split())
 
 
@@ -132,7 +125,6 @@ def channel_entries(
     *,
     known_channel: ChannelIdentity,
 ) -> list[dict[str, Any]]:
-    """Attach known channel identity fields to listing entries before candidate filtering."""
     channel_identity = extract_channel_identity(
         metadata,
         fallback_channel_id=known_channel.youtube_channel_id,

@@ -7,4 +7,4 @@ from youtube_toolkit import config
 
 @pytest.fixture(autouse=True)
 def isolate_saved_config(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr(config, "config_path", lambda: tmp_path / "config.env")
+    monkeypatch.setattr(config, "user_config_path", lambda *_args, **_kwargs: tmp_path)

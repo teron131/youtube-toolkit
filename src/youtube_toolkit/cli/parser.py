@@ -1,4 +1,4 @@
-"""Argument parser construction for the youtube command."""
+"""The youtube command's arguments; each subcommand stores its handler under `handler`, which the entrypoint calls with the parsed namespace."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from .setup import run_setup
 
 
 class YoutubeArgumentParser(argparse.ArgumentParser):
-    """CLI parser normalizes shell-passed string argument values before handlers run."""
+    """Untyped string arguments are stripped and lose one layer of matching quotes, which shell-passed values can retain."""
 
     def add_argument(self, *args, **kwargs):
         action = kwargs.get("action", "store")
@@ -30,7 +30,6 @@ class YoutubeArgumentParser(argparse.ArgumentParser):
 
 
 def normalize_arg_string(value: str) -> str:
-    """Normalize one shell-passed argument string before argparse stores or validates it."""
     candidate = str(value).strip()
     if (
         len(candidate) >= 2
@@ -42,7 +41,6 @@ def normalize_arg_string(value: str) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Assemble the top-level parser and attach command handlers as parser defaults."""
     parser = YoutubeArgumentParser(
         prog="youtube", description="Transcript-first YouTube toolkit."
     )
@@ -59,7 +57,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _add_video_commands(subparsers: argparse._SubParsersAction) -> None:
-    """Register metadata, comment search, transcript, and vision commands for one video."""
     metadata_parser = subparsers.add_parser(
         "metadata", help="Fetch video metadata JSON"
     )
@@ -129,7 +126,6 @@ def _add_video_commands(subparsers: argparse._SubParsersAction) -> None:
 
 
 def _add_search_command(subparsers: argparse._SubParsersAction) -> None:
-    """Register YouTube and channel search with its filters."""
     search_parser = subparsers.add_parser(
         "search",
         help="Search videos or transcript chunks across YouTube or within channels",
@@ -205,7 +201,6 @@ def _add_search_command(subparsers: argparse._SubParsersAction) -> None:
 
 
 def _add_channel_command(subparsers: argparse._SubParsersAction) -> None:
-    """Register the direct channel listing command."""
     channel_parser = subparsers.add_parser(
         "channel", help="List recent videos from a YouTube channel"
     )
@@ -227,7 +222,6 @@ def _add_channel_command(subparsers: argparse._SubParsersAction) -> None:
 
 
 def _add_setup_command(subparsers: argparse._SubParsersAction) -> None:
-    """Register interactive app settings without accepting secrets in command-line arguments."""
     setup_parser = subparsers.add_parser(
         "setup", help="Save API keys and settings for YouTube Toolkit only"
     )
@@ -241,7 +235,6 @@ def _add_setup_command(subparsers: argparse._SubParsersAction) -> None:
 
 
 def _add_stt_setup_command(subparsers: argparse._SubParsersAction) -> None:
-    """Register the speech-to-text setup report, with its local model check and optional billed cloud test."""
     setup_parser = subparsers.add_parser(
         "stt-setup",
         help=f"Report the speech-to-text setup; download the Hugging Face ASR model named by STT_LOCAL_MODEL (default: {DEFAULT_LOCAL_STT_MODEL}) and check that it runs",
@@ -255,7 +248,6 @@ def _add_stt_setup_command(subparsers: argparse._SubParsersAction) -> None:
 
 
 def _add_doctor_command(subparsers: argparse._SubParsersAction) -> None:
-    """Register the local readiness report without triggering retrieval."""
     doctor_parser = subparsers.add_parser(
         "doctor", help="Check runtime, artifact path, and optional capabilities"
     )

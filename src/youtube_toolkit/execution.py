@@ -17,7 +17,11 @@ def retry_transient[Result](
     backoff_seconds: float,
     retryable_errors: tuple[type[Exception], ...],
 ) -> Result:
-    """Retry one idempotent operation while preserving its final underlying exception."""
+    """The operation must be idempotent, and `attempts` counts the first try.
+
+    An HTTPError is retried according to its status code alone, even when retryable_errors includes its URLError base.
+    Waits grow linearly, `backoff_seconds` times the attempt number, unless an HTTPError carries a numeric Retry-After header.
+    """
     if attempts <= 0:
         raise ValueError("retry attempts must be greater than 0")
     if backoff_seconds < 0:
@@ -37,7 +41,6 @@ def _is_retryable_error(
     error: Exception,
     retryable_errors: tuple[type[Exception], ...],
 ) -> bool:
-    """Treat configured transport errors and selected HTTP statuses as transient."""
     if isinstance(error, urllib.error.HTTPError):
         return error.code in _RETRYABLE_HTTP_STATUS_CODES
     return isinstance(error, retryable_errors)
@@ -48,7 +51,6 @@ def _retry_delay_seconds(
     attempt: int,
     backoff_seconds: float,
 ) -> float:
-    """Honor numeric Retry-After responses before linear backoff."""
     if isinstance(error, urllib.error.HTTPError):
         retry_after = (
             error.headers.get("Retry-After") if error.headers is not None else None
@@ -67,7 +69,7 @@ def collect_concurrently[JobKey, Job, Result](
     *,
     max_workers: int,
 ) -> tuple[dict[JobKey, Result], dict[JobKey, Exception]]:
-    """Return keyed successes and failures without letting one worker stop the batch."""
+    """Both dicts are in completion order, not job order."""
     if max_workers <= 0:
         raise ValueError("concurrent worker count must be greater than 0")
     if not jobs:

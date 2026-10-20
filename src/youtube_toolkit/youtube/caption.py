@@ -25,7 +25,7 @@ CHINESE_LANGUAGES = frozenset({"zh", "yue"})
 
 
 class CaptionTranscriptUnavailable(RuntimeError):
-    """Raised when metadata has no usable caption transcript for the requested policy."""
+    """Only this failure triggers the transcript workflow's speech-to-text fallback; a failed caption download raises a plain RuntimeError instead."""
 
 
 def fetch_caption_transcript(
@@ -34,7 +34,6 @@ def fetch_caption_transcript(
     languages: Sequence[str],
     source: str,
 ) -> TranscriptDocument:
-    """Build a transcript document from yt-dlp caption metadata under the requested language and source preference."""
     metadata = VideoMetadata.from_yt_dlp(metadata_payload)
     caption_url, language, caption_source = select_caption_track(
         metadata_payload, languages, source
@@ -63,11 +62,9 @@ def select_caption_track(
     languages: Sequence[str],
     source: str,
 ) -> tuple[str, str, str]:
-    """Select manual subtitles by language preference, then automatic captions in spoken language of the video.
+    """Manual subtitles in any preferred language outrank automatic captions, which are taken only in the spoken language of the video.
 
-    Preferred languages matching the spoken language are tried first, so a Chinese video with English and Chinese subtitles yields Chinese; a video without automatic captions counts as Chinese.
-    Automatic captions are never matched against the language preference, because outside the spoken language they are machine translations.
-    The source limits the choice to manual subtitles or to automatic captions.
+    Preferred languages in the spoken language's family are tried first, so a Chinese video with English and Chinese subtitles yields Chinese.
     """
     if source not in {"auto", "manual", "any"}:
         raise ValueError("caption source must be auto, manual, or any")
@@ -97,7 +94,6 @@ def select_caption_track(
 
 
 def fetch_caption_payload(url: str) -> dict:
-    """Caption URLs are host-validated before the remote JSON payload is fetched."""
     validate_url(url, allowed_hosts=ALLOWED_CAPTION_HOST_SUFFIXES)
     request = urllib.request.Request(  # noqa: S310 - caption URLs are scheme/host validated above.
         url,
@@ -133,7 +129,6 @@ def fetch_caption_payload(url: str) -> dict:
 
 
 def extract_timed_chunks(caption_payload: dict) -> list[TranscriptChunk]:
-    """Convert YouTube JSON3 caption events into deduped timed transcript chunks."""
     last_chunk = ""
     chunks: list[TranscriptChunk] = []
     for event in caption_payload.get("events", []):
@@ -159,13 +154,11 @@ def extract_timed_chunks(caption_payload: dict) -> list[TranscriptChunk]:
 
 
 def normalize_caption_chunk(raw_text: str) -> str:
-    """Normalize caption event text by unescaping HTML and collapsing whitespace."""
     text = html.unescape(raw_text.replace("\n", " "))
     return " ".join(text.split())
 
 
 def extract_sponsorblock_intervals(metadata: dict) -> list[tuple[float, float]]:
-    """Read SponsorBlock chapter intervals from yt-dlp metadata for transcript filtering."""
     intervals: list[tuple[float, float]] = []
     for chapter in metadata.get("sponsorblock_chapters") or []:
         try:
@@ -182,7 +175,6 @@ def remove_sponsorblock_chunks(
     chunks: list[TranscriptChunk],
     intervals: list[tuple[float, float]],
 ) -> list[TranscriptChunk]:
-    """Drop caption chunks whose time span overlaps SponsorBlock intervals."""
     if not intervals:
         return chunks
 
@@ -203,28 +195,22 @@ def remove_sponsorblock_chunks(
 
 
 def _spoken_first(languages: Sequence[str], spoken: str | None) -> list[str]:
-    """Move preferred languages in the spoken language's family ahead of the rest, keeping each group's order."""
     family = _family(spoken)
     return sorted(languages, key=lambda language: _family(language) != family)
 
 
 def _family(language: str | None) -> str:
-    """Group Cantonese and every Chinese script or region into one spoken family; no reported language counts as Chinese."""
     base = (language or UNCAPTIONED_LANGUAGE).partition("-")[0]
     return "zh" if base in CHINESE_LANGUAGES else base
 
 
 def _language_keys(language: str, captions: dict) -> list[str]:
-    """Match a preferred language exactly first, then its regional variants such as en-US for en."""
     variants = [key for key in captions if key.startswith(f"{language}-")]
     return [*([language] if language in captions else []), *variants]
 
 
 def _original_language_keys(language: str | None, automatic: dict) -> list[str]:
-    """Name the automatic-caption keys for the video's spoken language.
-
-    Dubbed videos mark one original track per audio language, so the video's language decides; without it, only a single original mark or a single remaining language is trusted.
-    """
+    """Dubbed videos mark one original track per audio language, so the video's language decides; without it, only a single original mark or a single remaining language is trusted."""
     if language is None:
         marked = [key for key in automatic if key.endswith("-orig")]
         unambiguous = marked or list(automatic)
@@ -235,7 +221,6 @@ def _original_language_keys(language: str | None, automatic: dict) -> list[str]:
 
 
 def _track_url(tracks: list[dict]) -> str | None:
-    """Prefer JSON3, the format transcript parsing reads, before any other downloadable format."""
     usable = [track for track in tracks if track.get("url")]
     preferred = next((track for track in usable if track.get("ext") == "json3"), None)
     if preferred is not None:

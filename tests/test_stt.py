@@ -1,3 +1,5 @@
+"""Speech-to-text provider requests and response parsing, retry policy, and the local route's audio splitting and model loading, with network calls and models faked."""
+
 import base64
 from email.message import Message
 import io
@@ -34,7 +36,6 @@ def test_xai_stt_response_normalizes_to_plain_contract() -> None:
 
 
 def test_elevenlabs_stt_response_normalizes_to_plain_contract() -> None:
-    """ElevenLabs names its language field differently and may split text per channel."""
     single = parse_transcription(
         {"text": "transcript text", "language_code": "en"}, PROVIDERS["elevenlabs"]
     )
@@ -86,7 +87,6 @@ def test_cloud_transcription_follows_the_configured_provider(
     response,
     sent_model,
 ) -> None:
-    """STT_PROVIDER picks the endpoint, credentials, and model; xAI is the default."""
     audio_path = tmp_path / "audio.mp3"
     audio_path.write_bytes(b"audio")
     requests = []
@@ -113,7 +113,6 @@ def test_cloud_transcription_follows_the_configured_provider(
 def test_vercel_gateway_takes_base64_audio_and_the_model_in_a_header(
     tmp_path, monkeypatch
 ) -> None:
-    """The gateway accepts no file upload: audio travels as base64 in JSON and the model as a header."""
     audio_path = tmp_path / "audio.m4a"
     audio_path.write_bytes(b"audio")
     requests = []
@@ -143,7 +142,6 @@ def test_vercel_gateway_takes_base64_audio_and_the_model_in_a_header(
 def test_gemini_uploads_transcribes_by_reference_and_deletes_the_upload(
     tmp_path, monkeypatch
 ) -> None:
-    """Gemini reads audio from its file store, so one transcript is three requests, and the stored copy is removed even with no speech."""
     audio_path = tmp_path / "audio.m4a"
     audio_path.write_bytes(b"audio")
     requests = []
@@ -199,7 +197,6 @@ def test_gemini_uploads_transcribes_by_reference_and_deletes_the_upload(
 
 
 def test_cloud_check_uploads_a_test_tone_and_status_sends_nothing(monkeypatch) -> None:
-    """The billed check proves the provider accepts the key and model; the status alone never makes a request."""
     requests = []
 
     def fake_run_json_request(request, *, provider_name):
@@ -248,8 +245,6 @@ def test_cloud_transcription_requires_the_provider_key(tmp_path, monkeypatch) ->
 
 
 def test_encode_multipart_form_handles_ytdlp_default_containers(tmp_path) -> None:
-    """STT uploads include useful MIME hints for common yt-dlp audio outputs."""
-
     webm_path = tmp_path / "audio.webm"
     m4a_path = tmp_path / "audio.m4a"
     webm_path.write_bytes(b"webm-audio")
@@ -269,7 +264,6 @@ def test_encode_multipart_form_handles_ytdlp_default_containers(tmp_path) -> Non
 
 
 def test_stt_request_retries_transient_network_failures(monkeypatch) -> None:
-    """Provider-neutral STT requests should make three total attempts on transient failures."""
     attempts = 0
     delays: list[float] = []
 
@@ -307,7 +301,6 @@ def test_stt_request_retries_transient_network_failures(monkeypatch) -> None:
 
 
 def test_stt_request_does_not_retry_permanent_client_failure(monkeypatch) -> None:
-    """Authentication and other permanent client errors should not duplicate paid STT work."""
     attempts = 0
     headers = Message()
 
@@ -341,7 +334,6 @@ def test_stt_request_does_not_retry_permanent_client_failure(monkeypatch) -> Non
 
 
 def test_long_audio_is_cut_in_the_quiet_gap_before_the_limit() -> None:
-    """Pieces stay within the limit, lose no samples, and split inside the silence instead of inside speech."""
     rate = local.SAMPLE_RATE
     samples = np.ones(25 * rate, dtype=np.float32)
     samples[8 * rate : 9 * rate] = 0.0
@@ -356,7 +348,6 @@ def test_long_audio_is_cut_in_the_quiet_gap_before_the_limit() -> None:
 
 
 def test_model_check_runs_a_test_tone_and_reports_where_it_ran(monkeypatch) -> None:
-    """The setup check decodes the shared test tone, runs the loaded model on it, and names its device and precision; a failing model raises."""
     heard = []
 
     class FakeRecognizer:
@@ -401,7 +392,6 @@ def test_model_check_runs_a_test_tone_and_reports_where_it_ran(monkeypatch) -> N
 def test_unloadable_local_model_falls_back_to_the_default_with_a_warning(
     monkeypatch, caplog
 ) -> None:
-    """A wrong STT_LOCAL_MODEL still yields a working recognizer, built from the default model, and says so; a broken default raises."""
     built = []
 
     def fake_build(model):

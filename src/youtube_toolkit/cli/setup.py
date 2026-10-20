@@ -22,12 +22,7 @@ from ..stt.cloud import PROVIDERS
 
 
 def run_setup(args: argparse.Namespace) -> dict[str, object]:
-    """Prompt for app-scoped keys and settings without contacting providers or changing shell configuration.
-
-    Enter keeps a saved value, and '-' removes it so the existing default applies.
-    Environment overrides are neither copied into the file nor modified.
-    Cancellation and validation errors leave the existing configuration intact.
-    """
+    """Environment overrides are neither copied into the file nor modified."""
     if not sys.stdin.isatty():
         raise ValueError(
             "Run `youtube setup` in an interactive terminal to enter keys securely"
@@ -62,7 +57,6 @@ def run_setup(args: argparse.Namespace) -> dict[str, object]:
 
 
 def _setup_embeddings(settings: dict[str, str]) -> None:
-    """Collect the embedding endpoint and key together, validating saved overrides before writing."""
     _prompt(settings, "EMBEDDING_API_KEY", secret=True)
     _prompt(settings, "EMBEDDING_BASE_URL", DEFAULT_EMBEDDING_BASE_URL)
     _prompt(settings, "EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
@@ -84,7 +78,6 @@ def _setup_embeddings(settings: dict[str, str]) -> None:
 
 
 def _setup_stt(settings: dict[str, str]) -> None:
-    """Use the cloud owner's provider catalog so setup asks for the same key as transcription."""
     print(f"Speech-to-text providers: {', '.join(PROVIDERS)}", file=sys.stderr)
     _prompt(settings, "STT_PROVIDER", DEFAULT_STT_PROVIDER)
     name = settings.get("STT_PROVIDER", DEFAULT_STT_PROVIDER)
@@ -99,7 +92,6 @@ def _setup_stt(settings: dict[str, str]) -> None:
 def _prompt(
     settings: dict[str, str], name: str, default: str = "", *, secret: bool = False
 ) -> None:
-    """Display only a secret's presence; blank input preserves saved state without copying environment values."""
     current = settings.get(name, "")
     label = current or default
     if secret:

@@ -16,15 +16,13 @@ MIN_DAYS_WINDOW = 10
 
 @dataclass(frozen=True, slots=True)
 class ChannelOptions:
-    """Caller policy for how much of a channel listing to inspect."""
+    """With `days`, `last` stops capping the result and only sizes the first listing request, to at least MIN_DAYS_WINDOW."""
 
     last: int | None = DEFAULT_LAST_VIDEOS
     days: int | None = None
 
 
 class ChannelVideosClient(Protocol):
-    """yt-dlp surface for flat channel listings and the per-video metadata that supplies upload dates."""
-
     def channel_videos(
         self,
         channel_url: str,
@@ -41,11 +39,9 @@ def fetch_channel_videos(
     options: ChannelOptions | None = None,
     client: ChannelVideosClient | None = None,
 ) -> dict[str, Any]:
-    """Return a flat channel listing; a day window keeps only videos uploaded inside it, each with its upload date.
+    """A day window keeps only videos uploaded inside it, each given its upload date, and leaves out videos whose metadata cannot be fetched.
 
-    Flat listings omit upload dates, so a day window fetches video metadata newest first in concurrent batches and stops after the batch that reaches an older video or dates none.
-    The flat listing doubles only when the next full batch would run past its end, and no video's metadata is fetched twice.
-    Videos whose metadata cannot be fetched have no date and are left out.
+    Flat listings omit upload dates, so a day window costs one metadata request per video, made newest first in concurrent batches until a batch reaches an older video or dates none.
     """
     options = options or ChannelOptions()
     client = client or YtDlpClient()
@@ -71,6 +67,7 @@ def fetch_channel_videos(
             and isinstance(video_id := entry.get("id"), str)
             and video_id not in attempted
         ]
+        # A full listing may continue past its end, so it is refetched at twice the length before a batch would come up short.
         if (
             len(pending) < MAX_CONCURRENT_METADATA_FETCHES
             and len(entries) >= window_size
@@ -97,7 +94,6 @@ def fetch_channel_videos(
 
 
 def validate_channel_options(options: ChannelOptions) -> None:
-    """Validate channel listing limits before any YouTube request is made."""
     if options.last is not None and options.last <= 0:
         raise ValueError("--last must be greater than 0")
     if options.days is not None and options.days <= 0:
@@ -112,7 +108,6 @@ def cutoff_date_for_days(days: int) -> date:
 def fetch_upload_dates(
     client: ChannelVideosClient, video_ids: list[str]
 ) -> dict[str, date]:
-    """Fetch one batch of video metadata concurrently and keep each parseable upload date."""
     metadata_by_id, _failures = collect_concurrently(
         {video_id: video_id for video_id in video_ids},
         client.metadata,

@@ -93,7 +93,7 @@ Install with `uv run python scripts/install.py`; add `--vision` for visual extra
 `youtube setup` interactively saves embedding and STT settings for this application; `--embeddings` or `--stt` limits the prompts, and both flags select both capabilities.
 Keys use hidden prompts rather than command-line flags, so let the user enter secrets directly and never echo them into commands or chat.
 Enter keeps an existing saved value; `-` removes a saved override; cancellation saves nothing.
-Setup saves `.env`-format settings in `config.env` under `~/Library/Application Support/youtube-toolkit/` on macOS, `${XDG_CONFIG_HOME:-~/.config}/youtube-toolkit/` on Linux, or `%APPDATA%/youtube-toolkit/` on Windows, with access restricted to the current user on POSIX systems.
+Setup saves settings in `.env` under `~/Library/Application Support/youtube-toolkit/` on macOS, `${XDG_CONFIG_HOME:-~/.config}/youtube-toolkit/` on Linux, or `%APPDATA%/youtube-toolkit/` on Windows, with access restricted to the current user on POSIX systems.
 `XDG_CONFIG_HOME` overrides the configuration directory on Linux and macOS.
 This is a local settings file, not OS keychain storage, and setup changes no shell startup files or `PATH` settings.
 Nonblank environment values override saved settings, then existing defaults apply.

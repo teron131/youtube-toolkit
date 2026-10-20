@@ -17,7 +17,6 @@ from youtube_toolkit.search.request import ChannelTarget, SearchRequest
 
 
 def test_parser_normalizes_string_arguments_before_handlers() -> None:
-    """CLI string hygiene applies to every parsed argument value before command handlers run."""
     video_args = build_parser().parse_args(
         [
             "transcript",
@@ -57,8 +56,6 @@ def test_parser_normalizes_string_arguments_before_handlers() -> None:
 
 
 def test_video_metadata_command_returns_normalized_video_facts(monkeypatch) -> None:
-    """The public metadata command excludes yt-dlp extraction internals."""
-
     class FakeClient:
         def metadata(self, video_ref: str) -> dict[str, object]:
             assert video_ref == "JpSHyEIZ_bo"
@@ -134,7 +131,6 @@ def comment_response(monkeypatch, tmp_path):
 def test_comments_search_filters_text_and_archives_the_full_sample(
     comment_response, tmp_path, capsys, arguments, expected_ids, limit
 ) -> None:
-    """CLI filtering keeps original text in a lean document and archives every fetched comment without bookkeeping fields."""
     payload, calls = comment_response
     payload.update(
         title="Example",
@@ -195,7 +191,6 @@ def test_comments_search_filters_text_and_archives_the_full_sample(
 def test_comments_search_returns_an_empty_array_when_none_are_available(
     comment_response, capsys, comments
 ) -> None:
-    """Absent or disabled comments remain a jq-friendly empty result."""
     payload, _calls = comment_response
     payload["comments"] = comments
 
@@ -214,7 +209,6 @@ def test_comments_search_returns_an_empty_array_when_none_are_available(
 def test_comments_interleaves_next_unseen_ranked_matches(
     comment_response, capsys, query, expected_texts
 ) -> None:
-    """Each ranking gets its next unseen match; filtering happens before blending and duplicate IDs appear once."""
     comments = [
         {"id": "a", "text": "A", "like_count": 100},
         {"id": "b", "text": "B match", "like_count": 40},
@@ -234,7 +228,7 @@ def test_comments_interleaves_next_unseen_ranked_matches(
 def test_comments_preserves_like_ties_and_unknown_counts(
     comment_response, capsys
 ) -> None:
-    """Known zero likes rank ahead of unknown counts, ties keep Top order, and equal text is not a duplicate ID."""
+    """Two comments share their text on purpose: only a repeated ID counts as a duplicate."""
     payload, _calls = comment_response
     payload["comments"] = [
         {"id": "a", "text": "Same text", "like_count": 1},
@@ -257,7 +251,6 @@ def test_comments_preserves_like_ties_and_unknown_counts(
 def test_comments_refetches_and_preserves_lean_archive_history(
     comment_response, tmp_path
 ) -> None:
-    """Each retrieval contacts yt-dlp and saves a separate lean archive."""
     payload, calls = comment_response
     payload["comments"] = [{"id": "a", "text": "A", "like_count": 1}]
     assert main(["comments", "JpSHyEIZ_bo"]) == 0
@@ -290,7 +283,6 @@ def test_comments_rejects_out_of_range_fetch_limits_before_retrieval(
 def test_video_transcript_command_selects_plain_or_timestamped_output(
     monkeypatch,
 ) -> None:
-    """Transcript output is one text string unless timed chunks are requested."""
     document = TranscriptDocument(
         metadata=VideoMetadata(
             video_id="JpSHyEIZ_bo",
@@ -344,7 +336,6 @@ def test_video_transcript_export_writes_metadata_and_plain_transcript(
     monkeypatch,
     tmp_path,
 ) -> None:
-    """Export follows the resolved transcript document and writes one deterministic text file."""
     document = TranscriptDocument(
         metadata=VideoMetadata(
             video_id="JpSHyEIZ_bo",
@@ -418,7 +409,6 @@ def test_video_transcript_export_writes_metadata_and_plain_transcript(
 
 
 def test_video_transcript_force_requires_export(monkeypatch) -> None:
-    """Overwrite permission is invalid when no file export was requested."""
     monkeypatch.setattr(
         commands,
         "fetch_transcript",
@@ -451,7 +441,6 @@ def test_reference_help_names_positionals_url(
     usage: str,
     capsys,
 ) -> None:
-    """Reference help shows the shell-facing URL placeholder instead of internal destination names."""
     with pytest.raises(SystemExit):
         build_parser().parse_args(args)
 
@@ -635,7 +624,6 @@ def test_search_command_builds_channel_request(monkeypatch) -> None:
 
 
 def test_emit_json_truncates_long_text_fields(capsys, monkeypatch) -> None:
-    """Large text fields are capped without cutting the whole JSON payload."""
     monkeypatch.setattr(output, "MAX_STDOUT_TEXT_FIELD_CHARS", 20)
 
     output.emit_json({"title": "y" * 100, "transcript": "x" * 100})
@@ -681,7 +669,6 @@ def test_doctor_reports_local_artifacts_without_creating_them(
 
 
 def test_stt_setup_reports_both_routes_and_bills_only_when_asked(monkeypatch) -> None:
-    """Without --cloud-test nothing is sent to the provider; without the local libraries the local model is not loaded."""
     local_check = {"model": "example/speech-model", "device": "cpu", "working": True}
     status = {"provider": "xAI", "model": "example-model", "key_set": True}
     monkeypatch.setattr(commands, "cloud_stt_status", lambda: status)
@@ -749,7 +736,6 @@ def test_vision_requires_dependencies_before_fetch(monkeypatch, capsys) -> None:
 def test_setup_saves_keys_without_echoing_or_exporting_them(
     monkeypatch, capsys
 ) -> None:
-    """The real command saves both routes, leaves the environment unchanged, and reports names only."""
     for name in (
         "EMBEDDING_API_KEY",
         "EMBEDDING_MODEL",
@@ -885,7 +871,6 @@ def test_setup_requires_a_terminal_and_refuses_echoed_secret_input(
 def test_channel_command_dispatches_listing_without_subcommand(
     monkeypatch, capsys
 ) -> None:
-    """The channel command keeps listing limits and JSON output after removing the videos tier."""
     calls = []
 
     def fetch(channel_ref, *, options):

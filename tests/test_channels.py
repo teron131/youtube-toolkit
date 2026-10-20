@@ -18,8 +18,6 @@ from youtube_toolkit.youtube.channels import (
 
 
 def test_fetch_channel_videos_returns_provider_metadata() -> None:
-    """Direct channel retrieval returns provider metadata without opening storage."""
-
     class FakeClient:
         def channel_videos(self, channel_url: str, *, last: int | None) -> dict:
             assert channel_url == "https://www.youtube.com/@OpenAI/videos"
@@ -38,7 +36,6 @@ def test_fetch_channel_videos_returns_provider_metadata() -> None:
 
 
 def test_normalize_channel_url_from_common_inputs() -> None:
-    """Normalize handles, ids, and channel URLs into videos-tab URLs."""
     assert (
         normalize_channel_url("@example") == "https://www.youtube.com/@example/videos"
     )
@@ -52,7 +49,6 @@ def test_normalize_channel_url_from_common_inputs() -> None:
 
 
 def test_parse_channel_ref_normalizes_public_channel_refs() -> None:
-    """Normalize handles and channel URLs without fetching remote metadata."""
     assert parse_channel_ref("@OpenAI") == ChannelIdentity(
         youtube_channel_id=None,
         channel_handle="@OpenAI",
@@ -70,7 +66,6 @@ def test_parse_channel_ref_normalizes_public_channel_refs() -> None:
 
 
 def test_unlimited_days_window_uses_bounded_first_fetch(monkeypatch) -> None:
-    """A None last window still lists a bounded first page, and only listed videos are dated."""
     calls = []
     metadata_calls = []
     monkeypatch.setattr(
@@ -107,7 +102,6 @@ def test_unlimited_days_window_uses_bounded_first_fetch(monkeypatch) -> None:
 
 
 def test_days_window_grows_listing_and_dates_each_video_once(monkeypatch) -> None:
-    """Busy channels grow the flat listing, request each video once in batches, and stop at the first batch past the cutoff."""
     today = date(2026, 7, 31)
     monkeypatch.setattr(
         "youtube_toolkit.youtube.channels.cutoff_date_for_days",
@@ -148,7 +142,6 @@ def test_days_window_grows_listing_and_dates_each_video_once(monkeypatch) -> Non
 
 
 def test_days_window_stops_when_no_listed_video_can_be_dated() -> None:
-    """Unavailable metadata ends the walk instead of growing the listing without evidence."""
     listing_sizes = []
     metadata_calls = []
 
@@ -173,7 +166,6 @@ def test_days_window_stops_when_no_listed_video_can_be_dated() -> None:
 
 
 def test_validate_channel_options_rejects_non_positive_values() -> None:
-    """Reject non-positive channel fetch window values."""
     with pytest.raises(ValueError, match="--last"):
         validate_channel_options(ChannelOptions(last=0))
 

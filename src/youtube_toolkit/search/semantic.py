@@ -32,8 +32,6 @@ RESULT_MIN_SIMILARITY = 0.5
 
 @dataclass(frozen=True, slots=True)
 class PreparedChunk:
-    """One live transcript chunk carrying its result metadata until embedding completes."""
-
     video_id: str
     chunk_index: int
     text: str
@@ -42,8 +40,6 @@ class PreparedChunk:
 
 @dataclass(frozen=True, slots=True)
 class ScoredChunk:
-    """One prepared transcript chunk after in-memory semantic scoring."""
-
     prepared: PreparedChunk
     similarity: float
 
@@ -51,10 +47,7 @@ class ScoredChunk:
 def search_transcripts(
     resolved: ResolvedRequest, candidates: list[dict[str, Any]]
 ) -> list[VideoResult] | list[ChunkResult]:
-    """Shortlist by title, fetch fresh transcripts, embed chunks, and project chunk or video results.
-
-    Partial title, transcript, or chunk-embedding failures become per-result warnings; the search fails only when no transcript chunk could be embedded.
-    """
+    """Title, transcript, and chunk-embedding failures become per-result warnings; the search fails only when a query cannot be embedded or no transcript chunk could be."""
     request = resolved.request
     candidates = [
         {
@@ -164,11 +157,7 @@ def shortlist_by_title(
 def fetch_semantic_transcripts(
     candidates: list[dict[str, Any]],
 ) -> tuple[dict[str, TranscriptDocument], dict[str, str]]:
-    """Fetch fresh caption transcripts concurrently while retaining per-video failures.
-
-    Speech-to-text is never used here: a search should stay as cheap to repeat as a YouTube search, and transcribing every uncaptioned candidate would not be.
-    Candidates hydrated earlier in this search pass their metadata response on instead of fetching it a second time.
-    """
+    """Speech-to-text is never used here: a search should stay as cheap to repeat as a YouTube search, and transcribing every uncaptioned candidate would not be."""
     jobs = {
         video_id: (video_id, candidate.get("metadata"))
         for candidate in candidates
@@ -191,7 +180,6 @@ def prepare_transcript_chunks(
     candidates: list[dict[str, Any]],
     documents: dict[str, TranscriptDocument],
 ) -> list[PreparedChunk]:
-    """Split fetched transcripts in candidate order while keeping each source candidate attached."""
     prepared: list[PreparedChunk] = []
     for candidate in candidates:
         video_id = candidate_id(candidate)
@@ -216,7 +204,6 @@ def score_chunks(
     vectors: dict[str, list[float]],
     query_embeddings: list[list[float]],
 ) -> list[ScoredChunk]:
-    """Rank embedded chunks by their best similarity to any query after applying the result threshold."""
     scored: list[ScoredChunk] = []
     for chunk in chunks:
         vector = vectors.get(chunk.text)
@@ -230,7 +217,6 @@ def score_chunks(
 
 
 def chunk_result(chunk: ScoredChunk, *, warnings: list[str]) -> ChunkResult:
-    """Chunk results carry the passage, its score, and the source video's public metadata."""
     result: ChunkResult = {
         "type": "chunk",
         "video_id": chunk.prepared.video_id,
@@ -248,7 +234,6 @@ def chunk_failure_warnings(
     chunks: list[PreparedChunk],
     failures: dict[str, str],
 ) -> dict[str, list[str]]:
-    """Project text-keyed embedding failures into compact per-video warnings."""
     failed_by_video: dict[str, list[str]] = {}
     for chunk in chunks:
         error = failures.get(chunk.text)
@@ -266,7 +251,7 @@ def compact_stage_failures(
     stage: str,
     failures: dict[str, str],
 ) -> list[str]:
-    """Summarize partial stage failures without flooding every successful result."""
+    """Stage warnings attach to every result, so only the first three failures are spelled out."""
     if not failures:
         return []
     details = "; ".join(f"{key}: {error}" for key, error in list(failures.items())[:3])
@@ -286,7 +271,6 @@ def split_transcript_chunks(
     chunk_chars: int = TRANSCRIPT_CHUNK_CHARS,
     overlap_chars: int = TRANSCRIPT_CHUNK_OVERLAP_CHARS,
 ) -> list[str]:
-    """Split normalized transcript text into overlapping chunks for embedding search."""
     clean_transcript = " ".join(transcript.split())
     if not clean_transcript:
         return []
@@ -316,7 +300,6 @@ def best_similarity(query_embeddings: list[list[float]], vector: list[float]) ->
 
 
 def cosine_similarity(left: list[float], right: list[float]) -> float:
-    """Compute cosine similarity with C-level dot products, scoring mismatched or zero vectors as zero."""
     if len(left) != len(right):
         return 0.0
     norms = math.sqrt(math.sumprod(left, left) * math.sumprod(right, right))

@@ -16,7 +16,7 @@ SearchSort = Literal["relevance", "recency", "popularity"]
 
 @dataclass(frozen=True, slots=True)
 class ChannelTarget:
-    """Resolved channel-search target, separating exact channel refs from fuzzy channel names."""
+    """Either a `channel_name` that discovery resolves through YouTube search, or an exact reference: a parsed ID or handle, else the unparsed `exact_ref`."""
 
     youtube_channel_id: str | None = None
     channel_handle: str | None = None
@@ -25,7 +25,6 @@ class ChannelTarget:
 
     @classmethod
     def from_ref(cls, channel_ref: ChannelRef) -> ChannelTarget:
-        """Interpret a user channel argument as either an exact ref or a channel-name lookup."""
         if not is_exact_channel_ref(channel_ref):
             channel_name = channel_ref.strip()
             if not channel_name:
@@ -41,7 +40,6 @@ class ChannelTarget:
         )
 
     def channel_ref(self) -> str:
-        """Only resolved channel targets can be converted into concrete refs for channel listing fetches."""
         if self.channel_handle is not None:
             return self.channel_handle
         if self.youtube_channel_id is not None:
@@ -65,10 +63,9 @@ def is_exact_channel_ref(channel_ref: ChannelRef) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class SearchRequest:
-    """Caller-supplied search policy shared by CLI and Python callers.
+    """Channels choose where candidates come from: none searches all of YouTube, any searches only those channels' uploads.
 
-    Channels choose where candidates come from: none searches all of YouTube, any searches only those channels' uploads.
-    Queries are equals: each runs as its own YouTube search, and no query ranks above another.
+    Queries are equals, and no query ranks above another: across YouTube each runs as its own search, and in native channel search a title needs to contain only one of them.
     """
 
     queries: tuple[str, ...]
@@ -90,9 +87,8 @@ class SearchRequest:
 
 @dataclass(frozen=True, slots=True)
 class ResolvedRequest:
-    """A validated request plus the values search stages would otherwise each work out from it.
+    """The caller's own choices stay on `request`; the other fields hold what had to be defaulted, parsed, or combined.
 
-    The caller's own choices stay on `request`; the other fields hold what had to be defaulted, parsed, or combined.
     Read `sort` and `return_type` here, because the ones on `request` may still be unset.
     """
 
@@ -105,10 +101,6 @@ class ResolvedRequest:
 
 
 def resolve_request(request: SearchRequest) -> ResolvedRequest:
-    """Validate the request, then settle every choice the caller left open or gave as text.
-
-    Parsed filters become the resolved fields directly, so search stages use the same values that validation checked.
-    """
     if request.mode not in get_args(SearchMode):
         raise ValueError("search mode must be one of: native, semantic")
     if request.return_type is not None and request.return_type not in get_args(
@@ -152,7 +144,6 @@ def resolve_request(request: SearchRequest) -> ResolvedRequest:
 
 
 def normalize_filter_date(value: str) -> str:
-    """Validate and normalize the upload-date filter to ISO date form."""
     try:
         return date.fromisoformat(value).isoformat()
     except ValueError as error:
@@ -180,7 +171,6 @@ def parse_duration(value: str | None) -> float | None:
 
 
 def resolve_return_type(request: SearchRequest) -> SearchReturnType:
-    """Choose the default result shape from semantic mode while honoring explicit caller choice."""
     if request.return_type is not None:
         return request.return_type
     if request.mode == "semantic":
@@ -189,7 +179,6 @@ def resolve_return_type(request: SearchRequest) -> SearchReturnType:
 
 
 def resolve_sort(request: SearchRequest) -> SearchSort:
-    """Choose the default ranking policy from channel scope and mode while honoring explicit caller choice."""
     if request.sort is not None:
         return request.sort
     if request.channels and request.mode == "native":
@@ -198,7 +187,6 @@ def resolve_sort(request: SearchRequest) -> SearchSort:
 
 
 def resolve_upload_cutoff(request: SearchRequest) -> str | None:
-    """Resolve the strictest upload-date cutoff from absolute and relative filters."""
     cutoffs: list[str] = []
     if request.uploaded_after is not None:
         cutoffs.append(normalize_filter_date(request.uploaded_after))

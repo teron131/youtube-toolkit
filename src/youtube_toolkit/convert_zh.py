@@ -1,4 +1,4 @@
-"""Chinese script policy: all text the toolkit returns is converted to Taiwan Traditional through one shared OpenCC converter."""
+"""Chinese script policy: titles and transcript text are converted to Taiwan Traditional through one shared OpenCC converter."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import opencc
 
 
 def convert_zh(text: str) -> str:
-    """Convert Simplified Chinese characters to Taiwan Traditional, keeping the original wording.
+    """Characters change but wording does not: `数据库里` becomes `數據庫裡`, not Taiwan's `資料庫裡`.
 
     It runs on every text without a language check: non-Chinese text passes through, except Japanese kanji that share a Simplified form.
     """
