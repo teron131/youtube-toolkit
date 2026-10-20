@@ -360,8 +360,8 @@ def test_youtube_popularity_search_dedupes_and_sorts_by_popularity(
 
 
 def test_channel_search_selection_accepts_channel_id_and_handle() -> None:
-    assert ChannelTarget.from_ref("UC123") == ChannelTarget(
-        youtube_channel_id="UC123",
+    assert ChannelTarget.from_ref("UC1234567890123456789012") == ChannelTarget(
+        youtube_channel_id="UC1234567890123456789012",
         channel_handle=None,
     )
     assert ChannelTarget.from_ref("OpenAI") == ChannelTarget(
@@ -387,7 +387,7 @@ def test_channel_search_fetches_channel_listing(
     ) -> dict:
         calls.append((channel_ref, options.last))
         return {
-            "channel_id": "UC123",
+            "channel_id": "UC1234567890123456789012",
             "channel_handle": "@OpenAI",
             "entries": [
                 {
@@ -418,7 +418,7 @@ def test_channel_search_fetches_channel_listing(
             "type": "video",
             "video_id": "JpSHyEIZ_bo",
             "title": "OpenAI agents",
-            "channel_id": "UC123",
+            "channel_id": "UC1234567890123456789012",
             "channel_handle": "@OpenAI",
             "upload_date": "20260706",
             "duration": 600,
@@ -505,7 +505,7 @@ def test_channel_search_uses_explicit_handles_without_name_lookup(monkeypatch) -
     ) -> dict:
         listing_calls.append((channel_ref, options.last))
         return {
-            "channel_id": "UC123",
+            "channel_id": "UC1234567890123456789012",
             "channel_handle": "@Anthropic",
             "entries": [
                 {
@@ -537,7 +537,7 @@ def test_channel_search_uses_explicit_handles_without_name_lookup(monkeypatch) -
 def test_channel_search_dedupes_and_sorts_by_recency(monkeypatch) -> None:
     listings = {
         "@OpenAI": {
-            "channel_id": "UC123",
+            "channel_id": "UC1234567890123456789012",
             "channel_handle": "@OpenAI",
             "entries": [
                 {
@@ -560,7 +560,7 @@ def test_channel_search_dedupes_and_sorts_by_recency(monkeypatch) -> None:
             ],
         },
         "@Anthropic": {
-            "channel_id": "UC456",
+            "channel_id": "UC4567890123456789012345",
             "channel_handle": "@Anthropic",
             "entries": [
                 {
@@ -628,7 +628,7 @@ def test_channel_search_can_sort_by_popularity(monkeypatch) -> None:
         options,
     ) -> dict:
         return {
-            "channel_id": "UC123",
+            "channel_id": "UC1234567890123456789012",
             "channel_handle": channel_ref,
             "entries": [
                 {
@@ -703,7 +703,7 @@ def test_channel_search_fetches_metadata_missing_from_flat_listings(
 
     def fake_fetch_channel_videos(channel_ref: str, *, options) -> dict:
         return {
-            "channel_id": "UC123",
+            "channel_id": "UC1234567890123456789012",
             "channel_handle": channel_ref,
             "entries": [
                 {"id": "aaaaaaaaaaa", "title": "Older talk", "duration": 600},
@@ -758,7 +758,7 @@ def test_channel_date_filter_stops_hydrating_after_listing_passes_cutoff(
 
     def fake_fetch_channel_videos(channel_ref: str, *, options) -> dict:
         return {
-            "channel_id": "UC123",
+            "channel_id": "UC1234567890123456789012",
             "channel_handle": channel_ref,
             "entries": [
                 {"id": video_id, "title": f"Talk {index}", "duration": 600}
@@ -801,7 +801,7 @@ def test_native_channel_query_filters_video_titles(monkeypatch) -> None:
         options,
     ) -> dict:
         return {
-            "channel_id": "UC123",
+            "channel_id": "UC1234567890123456789012",
             "channel_handle": channel_ref,
             "entries": [
                 {
@@ -847,7 +847,7 @@ def test_channel_search_can_sort_by_semantic_relevance(
         options,
     ) -> dict:
         return {
-            "channel_id": "UC123",
+            "channel_id": "UC1234567890123456789012",
             "channel_handle": channel_ref,
             "entries": [
                 {
@@ -921,7 +921,7 @@ def test_semantic_channel_search_prefilters_by_title_embeddings(
         options,
     ) -> dict:
         return {
-            "channel_id": "UC123",
+            "channel_id": "UC1234567890123456789012",
             "channel_handle": channel_ref,
             "entries": [
                 {
@@ -1061,7 +1061,7 @@ def test_semantic_video_search_returns_only_scored_videos(
         options,
     ) -> dict:
         return {
-            "channel_id": "UC123",
+            "channel_id": "UC1234567890123456789012",
             "channel_handle": channel_ref,
             "entries": [
                 {
@@ -1119,7 +1119,7 @@ def test_date_filter_runs_before_transcript_fetch(
         options,
     ) -> dict:
         return {
-            "channel_id": "UC123",
+            "channel_id": "UC1234567890123456789012",
             "channel_handle": channel_ref,
             "entries": [
                 {
@@ -1183,7 +1183,7 @@ def test_semantic_video_results_include_partial_transcript_warnings(
         options,
     ) -> dict:
         return {
-            "channel_id": "UC123",
+            "channel_id": "UC1234567890123456789012",
             "channel_handle": channel_ref,
             "entries": [
                 {
@@ -1256,7 +1256,7 @@ def test_semantic_search_defaults_to_chunk_results(
         options,
     ) -> dict:
         return {
-            "channel_id": "UC123",
+            "channel_id": "UC1234567890123456789012",
             "channel_handle": channel_ref,
             "entries": [
                 {
@@ -1323,7 +1323,7 @@ def test_semantic_search_defaults_to_chunk_results(
             "score": 0.92,
             "video": {
                 "title": "GPU capex discussion",
-                "channel_id": "UC123",
+                "channel_id": "UC1234567890123456789012",
                 "channel_handle": "@OpenAI",
                 "upload_date": "2026-07-03",
                 "duration": 600.0,
@@ -1346,7 +1346,7 @@ def test_live_semantic_search_fetches_transcripts_concurrently(
         options,
     ) -> dict:
         return {
-            "channel_id": "UC123",
+            "channel_id": "UC1234567890123456789012",
             "channel_handle": channel_ref,
             "entries": [
                 {"id": "aaaaaaaaaaa", "title": "GPT-5.6 analysis"},
@@ -1414,7 +1414,7 @@ def test_search_query_is_optional_only_for_native_channel_search(monkeypatch) ->
         options,
     ) -> dict:
         return {
-            "channel_id": "UC123",
+            "channel_id": "UC1234567890123456789012",
             "channel_handle": channel_ref,
             "entries": [],
         }
@@ -1627,7 +1627,7 @@ def test_semantic_search_reports_when_no_transcripts_can_be_prepared(
         options,
     ) -> dict:
         return {
-            "channel_id": "UC123",
+            "channel_id": "UC1234567890123456789012",
             "channel_handle": channel_ref,
             "entries": [
                 {
@@ -1669,7 +1669,7 @@ def test_channel_search_limits_after_merge_and_sort(monkeypatch) -> None:
     ready = Barrier(2)
     listings = {
         "@OpenAI": {
-            "channel_id": "UC123",
+            "channel_id": "UC1234567890123456789012",
             "channel_handle": "@OpenAI",
             "entries": [
                 {
@@ -1689,7 +1689,7 @@ def test_channel_search_limits_after_merge_and_sort(monkeypatch) -> None:
             ],
         },
         "@Anthropic": {
-            "channel_id": "UC456",
+            "channel_id": "UC4567890123456789012345",
             "channel_handle": "@Anthropic",
             "entries": [
                 {

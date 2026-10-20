@@ -5,6 +5,7 @@ from youtube_toolkit.identity import (
     extract_video_id,
     is_channel_id,
     is_video_id,
+    normalize_channel_url,
     normalize_youtube_url,
 )
 
@@ -23,10 +24,15 @@ def test_extract_video_id_from_common_url_shapes() -> None:
 def test_video_and_channel_id_detectors() -> None:
     assert is_video_id("JpSHyEIZ_bo")
     assert not is_video_id("https://youtu.be/JpSHyEIZ_bo")
-    assert is_channel_id("UC123")
+    assert is_channel_id("UC1234567890123456789012")
     assert not is_channel_id("@OpenAI")
-    assert extract_channel_id("UC123") == "UC123"
+    assert extract_channel_id("UC1234567890123456789012") == "UC1234567890123456789012"
     assert extract_channel_id("@OpenAI") is None
+
+
+def test_short_uc_names_are_handles_not_channel_ids() -> None:
+    assert not is_channel_id("UCLA")
+    assert normalize_channel_url("UCLA") == "https://www.youtube.com/@UCLA/videos"
 
 
 def test_normalize_youtube_url() -> None:

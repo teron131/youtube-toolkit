@@ -22,7 +22,8 @@ STOP_WORDS = frozenset(
     """.split()  # noqa: SIM905 -- Keep the stop-word vocabulary compact and readable.
 )
 
-TOKEN_PATTERN = re.compile(r"[\u3400-\u9fff]|[^\W_]+", re.UNICODE)
+# "gpu加速 v2_x" → ["gpu", "加", "速", "v2", "x"]: each CJK character is its own token wherever it sits.
+TOKEN_PATTERN = re.compile(r"[\u3400-\u9fff]|[^\W_\u3400-\u9fff]+", re.UNICODE)
 SPONSOR_TITLE = re.compile(r"\b(?:sponsor(?:ed|ship)?|advertisement|ad break)\b", re.I)
 
 

@@ -15,7 +15,7 @@ from youtube_toolkit.cli import commands
 from youtube_toolkit.cli.parser import build_parser
 from youtube_toolkit.schemas import TranscriptChunk, TranscriptDocument, VideoMetadata
 from youtube_toolkit.vision import frames as frame_selection, workflow
-from youtube_toolkit.vision.windows import TranscriptWindow
+from youtube_toolkit.vision.windows import TOKEN_PATTERN, TranscriptWindow
 from youtube_toolkit.youtube.caption import CaptionTranscriptUnavailable
 from youtube_toolkit.youtube.client import VISION_VIDEO_FORMAT_SELECTOR, YtDlpClient
 
@@ -141,6 +141,10 @@ def test_sample_vision_rejects_long_video_before_download(
     monkeypatch.setattr(workflow.shutil, "which", lambda _: "ffmpeg")
     with pytest.raises(ValueError, match="longer than 2 hours"):
         workflow.sample_vision(VIDEO_ID, output_dir=tmp_path)
+
+
+def test_cjk_characters_after_latin_text_are_separate_tokens() -> None:
+    assert TOKEN_PATTERN.findall("gpu加速 v2_x") == ["gpu", "加", "速", "v2", "x"]
 
 
 def test_transcript_windows_limit_decoding_and_frames_own_pixels(

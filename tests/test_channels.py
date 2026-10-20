@@ -40,7 +40,8 @@ def test_normalize_channel_url_from_common_inputs() -> None:
         normalize_channel_url("@example") == "https://www.youtube.com/@example/videos"
     )
     assert (
-        normalize_channel_url("UCabc") == "https://www.youtube.com/channel/UCabc/videos"
+        normalize_channel_url("UCabcdefghijklmnopqrstuv")
+        == "https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv/videos"
     )
     assert (
         normalize_channel_url("https://www.youtube.com/@example/videos")
@@ -58,9 +59,9 @@ def test_parse_channel_ref_normalizes_public_channel_refs() -> None:
         channel_handle="@OpenAI",
     )
     assert parse_channel_ref(
-        "https://www.youtube.com/channel/UC123"
+        "https://www.youtube.com/channel/UC1234567890123456789012"
     ) == ChannelIdentity(
-        youtube_channel_id="UC123",
+        youtube_channel_id="UC1234567890123456789012",
         channel_handle=None,
     )
 
@@ -175,7 +176,7 @@ def test_validate_channel_options_rejects_non_positive_values() -> None:
 
 def openai_listing() -> dict:
     return {
-        "channel_id": "UC123",
+        "channel_id": "UC1234567890123456789012",
         "channel_handle": "@OpenAI",
         "entries": [
             {
