@@ -1,34 +1,22 @@
 # YouTube Toolkit
 
-A YouTube CLI for agents with directory-local request archives: search videos and comments, read transcripts, inspect metadata, and extract visual context through yt-dlp.
+A YouTube CLI for agents: search videos and comments, read transcripts and metadata, and extract visual context through yt-dlp, with request archives kept in the working directory.
 
-![Retrieval routes including keyword comment search with Top/likes interleaving through yt-dlp, captions, optional embeddings, and cloud speech-to-text, alongside local readiness checks.](docs/architecture.svg)
+![How the commands fit together: each command is a line through the shared parts it uses.](docs/architecture.svg)
 
 ## Install
 
-Requires Python 3.13+ and uv.
+Requires Python 3.13+ and uv. The installer replaces the installed `youtube` tool; `--vision` and `--stt` add optional dependencies and need `ffmpeg` installed separately.
 
 ```bash
 uv run python scripts/install.py
-```
-
-For visual extraction, install its optional dependencies and install `ffmpeg` separately:
-
-```bash
 uv run python scripts/install.py --vision
-```
-
-For local speech-to-text on videos without captions, install its optional dependencies (Hugging Face `transformers` and PyTorch) and install `ffmpeg` separately:
-
-```bash
 uv run python scripts/install.py --stt
 ```
 
-The installer replaces the installed `youtube` tool; combine `--vision --stt` to install both optional capabilities. To run the checkout directly, use `uv run youtube`.
+`--stt` installs Hugging Face `transformers` and PyTorch for local speech-to-text. Run the checkout directly with `uv run youtube`.
 
-## API keys and configuration
-
-Run the interactive setup to save embedding and speech-to-text settings for this application:
+## Configuration
 
 ```bash
 youtube setup
@@ -36,28 +24,15 @@ youtube setup --embeddings
 youtube setup --stt
 ```
 
-Without flags, setup configures both capabilities; combine `--embeddings --stt` to explicitly select both.
-Keys use hidden prompts, and there are no command-line key flags.
-Press Enter to keep an existing saved value, or enter `-` to remove its saved override.
-Canceling before completion saves nothing.
+Setup saves embedding and speech-to-text settings, or one of them with a flag. Keys are entered at hidden prompts, never as flags; Enter keeps a saved value and `-` removes it. Setup makes no API calls.
 
-Settings are saved in an application-specific `.env` file using `KEY=value` syntax:
-
-| Platform | Configuration file |
+| Platform | Settings file |
 | --- | --- |
 | macOS | `~/Library/Application Support/youtube-toolkit/.env` |
 | Linux | `${XDG_CONFIG_HOME:-~/.config}/youtube-toolkit/.env` |
 | Windows | `%APPDATA%/youtube-toolkit/.env` |
 
-`XDG_CONFIG_HOME` overrides the configuration directory on both Linux and macOS.
-Setup changes no shell startup files or `PATH` settings.
-Keys are stored in this local file, with access restricted to the current user on POSIX systems; they are not stored in the OS keychain.
-Nonblank environment variables override saved settings, followed by the defaults documented below.
-For example, an exported `EMBEDDING_MODEL` takes precedence over the model saved by setup.
-The file accepts comments, quoted values, and optional `export` prefixes; values are read literally without expanding `${VARIABLE}` references or exporting them to the process environment.
-
-Prompts appear on stderr; the final JSON reports the configuration path and saved setting names without their values.
-Setup makes no API calls or model downloads; use the readiness commands below when you want to check the configured routes.
+The file is readable only by the current user on macOS and Linux, and `XDG_CONFIG_HOME` moves it on macOS too. Nonblank environment variables override saved settings, which override the defaults below. Values are read literally, without `${VARIABLE}` expansion.
 
 ## Examples
 
@@ -77,61 +52,42 @@ youtube stt-setup
 youtube doctor
 ```
 
-Commands return JSON except `doctor`, which reports local readiness without contacting YouTube or model APIs. `stt-setup` checks the configured speech-to-text routes separately; it does not retrieve a YouTube video.
+Commands print JSON, except `doctor`, which checks local readiness without network calls.
 
 ## Search and channel listings
 
-Search covers YouTube by default, or the uploads of the channels named with `--channels`:
+Search covers YouTube, or the uploads of channels named with `--channels`, which repeats.
 
-| Command or mode | Query behavior | Default ordering |
+| Mode | Query | Default order |
 | --- | --- | --- |
-| Native YouTube search | Query required; several queries are interleaved and duplicate videos removed | YouTube relevance |
-| Native channel search (`--channels`) | Query optional; titles must contain any supplied query, case-insensitively | Recency |
-| `youtube channel` | Direct upload listing, without queries or search filters | Latest first |
+| YouTube search | Required; several queries interleave without duplicates | Relevance |
+| Channel search (`--channels`) | Optional; titles must contain one of the queries | Recency |
+| `youtube channel` | None; a plain upload listing | Latest first |
 
-`--sort popularity` orders native search results by views; native YouTube search rejects `--sort recency`. Repeat `--channels` to combine channels.
+`--sort popularity` orders by views; YouTube-wide search rejects `--sort recency`. Defaults are 10 results (30 for channel searches), at least 10,000 views, and a length from 3:00 to 8:00:00; `youtube search --help` lists every filter. Channel listings carry no upload dates, so date filters and recency sorting fetch each video's metadata.
 
-For `youtube channel`, `--last N` selects the latest uploads. `--days N` uses a UTC date window and fetches upload dates, skipping videos it cannot date; `--last` then sets the initial listing size rather than capping the final results.
-
-Search defaults can be overridden with these flags:
-
-| Flag | Default | Controls |
-| --- | --- | --- |
-| `--limit` | 10 for YouTube; 30 for channel searches | Maximum results returned |
-| `--min-views` | 10,000 | Minimum video views |
-| `--min-duration` | `3:00` | Minimum video duration |
-| `--max-duration` | `8:00:00` | Maximum video duration |
-
-Use `youtube search --help` for all filters and overrides.
-
-Channel listings omit upload dates, so recency sorting and date filters require per-video metadata requests. Other filters fetch metadata only when a required field is missing.
+`youtube channel --last N` lists the latest uploads. `--days N` keeps uploads inside a UTC date window and drops videos it cannot date; `--last` then sizes the listing it checks.
 
 ### Semantic search
 
-Semantic search shortlists videos by title, then uses an embedding API to rank transcript passages:
+`--mode semantic` shortlists videos by title, then ranks their caption passages with an embedding API. It returns passages, or videos ranked by their best passage with `--return video`; each passage scores against its closest query.
 
 ```bash
 youtube search "agent memory" --mode semantic --limit 5
 youtube search "model evals" --channels @OpenAI --mode semantic --return video
 ```
 
-Configure embeddings with `youtube setup --embeddings`, or supply the same settings through environment variables:
+| Variable | Default |
+| --- | --- |
+| `EMBEDDING_API_KEY` | Required |
+| `EMBEDDING_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta/openai/`, or any OpenAI-compatible endpoint |
+| `EMBEDDING_MODEL` | `gemini-embedding-2` |
+| `EMBEDDING_DIMENSIONS` | 768 |
+| `EMBEDDING_CONCURRENCY` | 16, clamped to 1–50 |
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `EMBEDDING_API_KEY` | Required; no default | API key for the embedding service |
-| `EMBEDDING_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible API endpoint |
-| `EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model |
-| `EMBEDDING_DIMENSIONS` | 1,536 | Requested vector dimensions |
-| `EMBEDDING_CONCURRENCY` | 16 | Parallel requests, clamped to 1–50 |
-
-Results are passages by default; `--return video` ranks videos by their best matching passage. With several queries, each passage is scored against its closest query. Duplicate texts share an embedding request within each stage, and results are ranked by similarity.
-
-Semantic search reads captions only and never invokes speech-to-text. Partial caption or embedding failures are summarized in result `warnings`; the command fails if no transcript passage can be embedded. An empty result list means no passage met the similarity threshold. Passage `chunk_index` values are not timestamps; use `transcript --timestamps` for caption timing.
+It reads captions only, never speech-to-text. Partial failures appear in `warnings`, and the command fails only when no passage can be embedded. `chunk_index` is not a timestamp; use `transcript --timestamps` for timing.
 
 ## Comment search
-
-Search a video's Top comments for a keyword or phrase in one command:
 
 ```bash
 youtube comments <url-or-id> "pricing"
@@ -139,20 +95,9 @@ youtube comments <url-or-id> "training data" --limit 250
 youtube comments <url-or-id> "pricing" | jq '.comments[] | select((.like_count // 0) >= 10)'
 ```
 
-The command fetches up to 100 top-level comments in YouTube's Top order by default, excludes replies, and then matches the optional query as a case-insensitive literal substring of comment text, like `rg -i -F`.
-The query is one keyword or phrase; regex and OR expressions are not interpreted.
-`--limit` accepts 1-1000 and defaults to 100; values outside that range fail before contacting YouTube.
-It controls how many comments are fetched before filtering, not the number of matches; sparse matches never trigger more retrievals.
-For an intentional unfiltered sample, use `youtube comments <url-or-id>`; passing an empty query has the same effect.
-No model API or API key is required.
+It fetches up to 100 top-level comments in YouTube's Top order (`--limit` takes 1–1000) and keeps those containing the query as a case-insensitive literal substring, like `rg -i -F`. `--limit` sizes the sample, not the matches; omit the query for the whole sample. Matches alternate between Top order and most likes, without repeats. No API key is needed.
 
-After filtering, results alternate between the next unseen comment in YouTube's Top order and the next unseen comment ranked by descending likes.
-Comments are deduplicated internally by ID.
-Within the like-count ranking, ties preserve Top order and unavailable counts sort last.
-This interleaving changes the order within the fetched sample, not retrieval coverage or the number of network requests.
-
-JSON output contains only `title`, `url`, and `comments`; each comment contains only `text` and `like_count`.
-Unavailable like counts are `null`, and no matches or no available comments produces `comments: []`.
+Output holds only `title`, `url`, and `comments`, each with `text` and `like_count`, which is `null` when unavailable:
 
 ```json
 {
@@ -164,71 +109,59 @@ Unavailable like counts are `null`, and no matches or no available comments prod
 }
 ```
 
-Every fetch saves the unfiltered sample in its original Top order under `.cache/youtube-toolkit/comments/`, using the same lean JSON fields as stdout.
-Timestamped filenames keep each retrieval separate; the saved JSON has no metadata wrapper.
+The unfiltered sample is archived in the same shape under `.cache/youtube-toolkit/comments/`.
 
 ## Metadata and transcripts
 
-Metadata includes descriptions, thumbnails, and chapters. Transcripts return a JSON string by default or timed chunks with `--timestamps`. Manual English or Chinese subtitles are preferred, with the video's language family tried first; otherwise the toolkit uses original-language automatic captions. It excludes machine-translated tracks, converts Chinese transcript text to Taiwan Traditional, and removes caption spans overlapping SponsorBlock segments.
+Metadata includes the description, thumbnails, and chapters. Transcripts print as one JSON string, or as timed chunks with `--timestamps`. Manual English or Chinese subtitles come first, starting with the video's language family, then original-language automatic captions. Machine translations are never used, Chinese becomes Taiwan Traditional, and SponsorBlock segments are removed.
 
-When no usable captions exist, the transcript command falls back to [speech-to-text](#speech-to-text) if configured. STT output has no timing: `--timestamps` returns one chunk with zero start and end. Caption download failures remain errors.
-
-`--export` writes metadata and transcript text to `<normalized-title>_<normalized-channel>.txt` in the working directory and returns its path. Combine it with `--timestamps` for a timed export. `--force` replaces an existing export and requires `--export`.
+Without usable captions, `transcript` falls back to [speech-to-text](#speech-to-text) when it is configured; caption download failures stay errors. `--export` writes metadata and text to `<normalized-title>_<normalized-channel>.txt` in the working directory, with `--timestamps` for a timed export and `--force` to overwrite.
 
 ## Visual context
 
-Vision returns timestamped collages and per-frame measurements in JSON. Timed captions choose where to look and local image analysis picks the frames; without usable timed captions it samples evenly. No model API or speech-to-text is used.
+`youtube vision` returns six-frame collages and per-frame JSON. Its candidates are the video's keyframes, which YouTube places every three to seven seconds, minus sponsor segments, dark frames, and near-copies.
 
-| Setting or limit | Value |
+![How vision picks frames: caption or speech-to-text text and keyframes are embedded, matched, ranked per scope, fused, and deduplicated into collages, with a dashed time-slot lane when there is no image embedding model or timed transcript.](docs/vision-pipeline.svg)
+
+With an image embedding key and a timed transcript, Gemini Embedding 2 ranks the candidates against the transcript's keywords, sentences, and paragraphs. A frame matches only text spoken from five seconds before to two seconds after it, scored relative to its similarity to the whole transcript, so silent stretches yield no ranked frames. Reciprocal rank fusion merges the three scopes, then frames within the minimum gap or with image-embedding cosine 0.96 or more to a pick are skipped. The cutoff is never lowered to fill the requested count.
+
+The key is `GEMINI_API_KEY`, or `EMBEDDING_API_KEY` when the embedding settings point at Gemini Embedding 2 on Google. The transcript is the one `transcript` returns, so a video without captions runs speech-to-text. Without a key or a timed transcript, or with `--local-only`, vision takes the candidate nearest the middle of each time slot of at least 12 seconds, skipping picks within the minimum gap or repeating the previous one. `selection_mode` and the warnings say which ran and why. A rejected key fails within seconds, before the video downloads, and names Google's reason code.
+
+| Option or limit | Value |
 | --- | --- |
-| Screenshots (`--max-frames`) | Default 6; accepts 1–96; repetitive content can yield fewer |
-| Collage layout | Up to six screenshots per page, in 2 columns × 3 rows |
-| Maximum video duration | 2 hours |
-| Maximum temporary video size | 500 MiB |
+| `--max-frames` | 1–96, default 96; the result can be shorter |
+| `--min-similarity` | Raw cosine floor, default 0.30 |
+| `--min-gap` | Seconds between frames, default 10 |
+| Collage page | Up to six 960×540 frames, 2 columns × 3 rows |
+| Video limits | 2 hours, 500 MiB download |
 
-For example, `--max-frames 12` allows up to 12 screenshots. Collages remain under `.cache/youtube-toolkit/vision/` after the downloaded video is removed.
-
-![How vision picks frames: caption passages choose where to look, only those windows are decoded at one frame per second, local image analysis picks one sharp, steady frame per window, and the result is timestamped collages with JSON measurements.](docs/vision-pipeline.svg)
+Collages go under `.cache/youtube-toolkit/vision/`; the video and candidate images are deleted afterwards unless `--no-auto-clean` keeps them, reported as `media_dir`. JSON includes `candidate_count`, `embedding_usage`, and per frame raw `visual_scores` and, for ranked picks, `relevance`: rank, RRF score, and matched texts with raw and relative cosine. Scores are measurements, not probabilities.
 
 ## Speech-to-text
 
-The transcript command selects a cloud provider when its key is set, otherwise a local model when its dependencies and `ffmpeg` are installed. Provider errors propagate; local transcription is selected only when the cloud key is absent. With neither route available, the no-captions error is returned.
+`transcript` uses a cloud provider when its key is set, otherwise a local model when its dependencies and `ffmpeg` are installed; provider errors propagate. Save the provider, key, and local model with `youtube setup --stt`, or set them in the environment.
 
-Use `youtube setup --stt` to save the provider, its API key, and the local model setting, or supply them through environment variables.
+| `STT_PROVIDER` | Key | Model | Timing |
+| --- | --- | --- | --- |
+| `xai` (default) | `XAI_API_KEY` | `grok-voice-transcribe-2.0` | Per word |
+| `elevenlabs` | `ELEVENLABS_API_KEY` | `scribe_v2` | Per word |
+| `vercel` | `AI_GATEWAY_API_KEY` | `spacexai/grok-stt` through Vercel AI Gateway | Model segments, when provided |
+| `openai` | `OPENAI_API_KEY` | `gpt-transcribe` | None |
+| `gemini` | `GEMINI_API_KEY` | `gemini-3.5-transcribe` | None; word timing would cap audio at 30 minutes |
 
-`STT_PROVIDER` chooses the cloud provider, and each one needs its own key:
+Word timings become caption-like lines; an untimed transcript is one chunk at zero, which vision cannot rank against. Gemini accepts up to an hour of audio, and OpenAI files up to 25 MB, about 25 minutes.
 
-| `STT_PROVIDER` | Key | Model |
+The local model is `nvidia/parakeet-tdt-0.6b-v3`, or any `transformers` speech-recognition model named in `STT_LOCAL_MODEL`, downloaded on first use and run on an Nvidia GPU, an Apple GPU, or the CPU. It is timed per piece of up to 28 seconds. Parakeet covers 25 European languages only; for others, use a cloud provider or `STT_LOCAL_MODEL=openai/whisper-large-v3-turbo`, which took about 4 minutes per hour of audio on an Apple M5 against Parakeet's 45 seconds. An unknown provider or unloadable model falls back to the default with a warning.
+
+| Command | Checks | Network |
 | --- | --- | --- |
-| `elevenlabs` | `ELEVENLABS_API_KEY` | `scribe_v2` |
-| `gemini` | `GEMINI_API_KEY` | `gemini-3.5-transcribe` |
-| `openai` | `OPENAI_API_KEY` | `gpt-transcribe` |
-| `vercel` | `AI_GATEWAY_API_KEY` | `spacexai/grok-stt` through Vercel AI Gateway |
-| `xai` (default) | `XAI_API_KEY` | `grok-voice-transcribe-2.0` |
-
-Gemini and the Vercel gateway each transcribed an hour of audio in under a minute. Gemini accepts recordings up to one hour, and OpenAI accepts files up to 25 MB, which is about 25 minutes of YouTube audio.
-
-The local model is `nvidia/parakeet-tdt-0.6b-v3`, or the Hugging Face ASR model ID in `STT_LOCAL_MODEL`. The local route runs any model that works in the `transformers` `automatic-speech-recognition` pipeline, on an Nvidia GPU, an Apple GPU, or the CPU. The model downloads the first time it is needed. An unknown `STT_PROVIDER`, or a local model that cannot be loaded, falls back to the default with a warning on stderr.
-
-Parakeet covers 25 European languages only and returns noise for others such as Chinese. For those, use the cloud route or set `STT_LOCAL_MODEL=openai/whisper-large-v3-turbo`. On an Apple M5, Parakeet transcribed an hour of audio in 45 seconds and Whisper large-v3-turbo took about 4 minutes.
-
-Configuration and readiness commands have different effects:
-
-| Command | Purpose | Downloads or API calls |
-| --- | --- | --- |
-| `youtube setup` | Saves embedding and STT settings interactively | None |
-| `youtube doctor` | Local runtime and configuration readiness | None; creates no files and loads no model |
-| `youtube stt-setup` | Reports both STT routes and tests the local route when its dependencies and `ffmpeg` are available | Downloads the local model if needed; no cloud request |
-| `youtube stt-setup --cloud-test` | The same local checks, plus a two-second cloud test recording | May download the local model; sends a real request billed by the cloud provider |
-
-If the local dependencies or `ffmpeg` are unavailable, `stt-setup` reports that the local route is not installed.
-`doctor` and `stt-setup` check configuration; use `setup` to enter and save keys.
+| `youtube doctor` | Local readiness and configuration | None |
+| `youtube stt-setup` | Both routes, running the local model on a test recording | Downloads the local model if needed |
+| `youtube stt-setup --cloud-test` | Also sends a two-second recording to the cloud provider | One billed request |
 
 ## Local artifacts
 
-Run commands from the directory where their research artifacts belong. Fresh yt-dlp metadata, comments, search listings, channel listings, and normalized transcript documents are archived under `.cache/youtube-toolkit/`, with a UTC timestamp and a readable identifier in each filename. Comment archives contain only `title`, `url`, and `comments`, with `text` and `like_count` per comment; other JSON artifacts contain `request`, `fetched_at`, and `payload`. Repeated retrievals preserve earlier copies.
-
-Saved copies are never automatically reused or expired. Semantic rankings and embeddings stay in memory for the current search. Long text fields in JSON stdout are capped at 400,000 characters; transcript exports and archived documents retain the complete text.
+Run commands where their artifacts belong. Fresh YouTube responses and transcripts are archived under `.cache/youtube-toolkit/` with UTC-timestamped names, as `request`, `fetched_at`, and `payload`; comment archives hold just the sample. Archives are never reused or expired. Text fields in stdout stop at 400,000 characters, while exports and archives keep everything.
 
 ## Agent skill
 

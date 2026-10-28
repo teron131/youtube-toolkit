@@ -12,7 +12,7 @@ from youtube_toolkit.config import (
     EmbeddingConfig,
     embedding_concurrency,
 )
-from youtube_toolkit.search.embeddings import EmbeddingClient, EmbeddingError
+from youtube_toolkit.embeddings.openai import EmbeddingClient, EmbeddingError
 from youtube_toolkit.search.semantic import split_transcript_chunks
 
 
@@ -53,7 +53,7 @@ def test_embedding_client_uses_config_and_one_sdk_client(monkeypatch) -> None:
         base_url="https://embedding.example/v1/",
         output_dimensionality=512,
     )
-    monkeypatch.setattr("youtube_toolkit.search.embeddings.OpenAI", create_client)
+    monkeypatch.setattr("youtube_toolkit.embeddings.openai.OpenAI", create_client)
 
     with EmbeddingClient(config) as client:
         assert client.embed("hello") == [0.25, 0.75]
@@ -88,7 +88,7 @@ def test_embedding_request_retries_transient_network_failures(monkeypatch) -> No
             **kwargs, http_client=httpx2.Client(transport=httpx2.MockTransport(respond))
         )
 
-    monkeypatch.setattr("youtube_toolkit.search.embeddings.OpenAI", create_client)
+    monkeypatch.setattr("youtube_toolkit.embeddings.openai.OpenAI", create_client)
     monkeypatch.setattr("openai._base_client.time.sleep", lambda _delay: None)
     config = EmbeddingConfig(
         "text-embedding-test", "embedding-key", "https://embedding.example/v1", 2
@@ -117,7 +117,7 @@ def test_embedding_batches_share_text_without_losing_results_or_failures(
             **kwargs, http_client=httpx2.Client(transport=httpx2.MockTransport(respond))
         )
 
-    monkeypatch.setattr("youtube_toolkit.search.embeddings.OpenAI", create_client)
+    monkeypatch.setattr("youtube_toolkit.embeddings.openai.OpenAI", create_client)
     config = EmbeddingConfig("test", "embedding-key", "https://embedding.example/v1")
     with EmbeddingClient(config) as client:
         assert client.embed([]) == ({}, {})
@@ -156,7 +156,7 @@ def test_embedding_failures_remain_search_errors(monkeypatch, status, payload) -
             ),
         )
 
-    monkeypatch.setattr("youtube_toolkit.search.embeddings.OpenAI", create_client)
+    monkeypatch.setattr("youtube_toolkit.embeddings.openai.OpenAI", create_client)
     config = EmbeddingConfig("test", "embedding-key", "https://embedding.example/v1")
     with (
         EmbeddingClient(config) as client,

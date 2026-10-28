@@ -11,6 +11,8 @@ from ..config import (
     DEFAULT_SEARCH_MIN_DURATION,
     DEFAULT_SEARCH_MIN_VIEWS,
     DEFAULT_VISION_MAX_FRAMES,
+    DEFAULT_VISION_MIN_GAP_SECONDS,
+    DEFAULT_VISION_MIN_SIMILARITY,
     MAX_VISION_FRAMES,
 )
 from ..youtube import DEFAULT_COMMENT_LIMIT, MAX_COMMENT_LIMIT
@@ -120,7 +122,30 @@ def _add_video_commands(subparsers: argparse._SubParsersAction) -> None:
         "--max-frames",
         type=int,
         default=DEFAULT_VISION_MAX_FRAMES,
-        help=f"Maximum screenshots (1-{MAX_VISION_FRAMES}; default: %(default)s)",
+        help=f"Maximum output screenshots (1-{MAX_VISION_FRAMES}; default: %(default)s); candidate coverage is independent",
+    )
+    vision_parser.add_argument(
+        "--min-similarity",
+        type=float,
+        default=DEFAULT_VISION_MIN_SIMILARITY,
+        help="Minimum raw cosine for semantic matches (default: %(default)s)",
+    )
+    vision_parser.add_argument(
+        "--min-gap",
+        type=float,
+        default=DEFAULT_VISION_MIN_GAP_SECONDS,
+        help="Minimum seconds between retained frames (default: %(default)s)",
+    )
+    vision_parser.add_argument(
+        "--local-only",
+        action="store_true",
+        help="Pick evenly spaced frames locally without captions or Gemini embedding requests",
+    )
+    vision_parser.add_argument(
+        "--auto-clean",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Delete the downloaded video and candidate frames after processing (default: on)",
     )
     vision_parser.set_defaults(handler=commands.vision)
 

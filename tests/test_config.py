@@ -9,6 +9,69 @@ from youtube_toolkit import config
 from youtube_toolkit.stt.cloud import cloud_stt_status
 
 
+def test_shared_embedding_defaults_use_gemini_embedding_2(monkeypatch) -> None:
+    monkeypatch.setattr(config, "config_value", {"EMBEDDING_API_KEY": "shared-key"}.get)
+    embedding = config.embedding_config_from_env()
+    assert embedding.model == "gemini-embedding-2"
+    assert embedding.api_key == "shared-key"
+    assert (
+        embedding.base_url == "https://generativelanguage.googleapis.com/v1beta/openai"
+    )
+    assert embedding.output_dimensionality == 768
+
+
+def test_shared_embedding_configuration_preserves_caller_overrides(monkeypatch) -> None:
+    settings = {
+        "EMBEDDING_API_KEY": "caller-key",
+        "EMBEDDING_MODEL": "caller-model",
+        "EMBEDDING_BASE_URL": "https://example.com/v1/",
+        "EMBEDDING_DIMENSIONS": "512",
+    }
+    monkeypatch.setattr(config, "config_value", settings.get)
+    embedding = config.embedding_config_from_env()
+    assert embedding.model == "caller-model"
+    assert embedding.api_key == "caller-key"
+    assert embedding.base_url == "https://example.com/v1"
+    assert embedding.output_dimensionality == 512
+
+
+@pytest.mark.parametrize(
+    ("settings", "expected"),
+    [
+        ({}, None),
+        ({"EMBEDDING_API_KEY": "shared-key"}, "shared-key"),
+        (
+            {
+                "EMBEDDING_API_KEY": "other-key",
+                "EMBEDDING_BASE_URL": "https://example.com/v1",
+            },
+            None,
+        ),
+        (
+            {"EMBEDDING_API_KEY": "other-key", "EMBEDDING_MODEL": "other-model"},
+            None,
+        ),
+        (
+            {
+                "EMBEDDING_API_KEY": "shared-key",
+                "EMBEDDING_MODEL": "gemini-embedding-2",
+                "EMBEDDING_BASE_URL": "https://generativelanguage.googleapis.com/v1beta",
+            },
+            "shared-key",
+        ),
+        (
+            {"GEMINI_API_KEY": "direct-key", "EMBEDDING_API_KEY": "shared-key"},
+            "direct-key",
+        ),
+    ],
+)
+def test_vision_credentials_resolve_defaults_without_crossing_providers(
+    monkeypatch, settings, expected
+) -> None:
+    monkeypatch.setattr(config, "config_value", settings.get)
+    assert config.vision_embedding_key() == expected
+
+
 def test_saved_settings_are_used_without_exporting_them(monkeypatch) -> None:
     """Both model routes consume saved settings while environment values retain precedence."""
     settings = {

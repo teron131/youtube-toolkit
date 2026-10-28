@@ -8,9 +8,9 @@ from typing import Any, cast
 import pytest
 
 from youtube_toolkit.config import EmbeddingConfig
+from youtube_toolkit.embeddings.openai import EmbeddingClient
 from youtube_toolkit.schemas import TranscriptChunk, TranscriptDocument, VideoMetadata
 import youtube_toolkit.search.discovery as search_discovery
-from youtube_toolkit.search.embeddings import EmbeddingClient
 from youtube_toolkit.search.preprocessing import VideoResult
 from youtube_toolkit.search.request import (
     ChannelTarget,
@@ -29,7 +29,7 @@ def use_embeddings(monkeypatch, embed: Callable[[str], list[float]]) -> None:
         return SimpleNamespace(data=[SimpleNamespace(embedding=embed(kwargs["input"]))])
 
     monkeypatch.setattr(
-        "youtube_toolkit.search.embeddings.OpenAI",
+        "youtube_toolkit.embeddings.openai.OpenAI",
         lambda **_kwargs: SimpleNamespace(
             embeddings=SimpleNamespace(create=create), close=lambda: None
         ),

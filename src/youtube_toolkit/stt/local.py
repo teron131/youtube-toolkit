@@ -12,25 +12,22 @@ from importlib.util import find_spec
 import logging
 from pathlib import Path
 import shutil
-import subprocess
 from typing import TYPE_CHECKING, Any
 import warnings
 
 from ..config import DEFAULT_LOCAL_STT_MODEL, local_stt_model
-from ..schemas import SpeechTranscription
+from ..ffmpeg_utils import SAMPLE_RATE, decode_audio
+from ..schemas import SpeechTranscription, TranscriptChunk
 from .synthetic_audio import tone_recording
 
 if TYPE_CHECKING:
     import numpy as np
 
 logger = logging.getLogger(__name__)
-SAMPLE_RATE = 16_000
 # The pipeline's own chunking is right for Whisper and CTC models but repeats text for Parakeet, and without it Whisper refuses long audio and Parakeet stalls.
 # Pieces under Whisper's 30-second window were correct for all three model families, and Parakeet dropped whole sentences from three-minute pieces that it kept at this length.
 MAX_PIECE_SECONDS = 28
 CUT_SEARCH_SECONDS = 5
-# Decoding even a multi-hour track to PCM takes well under a minute, so ten minutes means ffmpeg is stuck.
-FFMPEG_TIMEOUT_SECONDS = 10 * 60
 
 
 def local_stt_installed() -> bool:
@@ -72,19 +69,33 @@ def check_local_stt() -> dict[str, Any]:
 
 
 def transcribe_locally(audio_path: Path) -> SpeechTranscription:
-    """The language is left for the model to work out, as with the cloud providers, so the result carries none."""
+    """Each piece becomes one timed segment, so timing is only as fine as the pieces, which works for any model without word timestamps.
+
+    The language is left for the model to work out, as with the cloud providers, so the result carries none.
+    """
     pieces = split_at_quiet_points(decode_audio(audio_path))
     recognizer = load_recognizer()
     # Pieces run one at a time: batching them on an Apple GPU returned truncated text.
     results = recognizer(
         [{"raw": piece, "sampling_rate": SAMPLE_RATE} for piece in pieces]
     )
-    text = " ".join(
-        piece_text for result in results if (piece_text := result["text"].strip())
-    )
-    if not text:
+    segments = []
+    offset = 0
+    for piece, result in zip(pieces, results, strict=True):
+        if piece_text := result["text"].strip():
+            segments.append(
+                TranscriptChunk(
+                    start_seconds=offset / SAMPLE_RATE,
+                    end_seconds=(offset + len(piece)) / SAMPLE_RATE,
+                    text=piece_text,
+                )
+            )
+        offset += len(piece)
+    if not segments:
         raise ValueError("Local speech-to-text found no speech")
-    return SpeechTranscription(text=text)
+    return SpeechTranscription(
+        text=" ".join(segment.text for segment in segments), segments=segments
+    )
 
 
 def load_recognizer() -> Any:
@@ -126,47 +137,6 @@ def _build_recognizer(model: str) -> Any:
     return pipeline(
         "automatic-speech-recognition", model=model, device=device, dtype=dtype
     )
-
-
-def decode_audio(audio_path: Path) -> np.ndarray:
-    """ffmpeg reads the file itself because some containers cannot be decoded from a pipe, which is how transformers would feed it."""
-    import numpy as np
-
-    try:
-        decoded = subprocess.run(  # noqa: S603 - arguments are internally assembled and the input is a file this process downloaded.
-            [  # noqa: S607 - ffmpeg is resolved from the local PATH, as local_stt_installed checks.
-                "ffmpeg",
-                "-nostdin",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-i",
-                str(audio_path),
-                "-ac",
-                "1",
-                "-ar",
-                str(SAMPLE_RATE),
-                "-f",
-                "f32le",
-                "-",
-            ],
-            capture_output=True,
-            check=True,
-            timeout=FFMPEG_TIMEOUT_SECONDS,
-        )
-    except subprocess.CalledProcessError as error:
-        detail = error.stderr.decode(errors="replace").strip()
-        raise RuntimeError(
-            f"ffmpeg could not decode audio for speech-to-text: {detail}"
-        ) from error
-    except subprocess.TimeoutExpired as error:
-        raise RuntimeError(
-            f"ffmpeg audio decoding timed out after {FFMPEG_TIMEOUT_SECONDS} seconds"
-        ) from error
-    samples = np.frombuffer(decoded.stdout, dtype=np.float32)
-    if not len(samples):
-        raise ValueError("Audio for speech-to-text is empty")
-    return samples
 
 
 def split_at_quiet_points(

@@ -19,8 +19,10 @@ DEFAULT_YOUTUBE_SEARCH_LIMIT = 10
 DEFAULT_CHANNEL_SEARCH_LIMIT = 30
 DEFAULT_LAST_VIDEOS = 10
 MAX_CONCURRENT_METADATA_FETCHES = 8
-DEFAULT_VISION_MAX_FRAMES = 6
+DEFAULT_VISION_MAX_FRAMES = 96
 MAX_VISION_FRAMES = 96
+DEFAULT_VISION_MIN_SIMILARITY = 0.3
+DEFAULT_VISION_MIN_GAP_SECONDS = 10.0
 
 DEFAULT_STT_PROVIDER = "xai"
 DEFAULT_ELEVENLABS_STT_MODEL = "scribe_v2"
@@ -32,9 +34,9 @@ DEFAULT_XAI_STT_MODEL = "grok-voice-transcribe-2.0"
 # A Hugging Face ASR model ID; STT_LOCAL_MODEL can name any other model that runs in the transformers automatic-speech-recognition pipeline.
 DEFAULT_LOCAL_STT_MODEL = "nvidia/parakeet-tdt-0.6b-v3"
 
-DEFAULT_EMBEDDING_BASE_URL = "https://api.openai.com/v1"
-DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
-DEFAULT_EMBEDDING_DIMENSIONALITY = 1536
+DEFAULT_EMBEDDING_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+DEFAULT_EMBEDDING_MODEL = "gemini-embedding-2"
+DEFAULT_EMBEDDING_DIMENSIONALITY = 768
 DEFAULT_EMBEDDING_CONCURRENCY = 16
 MAX_EMBEDDING_CONCURRENCY = 50
 
@@ -92,6 +94,21 @@ def embedding_concurrency(job_count: int) -> int:
 def stt_provider_name() -> str:
     """Name the cloud speech-to-text provider chosen with STT_PROVIDER."""
     return config_value("STT_PROVIDER") or DEFAULT_STT_PROVIDER
+
+
+def vision_embedding_key() -> str | None:
+    """Reuse the generic embedding key only when its model and endpoint identify Google Gemini."""
+    key = config_value("GEMINI_API_KEY")
+    if key:
+        return key
+    model = config_value("EMBEDDING_MODEL") or DEFAULT_EMBEDDING_MODEL
+    base_url = config_value("EMBEDDING_BASE_URL") or DEFAULT_EMBEDDING_BASE_URL
+    if (
+        model == "gemini-embedding-2"
+        and urlparse(base_url).hostname == "generativelanguage.googleapis.com"
+    ):
+        return config_value("EMBEDDING_API_KEY")
+    return None
 
 
 def local_stt_model() -> str:

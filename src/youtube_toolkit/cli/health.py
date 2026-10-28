@@ -19,7 +19,7 @@ from ..stt import (
     local_stt_installed,
 )
 
-VISION_MODULES = ("numpy", "PIL", "cv2", "scenedetect")
+VISION_MODULES = ("numpy", "PIL", "cv2", "yake")
 
 
 class EmbeddingHealthResult(TypedDict):

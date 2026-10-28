@@ -10,7 +10,8 @@ import urllib.request
 import numpy as np
 import pytest
 
-from youtube_toolkit.schemas import SpeechTranscription
+from youtube_toolkit import ffmpeg_utils
+from youtube_toolkit.schemas import SpeechTranscription, TranscriptChunk
 from youtube_toolkit.stt import cloud, local
 from youtube_toolkit.stt.cloud import (
     PROVIDERS,
@@ -21,31 +22,87 @@ from youtube_toolkit.stt.cloud import (
 )
 
 
-def test_xai_stt_response_normalizes_to_plain_contract() -> None:
+def test_xai_word_timings_become_caption_like_lines() -> None:
+    words = [
+        ("Hello", 0.2, 0.5),
+        ("world.", 0.6, 1.0),
+        ("After", 1.1, 1.4),
+        ("a", 1.5, 1.6),
+        ("pause", 1.7, 2.0),
+        ("next", 3.2, 3.5),
+        ("line", 3.6, 3.9),
+    ]
     result = parse_transcription(
         {
-            "text": "transcript text",
+            "text": "Hello world. After a pause next line",
             "language": "en",
-            "duration": 42.5,
-            "words": [{"word": "transcript"}, {"word": "text"}],
+            "duration": 4.0,
+            "words": [
+                {"text": text, "start": start, "end": end} for text, start, end in words
+            ],
         },
         PROVIDERS["xai"],
     )
 
-    assert result == SpeechTranscription(text="transcript text", language="en")
+    assert result == SpeechTranscription(
+        text="Hello world. After a pause next line",
+        segments=[
+            TranscriptChunk(0.2, 1.0, "Hello world."),
+            TranscriptChunk(1.1, 2.0, "After a pause"),
+            TranscriptChunk(3.2, 3.9, "next line"),
+        ],
+        language="en",
+    )
 
 
-def test_elevenlabs_stt_response_normalizes_to_plain_contract() -> None:
+def test_long_unpunctuated_speech_breaks_into_ten_second_lines_and_cjk_joins_without_spaces() -> (
+    None
+):
+    words = [
+        {"text": "數據", "start": float(second), "end": second + 0.9}
+        for second in range(12)
+    ]
+    result = parse_transcription(
+        {"text": "數據" * 12, "language": "zh", "words": words}, PROVIDERS["xai"]
+    )
+
+    assert result is not None
+    assert [(line.start_seconds, line.end_seconds) for line in result.segments] == [
+        (0, 10.9),
+        (11, 11.9),
+    ]
+    assert result.segments[1].text == "數據"
+    assert result.segments[0].text == "數據" * 11
+
+
+def test_elevenlabs_keeps_only_timed_words_and_multichannel_stays_untimed() -> None:
     single = parse_transcription(
-        {"text": "transcript text", "language_code": "en"}, PROVIDERS["elevenlabs"]
+        {
+            "text": "transcript text",
+            "language_code": "en",
+            "words": [
+                {"text": "transcript", "type": "word", "start": 0.0, "end": 0.6},
+                {"text": " ", "type": "spacing", "start": 0.6, "end": 0.7},
+                {"text": "(laughs)", "type": "audio_event", "start": 0.7, "end": 1.2},
+                {"text": "text", "type": "word", "start": 1.2, "end": 1.5},
+                {"text": "lost", "type": "word", "start": None, "end": None},
+            ],
+        },
+        PROVIDERS["elevenlabs"],
     )
     multichannel = parse_transcription(
         {"transcripts": [{"text": "left"}, {"text": "right"}], "language_code": "en"},
         PROVIDERS["elevenlabs"],
     )
 
-    assert single == SpeechTranscription(text="transcript text", language="en")
-    assert multichannel == SpeechTranscription(text="left right", language="en")
+    assert single == SpeechTranscription(
+        text="transcript text",
+        segments=[TranscriptChunk(0.0, 1.5, "transcript text")],
+        language="en",
+    )
+    assert multichannel == SpeechTranscription(
+        text="left right", segments=[], language="en"
+    )
 
 
 @pytest.mark.parametrize(
@@ -103,7 +160,7 @@ def test_cloud_transcription_follows_the_configured_provider(
     monkeypatch.setattr(cloud, "run_json_request", fake_run_json_request)
 
     assert transcribe_in_cloud(audio_path) == SpeechTranscription(
-        text="数据库", language="zh"
+        text="数据库", segments=[], language="zh"
     )
     assert requests[0].full_url == PROVIDERS[provider or "xai"].url
     assert requests[0].get_header(auth_header) == auth_value
@@ -119,14 +176,18 @@ def test_vercel_gateway_takes_base64_audio_and_the_model_in_a_header(
 
     def fake_run_json_request(request, *, provider_name):
         requests.append(request)
-        return {"text": "hello", "language": "en", "segments": []}
+        return {
+            "text": "hello",
+            "language": "en",
+            "segments": [{"text": "hello", "startSecond": 0.5, "endSecond": 1.25}],
+        }
 
     monkeypatch.setenv("STT_PROVIDER", "vercel")
     monkeypatch.setenv("AI_GATEWAY_API_KEY", "test-key")
     monkeypatch.setattr(cloud, "run_json_request", fake_run_json_request)
 
     assert transcribe_in_cloud(audio_path) == SpeechTranscription(
-        text="hello", language="en"
+        text="hello", segments=[TranscriptChunk(0.5, 1.25, "hello")], language="en"
     )
     (request,) = requests
     assert request.full_url == PROVIDERS["vercel"].url
@@ -177,7 +238,7 @@ def test_gemini_uploads_transcribes_by_reference_and_deletes_the_upload(
     monkeypatch.setattr(cloud, "run_json_request", fake_run_json_request)
 
     assert transcribe_in_cloud(audio_path) == SpeechTranscription(
-        text="first part second part"
+        text="first part second part", segments=[]
     )
     upload, generate, delete = requests
     assert upload.data == b"audio"
@@ -333,8 +394,27 @@ def test_stt_request_does_not_retry_permanent_client_failure(monkeypatch) -> Non
     assert attempts == 1
 
 
+def test_local_pieces_become_timed_segments_at_their_offsets(
+    monkeypatch, tmp_path
+) -> None:
+    rate = ffmpeg_utils.SAMPLE_RATE
+    pieces = [np.zeros(seconds * rate, dtype=np.float32) for seconds in (28, 10, 5)]
+    monkeypatch.setattr(local, "decode_audio", lambda _path: np.concatenate(pieces))
+    monkeypatch.setattr(local, "split_at_quiet_points", lambda _samples: pieces)
+    monkeypatch.setattr(
+        local,
+        "load_recognizer",
+        lambda: lambda _inputs: [{"text": " first "}, {"text": " "}, {"text": "third"}],
+    )
+
+    assert local.transcribe_locally(tmp_path / "audio.m4a") == SpeechTranscription(
+        text="first third",
+        segments=[TranscriptChunk(0, 28, "first"), TranscriptChunk(38, 43, "third")],
+    )
+
+
 def test_long_audio_is_cut_in_the_quiet_gap_before_the_limit() -> None:
-    rate = local.SAMPLE_RATE
+    rate = ffmpeg_utils.SAMPLE_RATE
     samples = np.ones(25 * rate, dtype=np.float32)
     samples[8 * rate : 9 * rate] = 0.0
     samples[17 * rate : 18 * rate] = 0.0

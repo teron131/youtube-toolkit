@@ -78,15 +78,16 @@ class TranscriptChunk:
 
 @dataclass(frozen=True, slots=True)
 class SpeechTranscription:
-    """`language` is None when the route reports no detected language."""
+    """`segments` is empty when the route reports no timing, and `language` is None when it reports no detected language."""
 
     text: str
+    segments: list[TranscriptChunk]
     language: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class TranscriptDocument:
-    """A speech-to-text document holds one untimed chunk at 0 seconds, and its `language` is `speech-to-text` when no language was detected or reported."""
+    """A speech-to-text document holds the route's timed segments, or one untimed chunk at 0 seconds when the route reports no timing; its `language` is `speech-to-text` when no language was detected or reported."""
 
     metadata: VideoMetadata
     language: str
