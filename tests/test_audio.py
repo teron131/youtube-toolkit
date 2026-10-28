@@ -56,7 +56,7 @@ def test_download_transcription_audio_uses_unique_artifact_stem(
     assert commands[0][commands[0].index("--output") + 1].endswith(".%(ext)s")
 
 
-def test_channel_videos_omits_playlist_end_when_unlimited(monkeypatch) -> None:
+def test_channel_videos_requests_a_flat_listing_capped_at_last(monkeypatch) -> None:
     calls = {}
 
     def fake_json(
@@ -75,10 +75,10 @@ def test_channel_videos_omits_playlist_end_when_unlimited(monkeypatch) -> None:
 
     assert YtDlpClient().channel_videos(
         "https://www.youtube.com/@OpenAI/videos",
-        last=None,
+        last=5,
     ) == {"entries": []}
     assert "--flat-playlist" in calls["command"]
-    assert "--playlist-end" not in calls["command"]
+    assert calls["command"][calls["command"].index("--playlist-end") + 1] == "5"
     assert calls["command"][-1] == "https://www.youtube.com/@OpenAI/videos"
 
 

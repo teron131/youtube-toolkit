@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
+from itertools import chain
 from typing import Any
 
 from ..identity import ChannelIdentity, extract_channel_identity
 from ..youtube import ChannelOptions, YtDlpClient, fetch_channel_videos
-from .preprocessing import dedupe_candidates, interlace_relevance
+from .candidates import interlace_relevance, parse_candidates
 from .request import ChannelTarget, ResolvedRequest, SearchRequest
 
 CHANNEL_NAME_SEARCH_LIMIT = 10
@@ -26,19 +27,17 @@ def youtube_candidates(
     per_query_limit = -(-fetch_limit // len(queries))
     # executor.map preserves query order even when later requests finish first.
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_DISCOVERY_FETCHES) as executor:
-        candidate_lists = list(
+        entry_lists = list(
             executor.map(
                 partial(search_youtube, fetch_limit=per_query_limit, sort=youtube_sort),
                 queries,
             )
         )
     if resolved.sort == "relevance":
-        candidates = interlace_relevance(candidate_lists)
+        entries = interlace_relevance(entry_lists)
     else:
-        candidates = dedupe_candidates(
-            [candidate for results in candidate_lists for candidate in results]
-        )
-    return [{**candidate, "source": "youtube"} for candidate in candidates]
+        entries = list(chain.from_iterable(entry_lists))
+    return parse_candidates(entries, source="youtube")
 
 
 def search_youtube(
@@ -71,12 +70,9 @@ def channel_listings(
 def _channel_listing(selection: ChannelTarget, *, limit: int) -> list[dict[str, Any]]:
     channel_ref, channel_identity = resolve_channel_listing(selection)
     metadata = fetch_channel_videos(channel_ref, options=ChannelOptions(last=limit))
-    return [
-        {**candidate, "source": "channel"}
-        for candidate in dedupe_candidates(
-            channel_entries(metadata, known_channel=channel_identity)
-        )
-    ]
+    return parse_candidates(
+        channel_entries(metadata, known_channel=channel_identity), source="channel"
+    )
 
 
 def resolve_channel_listing(selection: ChannelTarget) -> tuple[str, ChannelIdentity]:

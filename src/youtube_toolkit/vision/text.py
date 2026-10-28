@@ -36,6 +36,23 @@ def prepare_targets(
     Caption chunks are indivisible, so an unusually long chunk can exceed the nominal grouping duration.
     Excluded intervals are half-open and remove chunks by their start time.
     """
+    segments = _segments(document, excluded_intervals)
+    if not segments:
+        return []
+    sentences: list[TextTarget] = []
+    paragraphs: list[TextTarget] = []
+    for segment in segments:
+        segment_sentences = _group_sentences(segment)
+        sentences.extend(segment_sentences)
+        paragraphs.extend(_group_paragraphs(segment_sentences))
+    return [*_keywords(paragraphs, document.language), *sentences, *paragraphs]
+
+
+def _segments(
+    document: TranscriptDocument,
+    excluded_intervals: Sequence[tuple[float, float]],
+) -> list[list[TranscriptChunk]]:
+    """Runs of timed chunks that share a chapter or excluded-interval section and have no caption gap over CAPTION_GAP_SECONDS, with ends clipped to that section."""
     duration = document.metadata.duration_seconds
     bound = (
         duration
@@ -90,45 +107,46 @@ def prepare_targets(
         segments[-1].append(replace(chunk, end_seconds=end, text=chunk.text.strip()))
         segment_end = max(segment_end, end)
         previous_section = section
-    if not segments:
-        return []
+    return segments
 
+
+def _group_sentences(segment: list[TranscriptChunk]) -> list[TextTarget]:
     sentences: list[TextTarget] = []
-    paragraphs: list[TextTarget] = []
-    for segment in segments:
-        sentence_group: list[TranscriptChunk] = []
-        segment_sentences: list[TextTarget] = []
-        for chunk in segment:
-            sentence_group.append(chunk)
-            if (
-                chunk.text.rstrip("\"')]}\u2019\u201d").endswith(SENTENCE_ENDINGS)
-                or max(item.end_seconds for item in sentence_group)
-                - sentence_group[0].start_seconds
-                >= SENTENCE_SECONDS
-            ):
-                segment_sentences.append(_sentence(sentence_group))
-                sentence_group = []
-        if sentence_group:
-            segment_sentences.append(_sentence(sentence_group))
-        sentences.extend(segment_sentences)
-        paragraph_group: list[TextTarget] = []
-        for sentence in segment_sentences:
-            if (
-                paragraph_group
-                and max(
-                    sentence.end_seconds,
-                    max(item.end_seconds for item in paragraph_group),
-                )
-                - paragraph_group[0].start_seconds
-                > PARAGRAPH_SECONDS
-            ):
-                paragraphs.append(_paragraph(paragraph_group))
-                paragraph_group = []
-            paragraph_group.append(sentence)
-        if paragraph_group:
-            paragraphs.append(_paragraph(paragraph_group))
+    group: list[TranscriptChunk] = []
+    for chunk in segment:
+        group.append(chunk)
+        if (
+            chunk.text.rstrip("\"')]}\u2019\u201d").endswith(SENTENCE_ENDINGS)
+            or max(item.end_seconds for item in group) - group[0].start_seconds
+            >= SENTENCE_SECONDS
+        ):
+            sentences.append(_sentence(group))
+            group = []
+    if group:
+        sentences.append(_sentence(group))
+    return sentences
 
-    extractor = _keyword_extractor(document.language)
+
+def _group_paragraphs(sentences: list[TextTarget]) -> list[TextTarget]:
+    paragraphs: list[TextTarget] = []
+    group: list[TextTarget] = []
+    for sentence in sentences:
+        if (
+            group
+            and max(sentence.end_seconds, max(item.end_seconds for item in group))
+            - group[0].start_seconds
+            > PARAGRAPH_SECONDS
+        ):
+            paragraphs.append(_paragraph(group))
+            group = []
+        group.append(sentence)
+    if group:
+        paragraphs.append(_paragraph(group))
+    return paragraphs
+
+
+def _keywords(paragraphs: list[TextTarget], language: str) -> list[TextTarget]:
+    extractor = _keyword_extractor(language)
     keywords = []
     for paragraph in paragraphs:
         seen: set[str] = set()
@@ -143,7 +161,7 @@ def prepare_targets(
                     "keyword", paragraph.start_seconds, paragraph.end_seconds, phrase
                 )
             )
-    return [*keywords, *sentences, *paragraphs]
+    return keywords
 
 
 def _keyword_extractor(language: str) -> KeywordExtractor:

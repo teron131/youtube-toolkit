@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from datetime import date
+from typing import Any, Literal
 
 from .convert_zh import convert_zh
 from .identity import extract_channel_identity
+
+TranscriptSource = Literal["subtitles", "automatic_captions", "speech-to-text"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,7 +94,7 @@ class TranscriptDocument:
 
     metadata: VideoMetadata
     language: str
-    source: str
+    source: TranscriptSource
     chunks: list[TranscriptChunk]
 
     @property
@@ -99,13 +102,19 @@ class TranscriptDocument:
         return " ".join(chunk.text for chunk in self.chunks)
 
 
-def normalize_upload_date(upload_date: Any) -> str | None:
-    if not isinstance(upload_date, str):
+def parse_upload_date(value: Any) -> date | None:
+    """yt-dlp reports YYYYMMDD; ISO dates parse too, and anything else is None."""
+    if not isinstance(value, str):
         return None
-    stripped_upload_date = upload_date.strip()
-    if len(stripped_upload_date) != 8 or not stripped_upload_date.isdigit():
-        return stripped_upload_date or None
-    return f"{stripped_upload_date[:4]}-{stripped_upload_date[4:6]}-{stripped_upload_date[6:8]}"
+    try:
+        return date.fromisoformat(value.strip())
+    except ValueError:
+        return None
+
+
+def normalize_upload_date(value: Any) -> str | None:
+    upload_date = parse_upload_date(value)
+    return upload_date.isoformat() if upload_date is not None else None
 
 
 def normalize_text(value: Any) -> str | None:

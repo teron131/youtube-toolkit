@@ -18,7 +18,7 @@ def document(chunks, chapters=(), *, duration=None, language="en-orig"):
             "video", "url", duration_seconds=duration, chapters=list(chapters)
         ),
         language,
-        "captions",
+        "automatic_captions",
         chunks,
     )
 

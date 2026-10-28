@@ -14,7 +14,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         payload = args.handler(args)
         if args.command == "doctor":
-            print(output.render_doctor(payload))
+            print(payload)
         else:
             output.emit_json(payload)
         return 0

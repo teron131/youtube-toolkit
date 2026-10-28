@@ -27,8 +27,7 @@ STT_AUDIO_FORMAT_SELECTOR = "bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio[ext
 VISION_VIDEO_FORMAT_SELECTOR = "bestvideo[height<=720][ext=mp4]/bestvideo[height<=720]"
 # A metadata, search, or listing request that takes over a minute is stuck.
 YTDLP_REQUEST_TIMEOUT_SECONDS = 60
-# Keep comment pagination bounded even when a caller overrides the normal sample size.
-MAX_COMMENT_LIMIT = 1000
+MAX_CONCURRENT_METADATA_FETCHES = 8
 # A download can simply be slow: YouTube was measured as low as 0.5 MB/s, and a two-hour 720p video is about 300 MB.
 YTDLP_DOWNLOAD_TIMEOUT_SECONDS = 10 * 60
 # YouTube refuses requests in short bursts, so a refused process is retried three times, after 5, 10, and 15 seconds.
@@ -66,8 +65,6 @@ class YtDlpClient:
 
         The response is not archived here; the comment workflow archives a lean copy.
         """
-        if not 1 <= limit <= MAX_COMMENT_LIMIT:
-            raise ValueError(f"--limit must be between 1 and {MAX_COMMENT_LIMIT}")
         return _request_json(
             [
                 *YTDLP_COMMAND,
@@ -111,30 +108,19 @@ class YtDlpClient:
             error_message="yt-dlp search query failed",
         )
 
-    def channel_videos(
-        self,
-        channel_url: str,
-        *,
-        last: int | None,
-    ) -> dict[str, Any]:
-        command = [
-            *YTDLP_COMMAND,
-            "--quiet",
-            "--no-warnings",
-            "--dump-single-json",
-            "--flat-playlist",
-        ]
-        if last is not None:
-            command.extend(
-                [
-                    "--playlist-end",
-                    str(last),
-                ]
-            )
-        command.append(channel_url)
+    def channel_videos(self, channel_url: str, *, last: int) -> dict[str, Any]:
         channel_path = urlparse(channel_url).path.rstrip("/").removesuffix("/videos")
         return self._json(
-            command,
+            [
+                *YTDLP_COMMAND,
+                "--quiet",
+                "--no-warnings",
+                "--dump-single-json",
+                "--flat-playlist",
+                "--playlist-end",
+                str(last),
+                channel_url,
+            ],
             namespace="channels",
             identifier=unquote(channel_path.rsplit("/", 1)[-1]),
             error_message="yt-dlp channel query failed",

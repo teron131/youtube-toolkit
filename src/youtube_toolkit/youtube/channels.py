@@ -6,11 +6,12 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol
 
-from ..config import DEFAULT_LAST_VIDEOS, MAX_CONCURRENT_METADATA_FETCHES
 from ..execution import collect_concurrently
 from ..identity import ChannelRef, VideoRef, normalize_channel_url
-from .client import YtDlpClient
+from ..schemas import parse_upload_date
+from .client import MAX_CONCURRENT_METADATA_FETCHES, YtDlpClient
 
+DEFAULT_LAST_VIDEOS = 10
 MIN_DAYS_WINDOW = 10
 
 
@@ -18,17 +19,12 @@ MIN_DAYS_WINDOW = 10
 class ChannelOptions:
     """With `days`, `last` stops capping the result and only sizes the first listing request, to at least MIN_DAYS_WINDOW."""
 
-    last: int | None = DEFAULT_LAST_VIDEOS
+    last: int = DEFAULT_LAST_VIDEOS
     days: int | None = None
 
 
 class ChannelVideosClient(Protocol):
-    def channel_videos(
-        self,
-        channel_url: str,
-        *,
-        last: int | None,
-    ) -> dict[str, Any]: ...
+    def channel_videos(self, channel_url: str, *, last: int) -> dict[str, Any]: ...
 
     def metadata(self, video_ref: VideoRef, /) -> dict[str, Any]: ...
 
@@ -54,7 +50,7 @@ def fetch_channel_videos(
         )
 
     cutoff_date = cutoff_date_for_days(options.days)
-    window_size = max(options.last or MIN_DAYS_WINDOW, MIN_DAYS_WINDOW)
+    window_size = max(options.last, MIN_DAYS_WINDOW)
     listing = client.channel_videos(channel_url, last=window_size)
     attempted: set[str] = set()
     upload_dates: dict[str, date] = {}
@@ -94,7 +90,7 @@ def fetch_channel_videos(
 
 
 def validate_channel_options(options: ChannelOptions) -> None:
-    if options.last is not None and options.last <= 0:
+    if options.last <= 0:
         raise ValueError("--last must be greater than 0")
     if options.days is not None and options.days <= 0:
         raise ValueError("--days must be greater than 0")
@@ -118,13 +114,3 @@ def fetch_upload_dates(
         for video_id, metadata in metadata_by_id.items()
         if (upload_date := parse_upload_date(metadata.get("upload_date"))) is not None
     }
-
-
-def parse_upload_date(upload_date: str | None) -> date | None:
-    if not upload_date or len(upload_date) != 8 or not upload_date.isdigit():
-        return None
-    return date(
-        int(upload_date[:4]),
-        int(upload_date[4:6]),
-        int(upload_date[6:8]),
-    )

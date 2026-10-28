@@ -5,17 +5,13 @@ from __future__ import annotations
 import argparse
 
 from ..config import (
-    DEFAULT_LAST_VIDEOS,
     DEFAULT_LOCAL_STT_MODEL,
-    DEFAULT_SEARCH_MAX_DURATION,
-    DEFAULT_SEARCH_MIN_DURATION,
-    DEFAULT_SEARCH_MIN_VIEWS,
     DEFAULT_VISION_MAX_FRAMES,
     DEFAULT_VISION_MIN_GAP_SECONDS,
     DEFAULT_VISION_MIN_SIMILARITY,
     MAX_VISION_FRAMES,
 )
-from ..youtube import DEFAULT_COMMENT_LIMIT, MAX_COMMENT_LIMIT
+from ..youtube import DEFAULT_COMMENT_LIMIT, DEFAULT_LAST_VIDEOS, MAX_COMMENT_LIMIT
 from . import commands
 from .health import run_doctor
 from .setup import run_setup
@@ -178,11 +174,9 @@ def _add_search_command(subparsers: argparse._SubParsersAction) -> None:
     search_parser.add_argument(
         "--sort", choices=("relevance", "recency", "popularity"), default=None
     )
-    search_parser.add_argument(
-        "--min-views", type=int, default=DEFAULT_SEARCH_MIN_VIEWS
-    )
-    search_parser.add_argument("--min-duration", default=DEFAULT_SEARCH_MIN_DURATION)
-    search_parser.add_argument("--max-duration", default=DEFAULT_SEARCH_MAX_DURATION)
+    search_parser.add_argument("--min-views", type=int, default=10_000)
+    search_parser.add_argument("--min-duration", default="3:00")
+    search_parser.add_argument("--max-duration", default="8:00:00")
     search_parser.add_argument(
         "--uploaded-after",
         default=None,

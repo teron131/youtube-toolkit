@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 from importlib.util import find_spec
 import shutil
-from typing import Literal, TypedDict
 
 from .. import config
 from ..artifacts import artifact_root
@@ -22,57 +21,32 @@ from ..stt import (
 VISION_MODULES = ("numpy", "PIL", "cv2", "yake")
 
 
-class EmbeddingHealthResult(TypedDict):
-    ok: bool
-    model: str
-    status: Literal["configured", "missing", "invalid"]
-    detail: str
-
-
-class DoctorReport(TypedDict):
-    yt_dlp_version: str
-    config: str
-    artifacts: str
-    vision: bool
-    ffmpeg: bool
-    embedding: EmbeddingHealthResult
-    stt: str
-
-
-def run_doctor(args: argparse.Namespace) -> DoctorReport:
+def run_doctor(args: argparse.Namespace) -> str:
     del args
     import yt_dlp.version
 
-    return {
-        "yt_dlp_version": yt_dlp.version.__version__,
-        "config": str(config.config_path()),
-        "artifacts": str(artifact_root()),
-        "vision": vision_available(),
-        "ffmpeg": shutil.which("ffmpeg") is not None,
-        "embedding": embedding_api_health(),
-        "stt": stt_health(),
-    }
+    return "\n".join(
+        [
+            "YouTube Toolkit",
+            f"  yt-dlp     {yt_dlp.version.__version__}",
+            f"  config     {config.config_path()}",
+            f"  artifacts  {artifact_root()}",
+            f"  vision     {'available' if vision_available() else 'not installed'}",
+            f"  ffmpeg     {'available' if shutil.which('ffmpeg') else 'not installed'}",
+            f"  embedding  {embedding_health()}",
+            f"  stt        {stt_health()}",
+        ]
+    )
 
 
-def embedding_api_health() -> EmbeddingHealthResult:
-    model = config.config_value("EMBEDDING_MODEL") or config.DEFAULT_EMBEDDING_MODEL
+def embedding_health() -> str:
     if config.config_value("EMBEDDING_API_KEY") is None:
-        return {
-            "ok": False,
-            "model": model,
-            "status": "missing",
-            "detail": "Set EMBEDDING_API_KEY with `youtube setup --embeddings` for semantic search",
-        }
+        return "Set EMBEDDING_API_KEY with `youtube setup --embeddings` for semantic search"
     try:
-        config.embedding_config_from_env()
+        embedding = config.embedding_config_from_env()
     except ValueError as error:
-        return {"ok": False, "model": model, "status": "invalid", "detail": str(error)}
-    return {
-        "ok": True,
-        "model": model,
-        "status": "configured",
-        "detail": f"Configured ({model})",
-    }
+        return str(error)
+    return f"Configured ({embedding.model})"
 
 
 def stt_health() -> str:

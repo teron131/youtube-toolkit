@@ -13,6 +13,9 @@ SearchMode = Literal["native", "semantic"]
 SearchReturnType = Literal["video", "chunk"]
 SearchSort = Literal["relevance", "recency", "popularity"]
 
+DEFAULT_YOUTUBE_SEARCH_LIMIT = 10
+DEFAULT_CHANNEL_SEARCH_LIMIT = 30
+
 
 @dataclass(frozen=True, slots=True)
 class ChannelTarget:
@@ -69,7 +72,7 @@ class SearchRequest:
     """
 
     queries: tuple[str, ...]
-    limit: int
+    limit: int | None = None
     mode: SearchMode = "native"
     return_type: SearchReturnType | None = None
     channels: tuple[ChannelTarget, ...] = ()
@@ -89,10 +92,11 @@ class SearchRequest:
 class ResolvedRequest:
     """The caller's own choices stay on `request`; the other fields hold what had to be defaulted, parsed, or combined.
 
-    Read `sort` and `return_type` here, because the ones on `request` may still be unset.
+    Read `limit`, `sort`, and `return_type` here, because the ones on `request` may still be unset.
     """
 
     request: SearchRequest
+    limit: int
     sort: SearchSort
     return_type: SearchReturnType
     upload_cutoff: str | None
@@ -114,7 +118,7 @@ def resolve_request(request: SearchRequest) -> ResolvedRequest:
         not query.strip() for query in request.queries
     ):
         raise ValueError("search query must be non-empty")
-    if request.limit <= 0:
+    if request.limit is not None and request.limit <= 0:
         raise ValueError("search limit must be greater than 0")
     if request.min_views is not None and request.min_views < 0:
         raise ValueError("--min-views cannot be negative")
@@ -135,6 +139,7 @@ def resolve_request(request: SearchRequest) -> ResolvedRequest:
         raise ValueError("native YouTube search does not support --sort recency")
     return ResolvedRequest(
         request=request,
+        limit=resolve_limit(request),
         sort=resolve_sort(request),
         return_type=resolve_return_type(request),
         upload_cutoff=upload_cutoff,
@@ -168,6 +173,14 @@ def parse_duration(value: str | None) -> float | None:
     for part in parts:
         total_seconds = total_seconds * 60 + int(part)
     return float(total_seconds)
+
+
+def resolve_limit(request: SearchRequest) -> int:
+    if request.limit is not None:
+        return request.limit
+    if request.channels:
+        return DEFAULT_CHANNEL_SEARCH_LIMIT
+    return DEFAULT_YOUTUBE_SEARCH_LIMIT
 
 
 def resolve_return_type(request: SearchRequest) -> SearchReturnType:

@@ -19,7 +19,7 @@ from youtube_toolkit.youtube.channels import (
 
 def test_fetch_channel_videos_returns_provider_metadata() -> None:
     class FakeClient:
-        def channel_videos(self, channel_url: str, *, last: int | None) -> dict:
+        def channel_videos(self, channel_url: str, *, last: int) -> dict:
             assert channel_url == "https://www.youtube.com/@OpenAI/videos"
             assert last == 1
             return openai_listing()
@@ -76,7 +76,7 @@ def test_unlimited_days_window_uses_bounded_first_fetch(monkeypatch) -> None:
     upload_dates = {"recent": "20260630", "old": "20260601"}
 
     class FakeClient:
-        def channel_videos(self, channel_url: str, *, last: int | None) -> dict:
+        def channel_videos(self, channel_url: str, *, last: int) -> dict:
             calls.append((channel_url, last))
             return {
                 "entries": [
@@ -91,7 +91,7 @@ def test_unlimited_days_window_uses_bounded_first_fetch(monkeypatch) -> None:
 
     listing = fetch_channel_videos(
         "https://www.youtube.com/@OpenAI/videos",
-        options=ChannelOptions(last=None, days=3),
+        options=ChannelOptions(last=3, days=3),
         client=FakeClient(),
     )
 
@@ -118,7 +118,7 @@ def test_days_window_grows_listing_and_dates_each_video_once(monkeypatch) -> Non
     metadata_calls = []
 
     class FakeClient:
-        def channel_videos(self, channel_url: str, *, last: int | None) -> dict:
+        def channel_videos(self, channel_url: str, *, last: int) -> dict:
             listing_sizes.append(last)
             return {"entries": [{"id": video_id} for video_id in video_ids[:last]]}
 
@@ -147,7 +147,7 @@ def test_days_window_stops_when_no_listed_video_can_be_dated() -> None:
     metadata_calls = []
 
     class FakeClient:
-        def channel_videos(self, channel_url: str, *, last: int | None) -> dict:
+        def channel_videos(self, channel_url: str, *, last: int) -> dict:
             listing_sizes.append(last)
             return {
                 "entries": [{"id": f"video{index:03d}"} for index in range(last or 0)]

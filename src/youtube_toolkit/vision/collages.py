@@ -1,4 +1,4 @@
-"""Lay selected frames out as timestamped 2x3 JPEG pages sized for vision models, and publish them as the video's only page set."""
+"""Lay selected frames out as timestamped 2x3 JPEG pages sized for vision models."""
 
 from __future__ import annotations
 
@@ -52,21 +52,6 @@ def render_timestamped_collages(
         )
         output_paths.append(output_path)
     return output_paths
-
-
-def publish_collages(
-    staged_paths: list[Path],
-    destination: Path,
-    video_id: str,
-) -> list[Path]:
-    for stale_path in destination.glob(f"{video_id}_vision_page*.jpg"):
-        stale_path.unlink()
-    published: list[Path] = []
-    for page, staged_path in enumerate(staged_paths, start=1):
-        output_path = destination / f"{video_id}_vision_page{page}.jpg"
-        staged_path.replace(output_path)
-        published.append(output_path.resolve())
-    return published
 
 
 def add_timestamp_footer(
