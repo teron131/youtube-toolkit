@@ -1,12 +1,12 @@
 # YouTube Toolkit
 
-A YouTube CLI for agents: search videos and comments, read transcripts and metadata, and extract visual context through yt-dlp, with request archives kept in the working directory.
+A YouTube CLI for agents: simple search and fetching of videos, metadata, transcripts, and comments, plus curated screenshots for visual context.
 
 ![How the commands fit together: each command is a line through the shared parts it uses.](docs/architecture.svg)
 
 ## Install
 
-Requires Python 3.13+ and uv. The installer replaces the installed `youtube` tool; `--vision` and `--stt` add optional dependencies and need `ffmpeg` installed separately.
+Requires Python 3.13+ and uv. The installer builds the checkout and installs `youtube` as a uv tool: an isolated environment with the command in uv's tool bin directory, usually `~/.local/bin`, so it runs from any directory without touching the system Python (`uv tool update-shell` adds that directory to PATH if needed). Rerun it after pulling changes; it replaces the previous install and finishes with `youtube doctor`. `--vision` and `--stt` add optional dependencies and need `ffmpeg` installed separately.
 
 ```bash
 uv run python scripts/install.py
