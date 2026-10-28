@@ -1,4 +1,4 @@
-"""Own embedding transport, bounded batches, and per-item failures while sharing one connection pool within a search."""
+"""Send OpenAI-compatible text embedding requests through one connection pool, retaining per-item failures for batches."""
 
 from __future__ import annotations
 

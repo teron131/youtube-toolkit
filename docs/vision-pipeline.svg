@@ -1,6 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="1068" viewBox="0 0 1120 1068" role="img" aria-labelledby="title desc">
-  <title id="title">How youtube vision picks frames</title>
-  <desc id="desc">An 18-minute example video with six chapters, including a sponsor chapter. Step 1: timed caption passages are scored by how well they represent their chapter; the sponsor chapter is skipped, and every other chapter contributes its best passage before any contributes a second, up to six windows. Step 2: only those windows are decoded, one frame per second, from 2 seconds before to 5 seconds after each passage, about 3 of 18 minutes. Step 3: in one zoomed window, cuts split the samples into shots; a close-up face shot is a last resort, a one-frame flash is too short, and a screen-recording shot wins because it overlaps the caption passage longest; its sharp, steady, most typical frame at 8:35 is chosen. Step 4: chosen frames are published as timestamped two-column collages under .cache/youtube-toolkit/vision/&lt;datetime&gt;-&lt;video-id&gt;/ with JSON measurements for each frame, and the downloaded video is deleted. Without usable timed captions, evenly spaced 30-second windows replace step 1. No model API or speech-to-text is used.</desc>
+<!--
+Evidence (re-verify on update):
+  Captions, 3 scopes (CHUNK): vision/text.py prepare_targets, SENTENCE_SECONDS, PARAGRAPH_SECONDS, KeywordExtractor top 5 per paragraph
+  Video, Keyframes (SAMPLE), Sponsors (FILTER), Near-copies (DEDUP, pixel 0.98 within 10 s): vision/candidates.py collect_candidates, ffmpeg_utils.py decode_keyframes
+  Embed (EMBED): embeddings/gemini.py, texts embedded before the download in vision/workflow.py
+  Match (5 s before to 2 s after), Rank per scope, Fuse (RRF), 10 s gap, Near-copies by vectors (DEDUP, embedding cosine 0.96): vision/reranking.py rerank_frames
+  Time slots (SELECT), local 10 s gap, Repeats (DEDUP, pixel 0.95 to the previous pick): vision/candidates.py select_slot_frames
+  Collages, six per page: vision/collages.py
+  dashed local lane: vision/workflow.py uses select_slot_frames without image embedding credentials (vision_embedding_key), without a timed transcript from captions or speech-to-text, or with the local-only flag
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="600" viewBox="0 0 1120 600" role="img" aria-labelledby="title desc">
+  <title id="title">How vision picks frames</title>
+  <desc id="desc">How the vision command picks frames, drawn as stops on two lanes that merge. Each stop carries a chip naming its layer: chunk, sample, filter, dedup, embed, match, rank, rerank or select. Text lane: captions, or timed speech-to-text when a video has none, are chunked into keywords, sentences and paragraphs, and the texts are embedded. Image lane: FFmpeg samples the 720p video&#x27;s keyframes, every 3 to 7 seconds; frames in sponsor segments and dark frames are filtered out, pixel near-copies are removed, and the remaining frames are embedded. The lanes merge where each frame is matched to text spoken from 5 seconds before to 2 seconds after it. Frames are ranked by relative score separately for keywords, sentences and paragraphs, and the three rankings are fused with reciprocal rank fusion. Walking that order, frames within 10 seconds of any pick and embedding near-copies are skipped, and the rest fill collages six per page. A dashed lane below runs without an image embedding model or a timed transcript: it takes one frame per time slot of 12 seconds or longer, skips frames within 10 seconds of the last pick and pixel repeats of it, and fills the same collages. All three dedup stops are orange: pixel similarity for candidates and repeats, embedding similarity for ranked picks.</desc>
   <defs>
     <style>
       /* Barlow (c) 2017 The Barlow Project Authors, SIL Open Font License 1.1; Basic Latin subset. */
@@ -9,284 +19,101 @@
       text { font-family: Barlow, "Avenir Next", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; fill: #1B2238; }
       .title { font-size: 30px; font-weight: 600; letter-spacing: -0.3px; }
       .lede { font-size: 17px; fill: #5E6678; }
-      .num, .step { font-size: 19px; font-weight: 600; }
-      .body { font-size: 16px; fill: #5E6678; }
-      .label { font-size: 15px; font-weight: 600; }
-      .note { font-size: 15px; fill: #5E6678; }
-      .time, .span { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
-      .time { fill: #E5302A; }
-      .span { fill: #2E63E6; }
-      .axis { font-size: 15px; fill: #5E6678; font-variant-numeric: tabular-nums; }
-      .caption { font-size: 15px; fill: #FFFFFF; }
-      .stamp { font-size: 13px; fill: #D3D8E0; font-variant-numeric: tabular-nums; }
-      .code { font-family: "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace; font-size: 13.5px; fill: #5E6678; }
-      .code .key { fill: #1B2238; }
+      .lane { font-size: 15px; font-weight: 600; fill: #5E6678; }
+      .chip { font-size: 13px; font-weight: 600; letter-spacing: 1.2px; fill: #FFFFFF; }
+      .name { font-size: 16px; font-weight: 600; }
+      .count { font-size: 14px; fill: #5E6678; }
+      .inline { font-size: 13px; font-weight: 600; fill: #1B2238; }
+      .tag { font-size: 10px; font-weight: 600; }
+      .track { fill: none; stroke: #D9DDE5; stroke-width: 10; stroke-linecap: round; stroke-linejoin: round; }
+      .local { fill: none; stroke: #B9C0CC; stroke-width: 5; stroke-dasharray: 9 7; stroke-linecap: round; }
     </style>
-    <pattern id="sponsor-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="#EEF0F4"/><line x1="0" y1="0" x2="0" y2="6" stroke="#8C93A3" stroke-width="2"/></pattern>
   </defs>
-  <rect x="0.5" y="0.5" width="1119" height="1067" rx="16" fill="#FFFFFF" stroke="#D6DAE2"/>
+  <rect x="0.5" y="0.5" width="1119" height="599" rx="16" fill="#FFFFFF" stroke="#D6DAE2"/>
   <g id="header">
     <text x="44" y="62" class="title">How vision picks frames</text>
-    <text x="44" y="92" class="lede">An 18-minute example with chapters. Timed captions and local image analysis only: no model API, no speech-to-text.</text>
+    <text x="44" y="92" class="lede">Chips name each stop's layer. The dashed lane runs without an image embedding model or a timed transcript.</text>
   </g>
-  <g id="steps">
-    <text x="44" y="152" class="num">1</text>
-    <text x="68" y="152" class="step">Captions choose</text>
-    <text x="68" y="176" class="step">where to look</text>
-    <text x="68" y="204" class="body">Each bar is a caption passage,</text>
-    <text x="68" y="226" class="body">taller when it better represents</text>
-    <text x="68" y="248" class="body">its chapter. Every chapter gets</text>
-    <text x="68" y="270" class="body">one pick before any gets two.</text>
-    <text x="44" y="306" class="num">2</text>
-    <text x="68" y="306" class="step">Only those windows</text>
-    <text x="68" y="330" class="step">are decoded</text>
-    <text x="68" y="358" class="body">One frame per second, from 2 s</text>
-    <text x="68" y="380" class="body">before to 5 s after each passage:</text>
-    <text x="68" y="402" class="body">about 3 of 18 minutes here.</text>
-    <text x="44" y="474" class="num">3</text>
-    <text x="68" y="474" class="step">Pixels choose the frame</text>
-    <text x="68" y="502" class="body">Cuts split the window into shots,</text>
-    <text x="68" y="524" class="body">and each shot offers its most</text>
-    <text x="68" y="546" class="body">typical sharp, steady frame.</text>
-    <text x="68" y="568" class="body">Near-duplicates of earlier picks</text>
-    <text x="68" y="590" class="body">are dropped.</text>
-    <text x="44" y="724" class="num">4</text>
-    <text x="68" y="724" class="step">Collages and evidence</text>
-    <text x="68" y="752" class="body">Six frames per page, in time</text>
-    <text x="68" y="774" class="body">order, with JSON measurements</text>
-    <text x="68" y="796" class="body">for each pick. The downloaded</text>
-    <text x="68" y="818" class="body">video is then deleted.</text>
+  <g id="tracks">
+    <path d="M50 210 H500 Q520 210 520 230 V265 Q520 285 540 285 H1050" class="track"/>
+    <path d="M50 360 H500 Q520 360 520 340 V305 Q520 285 540 285" class="track"/>
+    <path d="M610 285 L630 237 H706 L726 285" class="track"/>
+    <path d="M610 285 L630 333 H706 L726 285" class="track"/>
+    <path d="M414 360 V480 Q414 500 434 500 H1050" class="local"/>
   </g>
-  <g id="step-1-captions">
-    <rect x="332" y="162" width="53.1" height="8" fill="#B9C0CE" rx="2"/>
-    <text x="332" y="152" class="label">Intro</text>
-    <rect x="389.1" y="162" width="64.9" height="8" fill="url(#sponsor-hatch)" rx="2"/>
-    <text x="389.1" y="152" class="label" style="fill: #5E6678">Sponsor</text>
-    <rect x="458" y="162" width="161.3" height="8" fill="#B9C0CE" rx="2"/>
-    <text x="458" y="152" class="label">Architecture</text>
-    <rect x="623.3" y="162" width="223.3" height="8" fill="#B9C0CE" rx="2"/>
-    <text x="623.3" y="152" class="label">Live demo</text>
-    <rect x="850.7" y="162" width="133.8" height="8" fill="#B9C0CE" rx="2"/>
-    <text x="850.7" y="152" class="label">Benchmarks</text>
-    <rect x="988.4" y="162" width="87.6" height="8" fill="#B9C0CE" rx="2"/>
-    <text x="988.4" y="152" class="label">Wrap-up</text>
-    <text x="421.6" y="266" class="note" text-anchor="middle">skipped</text>
-    <line x1="332" y1="280.5" x2="1076" y2="280.5" stroke="#D6DAE2" stroke-width="1"/>
-    <rect x="333.4" y="235.2" width="16.5" height="44.8" fill="#C9D6F8" rx="1.5"/>
-    <rect x="352.7" y="206.4" width="16.5" height="73.6" fill="#2E63E6" rx="1.5"/>
-    <rect x="370.6" y="230.4" width="15.8" height="49.6" fill="#C9D6F8" rx="1.5"/>
-    <rect x="457.4" y="244.8" width="16.5" height="35.2" fill="#C9D6F8" rx="1.5"/>
-    <rect x="475.3" y="224" width="16.5" height="56" fill="#C9D6F8" rx="1.5"/>
-    <rect x="493.2" y="233.6" width="14.5" height="46.4" fill="#C9D6F8" rx="1.5"/>
-    <rect x="512.5" y="196.8" width="16.5" height="83.2" fill="#2E63E6" rx="1.5"/>
-    <rect x="530.4" y="227.2" width="16.5" height="52.8" fill="#C9D6F8" rx="1.5"/>
-    <rect x="548.3" y="238.4" width="16.5" height="41.6" fill="#C9D6F8" rx="1.5"/>
-    <rect x="566.2" y="214.4" width="16.5" height="65.6" fill="#C9D6F8" rx="1.5"/>
-    <rect x="584.1" y="232" width="16.5" height="48" fill="#C9D6F8" rx="1.5"/>
-    <rect x="602" y="241.6" width="16.5" height="38.4" fill="#C9D6F8" rx="1.5"/>
-    <rect x="622.7" y="240" width="16.5" height="40" fill="#C9D6F8" rx="1.5"/>
-    <rect x="640.6" y="230.4" width="16.5" height="49.6" fill="#C9D6F8" rx="1.5"/>
-    <rect x="658.5" y="222.4" width="16.5" height="57.6" fill="#C9D6F8" rx="1.5"/>
-    <rect x="679.9" y="201.6" width="16.5" height="78.4" fill="#2E63E6" rx="1.5"/>
-    <rect x="697.8" y="225.6" width="16.5" height="54.4" fill="#C9D6F8" rx="1.5"/>
-    <rect x="715.7" y="235.2" width="16.5" height="44.8" fill="#C9D6F8" rx="1.5"/>
-    <rect x="733.6" y="216" width="16.5" height="64" fill="#C9D6F8" rx="1.5"/>
-    <rect x="751.5" y="236.8" width="16.5" height="43.2" fill="#C9D6F8" rx="1.5"/>
-    <rect x="769.4" y="249.6" width="7.6" height="30.4" fill="#C9D6F8" rx="1.5"/>
-    <rect x="779.8" y="208" width="16.5" height="72" fill="#2E63E6" rx="1.5"/>
-    <rect x="797.7" y="232" width="16.5" height="48" fill="#C9D6F8" rx="1.5"/>
-    <rect x="815.6" y="244.8" width="16.5" height="35.2" fill="#C9D6F8" rx="1.5"/>
-    <rect x="833.5" y="227.2" width="14.5" height="52.8" fill="#C9D6F8" rx="1.5"/>
-    <rect x="850" y="232" width="16.5" height="48" fill="#C9D6F8" rx="1.5"/>
-    <rect x="868" y="222.4" width="16.5" height="57.6" fill="#C9D6F8" rx="1.5"/>
-    <rect x="885.9" y="246.4" width="7.6" height="33.6" fill="#C9D6F8" rx="1.5"/>
-    <rect x="898.3" y="192" width="16.5" height="88" fill="#2E63E6" rx="1.5"/>
-    <rect x="916.2" y="219.2" width="16.5" height="60.8" fill="#C9D6F8" rx="1.5"/>
-    <rect x="934.1" y="236.8" width="16.5" height="43.2" fill="#C9D6F8" rx="1.5"/>
-    <rect x="952" y="227.2" width="16.5" height="52.8" fill="#C9D6F8" rx="1.5"/>
-    <rect x="969.9" y="240" width="15.8" height="40" fill="#C9D6F8" rx="1.5"/>
-    <rect x="987.8" y="233.6" width="16.5" height="46.4" fill="#C9D6F8" rx="1.5"/>
-    <rect x="1005.7" y="256" width="5.5" height="24" fill="#C9D6F8" rx="1.5"/>
-    <rect x="1014" y="209.6" width="15.8" height="70.4" fill="#2E63E6" rx="1.5"/>
-    <rect x="1031.2" y="230.4" width="16.5" height="49.6" fill="#C9D6F8" rx="1.5"/>
-    <rect x="1049.1" y="248" width="16.5" height="32" fill="#C9D6F8" rx="1.5"/>
-    <rect x="1067" y="260.8" width="8.3" height="19.2" fill="#C9D6F8" rx="1.5"/>
+  <g id="stops">
+    <g id="captions"><path d="M50 188 H110 Q114 188 114 192 V222 Q114 226 110 226 H68 L58 236 V226 H50 Q46 226 46 222 V192 Q46 188 50 188 Z" fill="#FFFFFF" stroke="#1B2238" stroke-width="1.5"/><rect x="56" y="197" width="44" height="4" rx="2" fill="#9AA6BF"/><rect x="56" y="206" width="34" height="4" rx="2" fill="#9AA6BF"/><rect x="56" y="215" width="40" height="4" rx="2" fill="#9AA6BF"/></g>
+    <g id="chunk"><rect x="198" y="174" width="140" height="72" rx="8" fill="#FFFFFF" stroke="#1B2238" stroke-width="1.5"/><rect x="208" y="186" width="12" height="8" rx="4" fill="#7A8296"/><rect x="223" y="186" width="12" height="8" rx="4" fill="#7A8296"/><rect x="238" y="186" width="12" height="8" rx="4" fill="#7A8296"/><text x="260" y="195" class="inline">keywords</text><rect x="208" y="206" width="22" height="8" rx="4" fill="#7A8296"/><rect x="233" y="206" width="22" height="8" rx="4" fill="#7A8296"/><text x="260" y="215" class="inline">sentences</text><rect x="208" y="224" width="44" height="12" rx="3" fill="#7A8296"/><text x="260" y="235" class="inline">paragraphs</text></g>
+    <g id="embed-text"><rect x="439.5" y="180" width="41" height="60" rx="6" fill="#FFFFFF" stroke="#1B2238" stroke-width="1.3"/><rect x="444.5" y="185.0" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.95"/><rect x="444.5" y="193.5" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.35"/><rect x="444.5" y="202.0" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.7"/><rect x="444.5" y="210.5" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.2"/><rect x="444.5" y="219.0" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.85"/><rect x="444.5" y="227.5" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.5"/><rect x="455.5" y="185.0" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.7"/><rect x="455.5" y="193.5" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.2"/><rect x="455.5" y="202.0" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.85"/><rect x="455.5" y="210.5" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.5"/><rect x="455.5" y="219.0" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.95"/><rect x="455.5" y="227.5" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.35"/><rect x="466.5" y="185.0" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.85"/><rect x="466.5" y="193.5" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.5"/><rect x="466.5" y="202.0" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.95"/><rect x="466.5" y="210.5" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.35"/><rect x="466.5" y="219.0" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.7"/><rect x="466.5" y="227.5" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.2"/></g>
+    <g id="video"><rect x="46" y="336" width="68" height="48" rx="5" fill="#1B2238"/><rect x="51.0" y="340" width="6" height="5" rx="1" fill="#FFFFFF"/><rect x="51.0" y="375" width="6" height="5" rx="1" fill="#FFFFFF"/><rect x="61.5" y="340" width="6" height="5" rx="1" fill="#FFFFFF"/><rect x="61.5" y="375" width="6" height="5" rx="1" fill="#FFFFFF"/><rect x="72.0" y="340" width="6" height="5" rx="1" fill="#FFFFFF"/><rect x="72.0" y="375" width="6" height="5" rx="1" fill="#FFFFFF"/><rect x="82.5" y="340" width="6" height="5" rx="1" fill="#FFFFFF"/><rect x="82.5" y="375" width="6" height="5" rx="1" fill="#FFFFFF"/><rect x="93.0" y="340" width="6" height="5" rx="1" fill="#FFFFFF"/><rect x="93.0" y="375" width="6" height="5" rx="1" fill="#FFFFFF"/><rect x="103.5" y="340" width="6" height="5" rx="1" fill="#FFFFFF"/><rect x="103.5" y="375" width="6" height="5" rx="1" fill="#FFFFFF"/><path d="M74 351 L89 360 L74 369 Z" fill="#FFFFFF"/></g>
+    <g id="keyframes"><g opacity="1"><rect x="135" y="352" width="22" height="16" rx="2" fill="#E4EAF6" stroke="#1B2238" stroke-width="1.3"/><rect x="139" y="356" width="12.1" height="2.5" fill="#1B2238"/><rect x="139" y="361" width="7.7" height="2.5" fill="#9AA6BF"/></g><g opacity="1"><rect x="161" y="352" width="22" height="16" rx="2" fill="#E4EAF6" stroke="#1B2238" stroke-width="1.3"/><rect x="165" y="356" width="12.1" height="2.5" fill="#1B2238"/><rect x="165" y="361" width="7.7" height="2.5" fill="#9AA6BF"/></g><g opacity="1"><rect x="187" y="352" width="22" height="16" rx="2" fill="#E4EAF6" stroke="#1B2238" stroke-width="1.3"/><rect x="191" y="356" width="12.1" height="2.5" fill="#1B2238"/><rect x="191" y="361" width="7.7" height="2.5" fill="#9AA6BF"/></g></g>
+    <g id="sponsors"><g opacity="1"><rect x="231" y="352" width="22" height="16" rx="2" fill="#E4EAF6" stroke="#1B2238" stroke-width="1.3"/><rect x="235" y="356" width="12.1" height="2.5" fill="#1B2238"/><rect x="235" y="361" width="7.7" height="2.5" fill="#9AA6BF"/></g><rect x="257" y="352" width="22" height="16" rx="2" fill="#F8DCE6" stroke="#C44773" stroke-width="1.3"/><text x="268" y="364" class="tag" text-anchor="middle" style="fill: #C44773">AD</text><g opacity="1"><rect x="283" y="352" width="22" height="16" rx="2" fill="#E4EAF6" stroke="#1B2238" stroke-width="1.3"/><rect x="287" y="356" width="12.1" height="2.5" fill="#1B2238"/><rect x="287" y="361" width="7.7" height="2.5" fill="#9AA6BF"/></g><path d="M255 347 L281 373 M281 347 L255 373" stroke="#C44773" stroke-width="3" stroke-linecap="round"/></g>
+    <g id="near-copies"><circle cx="362" cy="360" r="34" fill="#C77C00" fill-opacity="0.16"/><g opacity="0.45"><rect x="356" y="344" width="22" height="16" rx="2" fill="#E4EAF6" stroke="#1B2238" stroke-width="1.3"/><rect x="360" y="348" width="12.1" height="2.5" fill="#1B2238"/><rect x="360" y="353" width="7.7" height="2.5" fill="#9AA6BF"/></g><g opacity="1"><rect x="346" y="354" width="22" height="16" rx="2" fill="#E4EAF6" stroke="#1B2238" stroke-width="1.3"/><rect x="350" y="358" width="12.1" height="2.5" fill="#1B2238"/><rect x="350" y="363" width="7.7" height="2.5" fill="#9AA6BF"/></g><path d="M359 344 L375 360 M375 344 L359 360" stroke="#C77C00" stroke-width="3" stroke-linecap="round"/></g>
+    <g id="embed-images"><rect x="439.5" y="330" width="41" height="60" rx="6" fill="#FFFFFF" stroke="#1B2238" stroke-width="1.3"/><rect x="444.5" y="335.0" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.95"/><rect x="444.5" y="343.5" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.35"/><rect x="444.5" y="352.0" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.7"/><rect x="444.5" y="360.5" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.2"/><rect x="444.5" y="369.0" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.85"/><rect x="444.5" y="377.5" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.5"/><rect x="455.5" y="335.0" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.7"/><rect x="455.5" y="343.5" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.2"/><rect x="455.5" y="352.0" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.85"/><rect x="455.5" y="360.5" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.5"/><rect x="455.5" y="369.0" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.95"/><rect x="455.5" y="377.5" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.35"/><rect x="466.5" y="335.0" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.85"/><rect x="466.5" y="343.5" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.5"/><rect x="466.5" y="352.0" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.95"/><rect x="466.5" y="360.5" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.35"/><rect x="466.5" y="369.0" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.7"/><rect x="466.5" y="377.5" width="9" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.2"/></g>
+    <g id="match"><path d="M538 289 H610" stroke="#1B2238" stroke-width="1.5"/><g opacity="1"><rect x="563" y="261" width="22" height="16" rx="2" fill="#E4EAF6" stroke="#1B2238" stroke-width="1.3"/><rect x="567" y="265" width="12.1" height="2.5" fill="#1B2238"/><rect x="567" y="270" width="7.7" height="2.5" fill="#9AA6BF"/></g><path d="M574 277 V293" stroke="#1B2238" stroke-width="1.5"/><path d="M544 295 V301 H586 V295" fill="none" stroke="#8A4FD8" stroke-width="3" stroke-linejoin="round"/><rect x="548" y="305" width="34" height="5" rx="2.5" fill="#8A4FD8" fill-opacity="0.45"/></g>
+    <g id="fuse"><rect x="745" y="261" width="40" height="48" rx="6" fill="#FFFFFF" stroke="#1B2238" stroke-width="1.3"/><rect x="752" y="267.0" width="24" height="4" rx="2" fill="#0B7A5A"/><rect x="752" y="273.4" width="21" height="4" rx="2" fill="#0F9D74"/><rect x="752" y="279.8" width="18" height="4" rx="2" fill="#0B7A5A"/><rect x="752" y="286.2" width="15" height="4" rx="2" fill="#0F9D74"/><rect x="752" y="292.6" width="12" height="4" rx="2" fill="#0B7A5A"/><rect x="752" y="299.0" width="9" height="4" rx="2" fill="#0F9D74"/></g>
+    <g id="gap"><rect x="816" y="267" width="80" height="36" rx="6" fill="#FFFFFF" stroke="#1B2238" stroke-width="1.3"/><path d="M824 291 H888" stroke="#1B2238" stroke-width="1.5"/><path d="M830 277 V291" stroke="#1B2238" stroke-width="3" stroke-linecap="round"/><path d="M850 277 V291" stroke="#1B2238" stroke-width="3" stroke-linecap="round"/><path d="M878 277 V291" stroke="#1B2238" stroke-width="3" stroke-linecap="round"/><path d="M858 277 V291" stroke="#C44773" stroke-width="3" stroke-linecap="round" opacity="0.5"/><path d="M852 278 L864 290 M864 278 L852 290" stroke="#C44773" stroke-width="3" stroke-linecap="round"/></g>
+    <g id="embedding-copies"><circle cx="950" cy="285" r="34" fill="#C77C00" fill-opacity="0.16"/><g opacity="1.0"><rect x="933" y="260" width="16" height="50" rx="4" fill="#FFFFFF" stroke="#1B2238" stroke-width="1.3"/><rect x="936" y="264" width="10" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.95"/><rect x="936" y="273" width="10" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.35"/><rect x="936" y="282" width="10" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.7"/><rect x="936" y="291" width="10" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.2"/><rect x="936" y="300" width="10" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.85"/></g><g opacity="0.45"><rect x="951" y="260" width="16" height="50" rx="4" fill="#FFFFFF" stroke="#1B2238" stroke-width="1.3"/><rect x="954" y="264" width="10" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.95"/><rect x="954" y="273" width="10" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.35"/><rect x="954" y="282" width="10" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.7"/><rect x="954" y="291" width="10" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.2"/><rect x="954" y="300" width="10" height="7" rx="1.5" fill="#2E63E6" fill-opacity="0.85"/></g><path d="M950 276 L968 294 M968 276 L950 294" stroke="#C77C00" stroke-width="3" stroke-linecap="round"/></g>
+    <g id="collage"><rect x="1020" y="255" width="60" height="60" rx="4" fill="#1B2238"/><rect x="1024" y="259.0" width="25" height="13" rx="1.5" fill="#E4EAF6"/><rect x="1027" y="262.0" width="13" height="2.5" fill="#1B2238"/><rect x="1051" y="259.0" width="25" height="13" rx="1.5" fill="#E4EAF6"/><rect x="1054" y="262.0" width="13" height="2.5" fill="#1B2238"/><rect x="1024" y="277.5" width="25" height="13" rx="1.5" fill="#E4EAF6"/><rect x="1027" y="280.5" width="13" height="2.5" fill="#1B2238"/><rect x="1051" y="277.5" width="25" height="13" rx="1.5" fill="#E4EAF6"/><rect x="1054" y="280.5" width="13" height="2.5" fill="#1B2238"/><rect x="1024" y="296.0" width="25" height="13" rx="1.5" fill="#E4EAF6"/><rect x="1027" y="299.0" width="13" height="2.5" fill="#1B2238"/><rect x="1051" y="296.0" width="25" height="13" rx="1.5" fill="#E4EAF6"/><rect x="1054" y="299.0" width="13" height="2.5" fill="#1B2238"/></g>
+    <g id="time-slots"><rect x="626" y="480" width="128" height="40" rx="6" fill="#FFFFFF" stroke="#1B2238" stroke-width="1.3"/><path d="M634 508 H746" stroke="#1B2238" stroke-width="1.5"/><path d="M634 488 V508" stroke="#9AA6BF" stroke-width="1.5"/><path d="M662 488 V508" stroke="#9AA6BF" stroke-width="1.5"/><path d="M690 488 V508" stroke="#9AA6BF" stroke-width="1.5"/><path d="M718 488 V508" stroke="#9AA6BF" stroke-width="1.5"/><path d="M746 488 V508" stroke="#9AA6BF" stroke-width="1.5"/><circle cx="640" cy="508" r="2" fill="#9AA6BF"/><circle cx="646" cy="508" r="2" fill="#9AA6BF"/><circle cx="654" cy="508" r="2" fill="#9AA6BF"/><circle cx="665" cy="508" r="2" fill="#9AA6BF"/><circle cx="673" cy="508" r="2" fill="#9AA6BF"/><circle cx="681" cy="508" r="2" fill="#9AA6BF"/><circle cx="693" cy="508" r="2" fill="#9AA6BF"/><circle cx="700" cy="508" r="2" fill="#9AA6BF"/><circle cx="711" cy="508" r="2" fill="#9AA6BF"/><circle cx="723" cy="508" r="2" fill="#9AA6BF"/><circle cx="730" cy="508" r="2" fill="#9AA6BF"/><circle cx="738" cy="508" r="2" fill="#9AA6BF"/><circle cx="646" cy="497" r="5" fill="#1B2238"/><circle cx="673" cy="497" r="5" fill="#1B2238"/><circle cx="700" cy="497" r="5" fill="#1B2238"/><circle cx="730" cy="497" r="5" fill="#1B2238"/></g>
+    <g id="local-gap"><rect x="816" y="482" width="80" height="36" rx="6" fill="#FFFFFF" stroke="#1B2238" stroke-width="1.3"/><path d="M824 506 H888" stroke="#1B2238" stroke-width="1.5"/><path d="M830 492 V506" stroke="#1B2238" stroke-width="3" stroke-linecap="round"/><path d="M856 492 V506" stroke="#1B2238" stroke-width="3" stroke-linecap="round"/><path d="M880 492 V506" stroke="#1B2238" stroke-width="3" stroke-linecap="round"/><path d="M862 492 V506" stroke="#C44773" stroke-width="3" stroke-linecap="round" opacity="0.5"/><path d="M856 493 L868 505 M868 493 L856 505" stroke="#C44773" stroke-width="3" stroke-linecap="round"/></g>
+    <g id="repeats"><circle cx="950" cy="500" r="34" fill="#C77C00" fill-opacity="0.16"/><g opacity="1"><rect x="925" y="492" width="22" height="16" rx="2" fill="#E4EAF6" stroke="#1B2238" stroke-width="1.3"/><rect x="929" y="496" width="12.1" height="2.5" fill="#1B2238"/><rect x="929" y="501" width="7.7" height="2.5" fill="#9AA6BF"/></g><g opacity="0.45"><rect x="953" y="492" width="22" height="16" rx="2" fill="#E4EAF6" stroke="#1B2238" stroke-width="1.3"/><rect x="957" y="496" width="12.1" height="2.5" fill="#1B2238"/><rect x="957" y="501" width="7.7" height="2.5" fill="#9AA6BF"/></g><path d="M956 492 L972 508 M972 492 L956 508" stroke="#C77C00" stroke-width="3" stroke-linecap="round"/></g>
+    <g id="local-collage"><rect x="1020" y="470" width="60" height="60" rx="4" fill="#1B2238"/><rect x="1024" y="474.0" width="25" height="13" rx="1.5" fill="#E4EAF6"/><rect x="1027" y="477.0" width="13" height="2.5" fill="#1B2238"/><rect x="1051" y="474.0" width="25" height="13" rx="1.5" fill="#E4EAF6"/><rect x="1054" y="477.0" width="13" height="2.5" fill="#1B2238"/><rect x="1024" y="492.5" width="25" height="13" rx="1.5" fill="#E4EAF6"/><rect x="1027" y="495.5" width="13" height="2.5" fill="#1B2238"/><rect x="1051" y="492.5" width="25" height="13" rx="1.5" fill="#E4EAF6"/><rect x="1054" y="495.5" width="13" height="2.5" fill="#1B2238"/><rect x="1024" y="511.0" width="25" height="13" rx="1.5" fill="#E4EAF6"/><rect x="1027" y="514.0" width="13" height="2.5" fill="#1B2238"/><rect x="1051" y="511.0" width="25" height="13" rx="1.5" fill="#E4EAF6"/><rect x="1054" y="514.0" width="13" height="2.5" fill="#1B2238"/></g>
+    <g id="rank"><rect x="624" y="217" width="88" height="40" rx="6" fill="#FFFFFF" stroke="#1B2238" stroke-width="1.3"/><rect x="632" y="233" width="12" height="8" rx="4" fill="#7A8296"/><rect x="647" y="233" width="12" height="8" rx="4" fill="#7A8296"/><rect x="662" y="233" width="12" height="8" rx="4" fill="#7A8296"/><rect x="685.0" y="229" width="4.5" height="16" rx="1" fill="#0F9D74"/><rect x="691.5" y="233" width="4.5" height="12" rx="1" fill="#0F9D74"/><rect x="698.0" y="237" width="4.5" height="8" rx="1" fill="#0F9D74"/><rect x="704.5" y="241" width="4.5" height="4" rx="1" fill="#0F9D74"/><rect x="624" y="265" width="88" height="40" rx="6" fill="#FFFFFF" stroke="#1B2238" stroke-width="1.3"/><rect x="632" y="281" width="22" height="8" rx="4" fill="#7A8296"/><rect x="657" y="281" width="22" height="8" rx="4" fill="#7A8296"/><rect x="685.0" y="277" width="4.5" height="16" rx="1" fill="#0F9D74"/><rect x="691.5" y="281" width="4.5" height="12" rx="1" fill="#0F9D74"/><rect x="698.0" y="285" width="4.5" height="8" rx="1" fill="#0F9D74"/><rect x="704.5" y="289" width="4.5" height="4" rx="1" fill="#0F9D74"/><rect x="624" y="313" width="88" height="40" rx="6" fill="#FFFFFF" stroke="#1B2238" stroke-width="1.3"/><rect x="632" y="327" width="44" height="12" rx="3" fill="#7A8296"/><rect x="685.0" y="325" width="4.5" height="16" rx="1" fill="#0F9D74"/><rect x="691.5" y="329" width="4.5" height="12" rx="1" fill="#0F9D74"/><rect x="698.0" y="333" width="4.5" height="8" rx="1" fill="#0F9D74"/><rect x="704.5" y="337" width="4.5" height="4" rx="1" fill="#0F9D74"/></g>
   </g>
-  <g id="step-2-decoding">
-    <rect x="332" y="316" width="744" height="22" fill="#EEF0F4" rx="3"/>
-    <rect x="351.3" y="316" width="21.4" height="22" fill="#C77C00" rx="2"/>
-    <line x1="360.2" y1="312" x2="360.2" y2="342" stroke="#E5302A" stroke-width="2.5"/>
-    <text x="360.2" y="306" class="time" text-anchor="middle">00:41</text>
-    <rect x="511.1" y="316" width="21.4" height="22" fill="#C77C00" rx="2"/>
-    <line x1="520.1" y1="312" x2="520.1" y2="342" stroke="#E5302A" stroke-width="2.5"/>
-    <text x="520.1" y="306" class="time" text-anchor="middle">04:33</text>
-    <rect x="678.5" y="316" width="21.4" height="22" fill="#C77C00" rx="2" stroke="#1B2238" stroke-width="1.5"/>
-    <line x1="686.8" y1="312" x2="686.8" y2="342" stroke="#E5302A" stroke-width="2.5"/>
-    <text x="686.8" y="306" class="time" text-anchor="middle">08:35</text>
-    <rect x="778.4" y="316" width="21.4" height="22" fill="#C77C00" rx="2"/>
-    <line x1="787.4" y1="312" x2="787.4" y2="342" stroke="#E5302A" stroke-width="2.5"/>
-    <text x="787.4" y="306" class="time" text-anchor="middle">11:01</text>
-    <rect x="896.9" y="316" width="21.4" height="22" fill="#C77C00" rx="2"/>
-    <line x1="907.2" y1="312" x2="907.2" y2="342" stroke="#E5302A" stroke-width="2.5"/>
-    <text x="907.2" y="306" class="time" text-anchor="middle">13:55</text>
-    <rect x="1012.6" y="316" width="20.7" height="22" fill="#C77C00" rx="2"/>
-    <line x1="1022.3" y1="312" x2="1022.3" y2="342" stroke="#E5302A" stroke-width="2.5"/>
-    <text x="1022.3" y="306" class="time" text-anchor="middle">16:42</text>
-    <text x="332" y="360" class="axis">0:00</text>
-    <text x="1076" y="360" class="axis" text-anchor="end">18:00</text>
+  <g id="layers">
+    <rect x="230.5" y="144" width="75.0" height="20" rx="10" fill="#8C93A3"/><text x="268" y="158.5" class="chip" text-anchor="middle">CHUNK</text>
+    <rect x="422.5" y="144" width="75.0" height="20" rx="10" fill="#2E63E6"/><text x="460" y="158.5" class="chip" text-anchor="middle">EMBED</text>
+    <rect x="129.4" y="300" width="85.2" height="20" rx="10" fill="#8C93A3"/><text x="172" y="314.5" class="chip" text-anchor="middle">SAMPLE</text>
+    <rect x="225.4" y="300" width="85.2" height="20" rx="10" fill="#C44773"/><text x="268" y="314.5" class="chip" text-anchor="middle">FILTER</text>
+    <rect x="324.5" y="300" width="75.0" height="20" rx="10" fill="#C77C00"/><text x="362" y="314.5" class="chip" text-anchor="middle">DEDUP</text>
+    <rect x="422.5" y="300" width="75.0" height="20" rx="10" fill="#2E63E6"/><text x="460" y="314.5" class="chip" text-anchor="middle">EMBED</text>
+    <rect x="536.5" y="225" width="75.0" height="20" rx="10" fill="#8A4FD8"/><text x="574" y="239.5" class="chip" text-anchor="middle">MATCH</text>
+    <rect x="722.4" y="225" width="85.2" height="20" rx="10" fill="#0B7A5A"/><text x="765" y="239.5" class="chip" text-anchor="middle">RERANK</text>
+    <rect x="813.4" y="225" width="85.2" height="20" rx="10" fill="#C44773"/><text x="856" y="239.5" class="chip" text-anchor="middle">FILTER</text>
+    <rect x="912.5" y="225" width="75.0" height="20" rx="10" fill="#C77C00"/><text x="950" y="239.5" class="chip" text-anchor="middle">DEDUP</text>
+    <rect x="647.4" y="440" width="85.2" height="20" rx="10" fill="#1B2238"/><text x="690" y="454.5" class="chip" text-anchor="middle">SELECT</text>
+    <rect x="813.4" y="440" width="85.2" height="20" rx="10" fill="#C44773"/><text x="856" y="454.5" class="chip" text-anchor="middle">FILTER</text>
+    <rect x="912.5" y="440" width="75.0" height="20" rx="10" fill="#C77C00"/><text x="950" y="454.5" class="chip" text-anchor="middle">DEDUP</text>
+    <rect x="635.6" y="187" width="64.8" height="20" rx="10" fill="#0F9D74"/><text x="668" y="201.5" class="chip" text-anchor="middle">RANK</text>
   </g>
-  <g id="step-3-frame-choice">
-    <path d="M678.5 338L699.9 338L1092 438H316Z" fill="#EEF0F4"/>
-    <rect x="316" y="438" width="776" height="228" fill="#EEF0F4" rx="10"/>
-    <rect x="518.3" y="454" width="299.4" height="28" fill="#16181D" rx="4"/>
-    <text x="668" y="473" class="caption" text-anchor="middle">…now let’s run the eval on the new model…</text>
-    <path d="M380 500V494H956V500" fill="none" stroke="#2E63E6" stroke-width="2"/>
-    <text x="380" y="486" class="span">8:25</text>
-    <text x="956" y="486" class="span" text-anchor="end">8:49</text>
-    <rect x="332" y="583" width="144" height="16" fill="#FFFFFF" stroke="#D6DAE2" stroke-width="1.2"/>
-    <rect x="348" y="506" width="112" height="63" fill="#D7DBE4"/>
-    <path d="M365.9 569C370.4 547.6 437.6 547.6 442.1 569Z" fill="#7C8497"/>
-    <ellipse cx="404" cy="531.2" rx="19" ry="18.9" fill="#A9B0BF"/>
-    <text x="404" y="625" class="label" text-anchor="middle">Close-up face</text>
-    <text x="404" y="644" class="note" text-anchor="middle">last resort only</text>
-    <rect x="476" y="583" width="288" height="16" fill="#F8E7C6" stroke="#C77C00" stroke-width="1.2"/>
-    <rect x="576" y="506" width="112" height="63" fill="#232838"/>
-    <rect x="576" y="506" width="9" height="63" fill="#2C3245"/>
-    <rect x="591.7" y="514.8" width="38.1" height="3.8" fill="#7FA6FF" rx="1"/>
-    <rect x="591.7" y="523" width="58.2" height="3.8" fill="#E9C46A" rx="1"/>
-    <rect x="600.6" y="531.2" width="44.8" height="3.8" fill="#8BD3B5" rx="1"/>
-    <rect x="600.6" y="539.4" width="31.4" height="3.8" fill="#C5CBDA" rx="1"/>
-    <rect x="591.7" y="547.6" width="51.5" height="3.8" fill="#F28C82" rx="1"/>
-    <rect x="600.6" y="555.8" width="40.3" height="3.8" fill="#C5CBDA" rx="1"/>
-    <rect x="574" y="504" width="116" height="67" fill="none" rx="2" stroke="#E5302A" stroke-width="2.5"/>
-    <text x="620" y="625" class="label" text-anchor="middle" style="fill: #E5302A">Chosen: longest overlap</text>
-    <text x="620" y="644" class="note" text-anchor="middle">sharp, steady, most typical</text>
-    <rect x="764" y="583" width="24" height="16" fill="#FFFFFF" stroke="#D6DAE2" stroke-width="1.2"/>
-    <rect x="767" y="506" width="18" height="63" fill="#FFFFFF" stroke="#D6DAE2" stroke-width="1"/>
-    <text x="776" y="625" class="label" text-anchor="middle">Flash</text>
-    <text x="776" y="644" class="note" text-anchor="middle">too short</text>
-    <rect x="788" y="583" width="288" height="16" fill="#FFFFFF" stroke="#D6DAE2" stroke-width="1.2"/>
-    <rect x="876" y="506" width="112" height="63" fill="#F3F4F8"/>
-    <rect x="887.2" y="513.6" width="44.8" height="5" fill="#1B2238" rx="1.5"/>
-    <rect x="891.7" y="546.3" width="12.3" height="13.9" fill="#8B93A5"/>
-    <rect x="911.8" y="538.8" width="12.3" height="21.4" fill="#8B93A5"/>
-    <rect x="932" y="541.3" width="12.3" height="18.9" fill="#8B93A5"/>
-    <rect x="952.2" y="528.7" width="12.3" height="31.5" fill="#2E63E6"/>
-    <line x1="887.2" y1="560.2" x2="976.8" y2="560.2" stroke="#1B2238" stroke-width="1"/>
-    <text x="932" y="625" class="label" text-anchor="middle">Slide</text>
-    <text x="932" y="644" class="note" text-anchor="middle">less overlap</text>
-    <line x1="344" y1="587" x2="344" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="368" y1="587" x2="368" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="392" y1="587" x2="392" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="416" y1="587" x2="416" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="440" y1="587" x2="440" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="464" y1="587" x2="464" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="488" y1="587" x2="488" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="512" y1="587" x2="512" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="536" y1="587" x2="536" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="560" y1="587" x2="560" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="584" y1="587" x2="584" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="608" y1="587" x2="608" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="632" y1="571" x2="632" y2="604" stroke="#E5302A" stroke-width="2.5"/>
-    <line x1="656" y1="587" x2="656" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="680" y1="587" x2="680" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="704" y1="587" x2="704" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="728" y1="587" x2="728" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="752" y1="587" x2="752" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="776" y1="587" x2="776" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="800" y1="587" x2="800" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="824" y1="587" x2="824" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="848" y1="587" x2="848" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="872" y1="587" x2="872" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="896" y1="587" x2="896" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="920" y1="587" x2="920" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="944" y1="587" x2="944" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="968" y1="587" x2="968" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="992" y1="587" x2="992" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="1016" y1="587" x2="1016" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="1040" y1="587" x2="1040" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="1064" y1="587" x2="1064" y2="595" stroke="#8B93A5" stroke-width="1"/>
-    <line x1="476" y1="578" x2="476" y2="604" stroke="#1B2238" stroke-width="1.5"/>
-    <line x1="764" y1="578" x2="764" y2="604" stroke="#1B2238" stroke-width="1.5"/>
-    <line x1="788" y1="578" x2="788" y2="604" stroke="#1B2238" stroke-width="1.5"/>
-  </g>
-  <g id="step-4-output">
-    <rect x="332" y="710" width="274" height="300" fill="#0A0C0F" rx="4"/>
-    <rect x="338" y="716" width="128" height="72" fill="#F3F4F8"/>
-    <rect x="353.4" y="741.9" width="79.4" height="9.4" fill="#1B2238" rx="1.5"/>
-    <rect x="353.4" y="756.3" width="53.8" height="5.8" fill="#8B93A5" rx="1.5"/>
-    <rect x="353.4" y="733.3" width="12.8" height="3.6" fill="#E5302A" rx="1"/>
-    <rect x="338" y="788" width="128" height="20" fill="#0F1115"/>
-    <line x1="338" y1="788.5" x2="466" y2="788.5" stroke="#2F343D" stroke-width="1"/>
-    <text x="346" y="803" class="stamp">00:41</text>
-    <rect x="472" y="716" width="128" height="72" fill="#F3F4F8"/>
-    <path d="M497.6 752H523.2M516.8 752V736.2H523.2M516.8 752V767.8H523.2M548.8 736.2H574.4M548.8 767.8H574.4" fill="none" stroke="#8B93A5" stroke-width="1.2"/>
-    <rect x="484.8" y="744.8" width="25.6" height="14.4" fill="#FFFFFF" rx="2" stroke="#1B2238" stroke-width="1.2"/>
-    <rect x="523.2" y="729" width="25.6" height="14.4" fill="#FFFFFF" rx="2" stroke="#1B2238" stroke-width="1.2"/>
-    <rect x="523.2" y="760.6" width="25.6" height="14.4" fill="#FFFFFF" rx="2" stroke="#1B2238" stroke-width="1.2"/>
-    <rect x="561.6" y="744.8" width="25.6" height="14.4" fill="#FFFFFF" rx="2" stroke="#1B2238" stroke-width="1.2"/>
-    <rect x="472" y="788" width="128" height="20" fill="#0F1115"/>
-    <line x1="472" y1="788.5" x2="600" y2="788.5" stroke="#2F343D" stroke-width="1"/>
-    <text x="480" y="803" class="stamp">04:33</text>
-    <rect x="338" y="814" width="128" height="72" fill="#232838"/>
-    <rect x="338" y="814" width="10.2" height="72" fill="#2C3245"/>
-    <rect x="355.9" y="824.1" width="43.5" height="4.3" fill="#7FA6FF" rx="1"/>
-    <rect x="355.9" y="833.4" width="66.6" height="4.3" fill="#E9C46A" rx="1"/>
-    <rect x="366.2" y="842.8" width="51.2" height="4.3" fill="#8BD3B5" rx="1"/>
-    <rect x="366.2" y="852.2" width="35.8" height="4.3" fill="#C5CBDA" rx="1"/>
-    <rect x="355.9" y="861.5" width="58.9" height="4.3" fill="#F28C82" rx="1"/>
-    <rect x="366.2" y="870.9" width="46.1" height="4.3" fill="#C5CBDA" rx="1"/>
-    <rect x="338" y="886" width="128" height="20" fill="#0F1115"/>
-    <line x1="338" y1="886.5" x2="466" y2="886.5" stroke="#2F343D" stroke-width="1"/>
-    <text x="346" y="901" class="stamp">08:35</text>
-    <rect x="472" y="814" width="128" height="72" fill="#151924"/>
-    <rect x="482.2" y="825.5" width="46.1" height="4.3" fill="#5BD39A" rx="1"/>
-    <rect x="482.2" y="836.3" width="79.4" height="4.3" fill="#9AA3B8" rx="1"/>
-    <rect x="482.2" y="847.1" width="69.1" height="4.3" fill="#9AA3B8" rx="1"/>
-    <rect x="482.2" y="857.9" width="35.8" height="4.3" fill="#5BD39A" rx="1"/>
-    <rect x="482.2" y="868.7" width="89.6" height="4.3" fill="#9AA3B8" rx="1"/>
-    <rect x="472" y="886" width="128" height="20" fill="#0F1115"/>
-    <line x1="472" y1="886.5" x2="600" y2="886.5" stroke="#2F343D" stroke-width="1"/>
-    <text x="480" y="901" class="stamp">11:01</text>
-    <rect x="338" y="912" width="128" height="72" fill="#F3F4F8"/>
-    <rect x="350.8" y="920.6" width="51.2" height="5.8" fill="#1B2238" rx="1.5"/>
-    <rect x="355.9" y="958.1" width="14.1" height="15.8" fill="#8B93A5"/>
-    <rect x="379" y="949.4" width="14.1" height="24.5" fill="#8B93A5"/>
-    <rect x="402" y="952.3" width="14.1" height="21.6" fill="#8B93A5"/>
-    <rect x="425" y="937.9" width="14.1" height="36" fill="#2E63E6"/>
-    <line x1="350.8" y1="973.9" x2="453.2" y2="973.9" stroke="#1B2238" stroke-width="1"/>
-    <rect x="338" y="984" width="128" height="20" fill="#0F1115"/>
-    <line x1="338" y1="984.5" x2="466" y2="984.5" stroke="#2F343D" stroke-width="1"/>
-    <text x="346" y="999" class="stamp">13:55</text>
-    <rect x="472" y="912" width="128" height="72" fill="#F3F4F8"/>
-    <rect x="484.8" y="922.1" width="58.9" height="7.2" fill="#1B2238" rx="1.5"/>
-    <circle cx="488.6" cy="944.4" r="2.5" fill="#E5302A"/>
-    <rect x="496.3" y="942.2" width="71.7" height="4.3" fill="#8B93A5" rx="1"/>
-    <circle cx="488.6" cy="955.9" r="2.5" fill="#E5302A"/>
-    <rect x="496.3" y="953.8" width="61.4" height="4.3" fill="#8B93A5" rx="1"/>
-    <circle cx="488.6" cy="967.4" r="2.5" fill="#E5302A"/>
-    <rect x="496.3" y="965.3" width="76.8" height="4.3" fill="#8B93A5" rx="1"/>
-    <rect x="472" y="984" width="128" height="20" fill="#0F1115"/>
-    <line x1="472" y1="984.5" x2="600" y2="984.5" stroke="#2F343D" stroke-width="1"/>
-    <text x="480" y="999" class="stamp">16:42</text>
-    <text x="332" y="1036" class="note"><tspan x="332">.cache/youtube-toolkit/vision/</tspan><tspan x="332" dy="19">&lt;datetime&gt;-&lt;video-id&gt;/</tspan></text>
-    <rect x="646" y="710" width="430" height="300" fill="#FFFFFF" rx="8" stroke="#D6DAE2" stroke-width="1"/>
-    <text x="666" y="740.2" class="code" xml:space="preserve">{</text>
-    <text x="666" y="757.2" class="code" xml:space="preserve"><tspan class="key">  &quot;timestamp_seconds&quot;: </tspan><tspan fill="#E5302A">515.0</tspan>,</text>
-    <text x="666" y="774.2" class="code" xml:space="preserve"><tspan class="key">  &quot;transcript&quot;: {</tspan></text>
-    <text x="666" y="791.2" class="code" xml:space="preserve"><tspan class="key">    &quot;text&quot;: </tspan><tspan fill="#2E63E6">&quot;…now let’s run the eval…&quot;</tspan>,</text>
-    <text x="666" y="808.2" class="code" xml:space="preserve"><tspan class="key">    &quot;text_score&quot;: </tspan><tspan fill="#2E63E6">0.49</tspan>,</text>
-    <text x="666" y="825.2" class="code" xml:space="preserve"><tspan class="key">    &quot;chapter&quot;: </tspan><tspan fill="#2E63E6">&quot;Live demo&quot;</tspan>,</text>
-    <text x="666" y="842.2" class="code" xml:space="preserve">    …</text>
-    <text x="666" y="859.2" class="code" xml:space="preserve">  },</text>
-    <text x="666" y="876.2" class="code" xml:space="preserve"><tspan class="key">  &quot;visual_scores&quot;: {</tspan></text>
-    <text x="666" y="893.2" class="code" xml:space="preserve"><tspan class="key">    &quot;clarity&quot;: </tspan><tspan fill="#C77C00">812.4</tspan>,</text>
-    <text x="666" y="910.2" class="code" xml:space="preserve"><tspan class="key">    &quot;neighbor_change&quot;: </tspan><tspan fill="#C77C00">0.012</tspan>,</text>
-    <text x="666" y="927.2" class="code" xml:space="preserve"><tspan class="key">    &quot;shot_overlap_seconds&quot;: </tspan><tspan fill="#C77C00">12.0</tspan>,</text>
-    <text x="666" y="944.2" class="code" xml:space="preserve"><tspan class="key">    &quot;face_area&quot;: </tspan><tspan fill="#C77C00">0.0</tspan>,</text>
-    <text x="666" y="961.2" class="code" xml:space="preserve"><tspan class="key">    &quot;similarity_to_previous&quot;: </tspan><tspan fill="#C77C00">0.31</tspan></text>
-    <text x="666" y="978.2" class="code" xml:space="preserve">  }</text>
-    <text x="666" y="995.2" class="code" xml:space="preserve">}</text>
-    <text x="646" y="1036" class="note">Scores explain each pick; they are not confidence values.</text>
+  <g id="labels">
+    <text x="80" y="268" class="name" text-anchor="middle">Captions</text>
+    <text x="80" y="286" class="count" text-anchor="middle">or speech-to-text</text>
+    <text x="268" y="268" class="name" text-anchor="middle">3 scopes</text>
+    <text x="460" y="268" class="name" text-anchor="middle">Embed</text>
+    <text x="460" y="286" class="count" text-anchor="middle">texts</text>
+    <text x="80" y="410" class="name" text-anchor="middle">Video</text>
+    <text x="80" y="428" class="count" text-anchor="middle">720p</text>
+    <text x="172" y="410" class="name" text-anchor="middle">Keyframes</text>
+    <text x="172" y="428" class="count" text-anchor="middle">every 3-7 s</text>
+    <text x="268" y="410" class="name" text-anchor="middle">Sponsors</text>
+    <text x="268" y="428" class="count" text-anchor="middle">and dark frames</text>
+    <text x="362" y="410" class="name" text-anchor="middle">Near-copies</text>
+    <text x="362" y="428" class="count" text-anchor="middle">by pixels</text>
+    <text x="460" y="410" class="name" text-anchor="middle">Embed</text>
+    <text x="460" y="428" class="count" text-anchor="middle">frames</text>
+    <text x="574" y="335" class="name" text-anchor="middle">Match</text>
+    <text x="574" y="353" class="count" text-anchor="middle">-5 s to +2 s</text>
+    <text x="765" y="335" class="name" text-anchor="middle">Fuse</text>
+    <text x="765" y="353" class="count" text-anchor="middle">RRF</text>
+    <text x="856" y="335" class="name" text-anchor="middle">10 s gap</text>
+    <text x="856" y="353" class="count" text-anchor="middle">to any pick</text>
+    <text x="950" y="335" class="name" text-anchor="middle">Near-copies</text>
+    <text x="950" y="353" class="count" text-anchor="middle">by vectors</text>
+    <text x="1050" y="335" class="name" text-anchor="middle">Collages</text>
+    <text x="1050" y="353" class="count" text-anchor="middle">6 per page</text>
+    <text x="690" y="550" class="name" text-anchor="middle">Time slots</text>
+    <text x="690" y="568" class="count" text-anchor="middle">12 s or longer</text>
+    <text x="856" y="550" class="name" text-anchor="middle">10 s gap</text>
+    <text x="856" y="568" class="count" text-anchor="middle">to the last pick</text>
+    <text x="950" y="550" class="name" text-anchor="middle">Repeats</text>
+    <text x="950" y="568" class="count" text-anchor="middle">by pixels</text>
+    <text x="1050" y="550" class="name" text-anchor="middle">Collages</text>
+    <text x="1050" y="568" class="count" text-anchor="middle">6 per page</text>
+    <text x="668" y="377" class="name" text-anchor="middle">Rank</text>
+    <text x="668" y="395" class="count" text-anchor="middle">by relative score</text>
+    <text x="428" y="456" class="lane">No image embedding</text>
+    <text x="428" y="474" class="lane">model or timed transcript</text>
   </g>
 </svg>

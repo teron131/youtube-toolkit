@@ -184,13 +184,8 @@ def _fetch_stt_transcript(
         or normalize_text(metadata_payload.get("language"))
         or "speech-to-text",
         source="speech-to-text",
-        chunks=[
-            TranscriptChunk(
-                start_seconds=0,
-                end_seconds=0,
-                text=transcription.text,
-            )
-        ],
+        chunks=transcription.segments
+        or [TranscriptChunk(start_seconds=0, end_seconds=0, text=transcription.text)],
     )
 
 

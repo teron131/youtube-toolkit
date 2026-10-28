@@ -60,7 +60,14 @@ def vision(args: argparse.Namespace) -> dict[str, Any]:
     require_vision()
     from ..vision import sample_vision
 
-    return sample_vision(args.video_ref, max_frames=args.max_frames)
+    return sample_vision(
+        args.video_ref,
+        max_frames=args.max_frames,
+        min_similarity=args.min_similarity,
+        min_gap_seconds=args.min_gap,
+        local_only=args.local_only,
+        auto_clean=args.auto_clean,
+    )
 
 
 def comments(args: argparse.Namespace) -> dict[str, Any]:

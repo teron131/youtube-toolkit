@@ -6,10 +6,10 @@ from dataclasses import dataclass
 import math
 from typing import Any
 
+from ..embeddings.openai import EmbeddingClient
 from ..execution import collect_concurrently
 from ..schemas import TranscriptDocument
 from ..transcript import TranscriptOptions, fetch_transcript
-from .embeddings import EmbeddingClient
 from .preprocessing import (
     ChunkResult,
     VideoResult,

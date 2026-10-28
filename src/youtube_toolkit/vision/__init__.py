@@ -1,4 +1,4 @@
-"""Transcript-guided visual context extraction with bounded local media processing."""
+"""Whole-video visual context with optional Gemini relevance ranking and bounded local media processing."""
 
 from .workflow import sample_vision
 

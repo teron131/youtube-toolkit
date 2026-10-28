@@ -63,10 +63,7 @@ def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
 
     def fake_transcribe_in_cloud(path: Path) -> SpeechTranscription:
         assert path == audio_path
-        return SpeechTranscription(
-            text="数据库",
-            language="zh",
-        )
+        return SpeechTranscription(text="数据库", segments=[], language="zh")
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("XAI_API_KEY", "test-key")
@@ -85,7 +82,41 @@ def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
     assert document.source == "speech-to-text"
     assert document.language == "zh"
     assert document.text == "數據庫"
+    assert document.chunks == [TranscriptChunk(0, 0, "數據庫")]
     assert not audio_path.exists()
+
+
+def test_timed_speech_to_text_segments_become_transcript_chunks(
+    monkeypatch, tmp_path
+) -> None:
+    audio_path = tmp_path / "JpSHyEIZ_bo.m4a"
+    audio_path.write_bytes(b"audio")
+    segments = [
+        TranscriptChunk(0.2, 1.0, "Hello world."),
+        TranscriptChunk(2.5, 3.2, "Next line"),
+    ]
+
+    class FakeClient:
+        def metadata(self, video_ref: str) -> dict:
+            return {"id": video_ref, "automatic_captions": {}, "subtitles": {}}
+
+        def download_transcription_audio(self, _video_id: str) -> Path:
+            return audio_path
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("XAI_API_KEY", "test-key")
+    monkeypatch.setattr(
+        "youtube_toolkit.transcript.transcribe_in_cloud",
+        lambda _path: SpeechTranscription(
+            text="Hello world. Next line", segments=segments, language="en"
+        ),
+    )
+
+    document = fetch_transcript("JpSHyEIZ_bo", client=FakeClient())
+
+    assert document.source == "speech-to-text"
+    assert document.chunks == segments
+    assert document.text == "Hello world. Next line"
 
 
 def test_fetch_transcript_fetches_and_archives_captions(monkeypatch, tmp_path) -> None:
@@ -587,11 +618,13 @@ def test_stt_prefers_cloud_and_falls_back_to_the_local_model(
     monkeypatch.setattr("youtube_toolkit.transcript.local_stt_installed", lambda: True)
     monkeypatch.setattr(
         "youtube_toolkit.transcript.transcribe_locally",
-        lambda _path: SpeechTranscription(text="local text"),
+        lambda _path: SpeechTranscription(text="local text", segments=[]),
     )
     monkeypatch.setattr(
         "youtube_toolkit.transcript.transcribe_in_cloud",
-        lambda _path: SpeechTranscription(text="cloud text", language="en"),
+        lambda _path: SpeechTranscription(
+            text="cloud text", segments=[], language="en"
+        ),
     )
 
     class FakeClient:

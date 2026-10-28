@@ -1,34 +1,37 @@
-"""Own video preflight, timed-caption policy, temporary media lifecycle, and vision result publication."""
+"""Own video preflight, the choice between Gemini ranking and local time slots, temporary media lifecycle, and the vision result."""
 
 from __future__ import annotations
 
+from dataclasses import asdict
 import math
 from pathlib import Path
+import re
 import shutil
 from tempfile import TemporaryDirectory
 from typing import Any
 
-import numpy as np
-from PIL import Image, ImageDraw, ImageFont
-
 from ..artifacts import create_artifact_directory
-from ..config import DEFAULT_VISION_MAX_FRAMES, MAX_VISION_FRAMES
+from ..config import (
+    DEFAULT_VISION_MAX_FRAMES,
+    DEFAULT_VISION_MIN_GAP_SECONDS,
+    DEFAULT_VISION_MIN_SIMILARITY,
+    MAX_VISION_FRAMES,
+    vision_embedding_key,
+)
+from ..embeddings.gemini import MODEL, EmbeddingUsage, GeminiEmbeddingClient
 from ..identity import VideoRef, require_video_id
-from ..transcript import TranscriptOptions, fetch_transcript
+from ..schemas import VideoMetadata
+from ..transcript import fetch_transcript
 from ..youtube import YtDlpClient
-from .frames import FRAME_HEIGHT, FRAME_WIDTH, SelectedFrame, select_frames
-from .windows import select_transcript_windows
+from ..youtube.caption import extract_sponsorblock_intervals
+from .candidates import collect_candidates, select_slot_frames
+from .collages import publish_collages, render_timestamped_collages
+from .reranking import FrameRanking, rerank_frames
+from .text import prepare_targets
 
 MAX_VIDEO_DURATION_SECONDS = 2 * 60 * 60
 MAX_VIDEO_BYTES = 500 * 1024 * 1024
-TIMESTAMP_FOOTER_HEIGHT = 24
-COLLAGE_PADDING = 6
-COLLAGE_COLUMNS = 2
-COLLAGE_ROWS = 3
-FRAMES_PER_COLLAGE = COLLAGE_COLUMNS * COLLAGE_ROWS
-JPEG_QUALITY = 80
-JPEG_SUBSAMPLING = "4:2:2"
-TIMESTAMP_FONT = ImageFont.load_default(size=16)
+SPONSOR_TITLE = re.compile(r"\b(?:sponsor(?:ed|ship)?|advertisement|ad break)\b", re.I)
 
 
 def sample_vision(
@@ -36,13 +39,23 @@ def sample_vision(
     *,
     output_dir: Path | None = None,
     max_frames: int = DEFAULT_VISION_MAX_FRAMES,
+    min_similarity: float = DEFAULT_VISION_MIN_SIMILARITY,
+    min_gap_seconds: float = DEFAULT_VISION_MIN_GAP_SECONDS,
+    local_only: bool = False,
+    auto_clean: bool = True,
 ) -> dict[str, Any]:
-    """No model API or speech-to-text is used: timed captions shortlist the windows, and missing, untimed, or unavailable captions fall back to evenly spaced visual windows.
+    """Gemini ranks the video's keyframes when credentials and a timed transcript are available; otherwise time slots spread a local selection across the same keyframes.
 
+    The transcript is fetched only when Gemini credentials exist, since local selection never reads it; without captions it comes from configured speech-to-text, which ranks frames only when the route reports timing.
+    max_frames limits the output, never the candidate search; embedding API errors propagate.
     Without output_dir, collages go to a new directory in the working directory's archive; an explicit output_dir has this video's earlier collages replaced.
     """
     if not 1 <= max_frames <= MAX_VISION_FRAMES:
         raise ValueError(f"max_frames must be between 1 and {MAX_VISION_FRAMES}")
+    if not math.isfinite(min_similarity) or not -1 <= min_similarity <= 1:
+        raise ValueError("min_similarity must be finite and between -1 and 1")
+    if not math.isfinite(min_gap_seconds) or min_gap_seconds < 0:
+        raise ValueError("min_gap_seconds must be finite and non-negative")
     video_id = require_video_id(video_ref)
     ffmpeg_path = shutil.which("ffmpeg")
     if ffmpeg_path is None:
@@ -61,28 +74,45 @@ def sample_vision(
         or duration <= 0
     ):
         raise ValueError(f"Missing valid duration for {video_id}")
+    duration = float(duration)
     if duration > MAX_VIDEO_DURATION_SECONDS:
         raise ValueError(
             f"Video is longer than {MAX_VIDEO_DURATION_SECONDS // 3600} hours"
         )
+    excluded_intervals = _excluded_intervals(metadata, duration)
+    configured_key = None if local_only else vision_embedding_key()
     transcript_warning = None
-    try:
-        document = fetch_transcript(
-            video_ref,
-            options=TranscriptOptions(allow_stt=False),
-            client=client,
-            metadata=metadata,
-        )
-        windows = select_transcript_windows(document, max_windows=max_frames)
-        if not windows:
-            transcript_warning = (
-                "No usable timed transcript passages; using visual sampling."
-            )
-    except RuntimeError as error:
-        windows = []
-        transcript_warning = (
-            f"Timed captions unavailable; using visual sampling: {error}"
-        )
+    embedding_warning = None
+    targets = []
+    if configured_key:
+        try:
+            document = fetch_transcript(video_ref, client=client, metadata=metadata)
+        # Speech-to-text reports a recording without speech as ValueError, which leaves nothing to rank against, as missing captions do.
+        except (RuntimeError, ValueError) as error:
+            transcript_warning = f"No timed transcript; using visual sampling: {error}"
+        else:
+            targets = prepare_targets(document, excluded_intervals)
+            if not targets:
+                untimed = all(
+                    chunk.end_seconds <= chunk.start_seconds
+                    for chunk in document.chunks
+                )
+                transcript_warning = (
+                    "Speech-to-text gave no timestamps; using visual sampling."
+                    if untimed
+                    else "No usable timed transcript passages; using visual sampling."
+                )
+    elif not local_only:
+        embedding_warning = "Set GEMINI_API_KEY for relative-relevance ranking; using local frame selection."
+    api_key = configured_key if targets else None
+    selection_mode = "semantic" if api_key else "visual"
+    usage: EmbeddingUsage | None = None
+    rankings: dict[float, tuple[int, FrameRanking]] = {}
+    if api_key:
+        # Texts need no video, so a bad key or quota fails before the download and decoding.
+        embedder = GeminiEmbeddingClient(api_key)
+        embedded_texts = embedder.embed([], [target.text for target in targets])
+        usage = embedded_texts.usage
     destination = output_dir
     try:
         destination = (
@@ -91,111 +121,108 @@ def sample_vision(
             .resolve()
         )
         destination.mkdir(parents=True, exist_ok=True)
-        with TemporaryDirectory(prefix="work-", dir=destination) as work_dir_name:
+        with TemporaryDirectory(
+            prefix="work-", dir=destination, delete=auto_clean
+        ) as work_dir_name:
             work_dir = Path(work_dir_name)
             video_path = work_dir / f"{video_id}.mp4"
             client.download_video_for_vision(
                 video_ref, video_path, max_bytes=MAX_VIDEO_BYTES
             )
-            selected = select_frames(
+            candidates = collect_candidates(
                 video_path,
-                windows,
                 ffmpeg_path,
-                duration=float(duration),
-                max_frames=max_frames,
+                duration=duration,
+                directory=work_dir / "candidates",
+                excluded_intervals=excluded_intervals,
             )
+            if api_key:
+                selected = []
+                if candidates:
+                    embedded_images = embedder.embed(
+                        [frame.image_path for frame in candidates], []
+                    )
+                    usage = embedded_texts.usage + embedded_images.usage
+                    ranked = rerank_frames(
+                        embedded_images.images,
+                        embedded_texts.texts,
+                        targets,
+                        [frame.timestamp_seconds for frame in candidates],
+                        max_frames=max_frames,
+                        min_similarity=min_similarity,
+                        min_gap_seconds=min_gap_seconds,
+                    )
+                    for rank, ranking in enumerate(ranked, start=1):
+                        frame = candidates[ranking.index].load()
+                        selected.append(frame)
+                        rankings[frame.timestamp_seconds] = (rank, ranking)
+            else:
+                selected = select_slot_frames(
+                    candidates,
+                    duration=duration,
+                    max_frames=max_frames,
+                    min_gap_seconds=min_gap_seconds,
+                )
+            selected.sort(key=lambda frame: frame.timestamp_seconds)
             staged_collages = render_timestamped_collages(selected, work_dir / "vision")
             collage_paths = publish_collages(staged_collages, destination, video_id)
     except OSError as error:
         raise RuntimeError(
             f"Vision artifact filesystem error under {destination}: {error}"
         ) from error
+    frame_results = []
+    for frame in selected:
+        result = frame.to_dict()
+        result["relevance"] = None
+        if frame.timestamp_seconds in rankings:
+            rank, ranking = rankings[frame.timestamp_seconds]
+            result["relevance"] = {
+                "selection_rank": rank,
+                "rrf_score": ranking.score,
+                "matches": [asdict(match) for match in ranking.matches],
+            }
+        frame_results.append(result)
     return {
         "video_id": video_id,
-        "duration_seconds": float(duration),
+        "duration_seconds": duration,
         "heatmap_available": bool(metadata.get("heatmap")),
-        "selection_mode": "transcript" if windows else "visual",
+        "selection_mode": selection_mode,
         "transcript_warning": transcript_warning,
+        "embedding_warning": embedding_warning,
+        "embedding_model": MODEL if api_key else None,
+        "embedding_usage": asdict(usage) if usage is not None else None,
+        "candidate_count": len(candidates),
+        "min_similarity": min_similarity,
+        "min_gap_seconds": min_gap_seconds,
         "frame_count": len(selected),
         "timestamps_seconds": [frame.timestamp_seconds for frame in selected],
         "collage_paths": [str(path) for path in collage_paths],
-        "frames": [frame.to_dict() for frame in selected],
+        "media_dir": None if auto_clean else str(work_dir),
+        "frames": frame_results,
     }
 
 
-def format_timestamp(timestamp_seconds: float) -> str:
-    total_seconds = round(timestamp_seconds)
-    hours, remainder = divmod(total_seconds, 3600)
-    minutes, remaining_seconds = divmod(remainder, 60)
-    if hours:
-        return f"{hours}:{minutes:02d}:{remaining_seconds:02d}"
-    return f"{minutes:02d}:{remaining_seconds:02d}"
-
-
-def add_timestamp_footer(
-    frame: np.ndarray,
-    timestamp_seconds: float,
-) -> np.ndarray:
-    footer = np.full(
-        (TIMESTAMP_FOOTER_HEIGHT, frame.shape[1], 3), (15, 17, 21), dtype=np.uint8
+def _excluded_intervals(
+    metadata: dict[str, Any], duration: float
+) -> list[tuple[float, float]]:
+    intervals = extract_sponsorblock_intervals(metadata)
+    chapters = sorted(
+        (
+            chapter
+            for chapter in VideoMetadata.from_yt_dlp(metadata).chapters
+            if math.isfinite(chapter.start_seconds)
+            and 0 <= chapter.start_seconds < duration
+        ),
+        key=lambda chapter: chapter.start_seconds,
     )
-    footer[0] = (47, 52, 61)
-    text = format_timestamp(timestamp_seconds)
-    image = Image.fromarray(footer)
-    draw = ImageDraw.Draw(image)
-    draw.text(
-        (10, TIMESTAMP_FOOTER_HEIGHT // 2),
-        text,
-        fill=(211, 216, 224),
-        font=TIMESTAMP_FONT,
-        anchor="lm",
-    )
-    return np.concatenate((frame, np.asarray(image)), axis=0)
-
-
-def render_timestamped_collages(
-    frames: list[SelectedFrame], output_stem: Path
-) -> list[Path]:
-    tile_height = FRAME_HEIGHT + TIMESTAMP_FOOTER_HEIGHT
-    collage_width = FRAME_WIDTH * COLLAGE_COLUMNS + COLLAGE_PADDING * (
-        COLLAGE_COLUMNS + 1
-    )
-    collage_height = tile_height * COLLAGE_ROWS + COLLAGE_PADDING * (COLLAGE_ROWS + 1)
-    output_paths: list[Path] = []
-    for page, offset in enumerate(range(0, len(frames), FRAMES_PER_COLLAGE), start=1):
-        collage = np.full(
-            (collage_height, collage_width, 3), (10, 12, 15), dtype=np.uint8
+    for index, chapter in enumerate(chapters):
+        if not SPONSOR_TITLE.search(chapter.title):
+            continue
+        stop = (
+            chapters[index + 1].start_seconds if index + 1 < len(chapters) else duration
         )
-        for index, selected in enumerate(frames[offset : offset + FRAMES_PER_COLLAGE]):
-            tile = add_timestamp_footer(selected.image, selected.timestamp_seconds)
-            row, column = divmod(index, COLLAGE_COLUMNS)
-            x = COLLAGE_PADDING + column * (FRAME_WIDTH + COLLAGE_PADDING)
-            y = COLLAGE_PADDING + row * (tile_height + COLLAGE_PADDING)
-            collage[y : y + tile_height, x : x + FRAME_WIDTH] = tile
-
-        output_path = output_stem.with_name(f"{output_stem.name}_page{page}.jpg")
-        Image.fromarray(collage).save(
-            output_path,
-            "JPEG",
-            quality=JPEG_QUALITY,
-            subsampling=JPEG_SUBSAMPLING,
-            optimize=True,
-            progressive=True,
-        )
-        output_paths.append(output_path)
-    return output_paths
-
-
-def publish_collages(
-    staged_paths: list[Path],
-    destination: Path,
-    video_id: str,
-) -> list[Path]:
-    for stale_path in destination.glob(f"{video_id}_vision_page*.jpg"):
-        stale_path.unlink()
-    published: list[Path] = []
-    for page, staged_path in enumerate(staged_paths, start=1):
-        output_path = destination / f"{video_id}_vision_page{page}.jpg"
-        staged_path.replace(output_path)
-        published.append(output_path.resolve())
-    return published
+        if chapter.end_seconds is not None and math.isfinite(chapter.end_seconds):
+            stop = min(stop, chapter.end_seconds)
+        if stop > chapter.start_seconds:
+            intervals.append((chapter.start_seconds, stop))
+    return intervals

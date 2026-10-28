@@ -19,7 +19,9 @@ from dataclasses import dataclass, field
 from functools import cache
 import json
 import logging
+import math
 from pathlib import Path
+import re
 from typing import Any, Literal
 import urllib.error
 import urllib.request
@@ -36,7 +38,7 @@ from ..config import (
     stt_provider_name,
 )
 from ..execution import retry_transient
-from ..schemas import SpeechTranscription, normalize_text
+from ..schemas import SpeechTranscription, TranscriptChunk, normalize_text
 from .synthetic_audio import tone_recording
 
 logger = logging.getLogger(__name__)
@@ -112,6 +114,12 @@ VERCEL_PROTOCOL_HEADERS = {
 REQUEST_TIMEOUT_SECONDS = 300
 REQUEST_ATTEMPTS = 3
 RETRY_BACKOFF_SECONDS = 1.0
+# Word timings become caption-like lines, which end at sentence punctuation, before a pause, or once they span LINE_MAX_SECONDS.
+LINE_ENDINGS = (".", "?", "!", "\u3002", "\uff1f", "\uff01")
+LINE_PAUSE_SECONDS = 1.0
+LINE_MAX_SECONDS = 10.0
+# Words that meet at a CJK character join without a space, as the language is written.
+CJK = re.compile(r"[\u3000-\u9fff\uff00-\uffef]")
 AUDIO_CONTENT_TYPES = {
     ".aac": "audio/aac",
     ".flac": "audio/flac",
@@ -200,6 +208,7 @@ def _send_to_gemini(
     """The file store takes recordings of any size; sending audio inside the request is capped at about 20 MB.
 
     Gemini reports no detected language, so the result carries none.
+    Its word timestamps would cap audio at 30 minutes and can lower accuracy, so the result stays untimed.
     """
     uploaded = _request(
         provider,
@@ -224,7 +233,7 @@ def _send_to_gemini(
         for part in parts
         if (part_text := normalize_text(part.get("audioTranscription", {}).get("text")))
     )
-    return SpeechTranscription(text=text) if text else None
+    return SpeechTranscription(text=text, segments=[]) if text else None
 
 
 def _delete_gemini_file(
@@ -273,8 +282,9 @@ def _send_multipart(
 def parse_transcription(
     response: dict[str, Any], provider: CloudProvider
 ) -> SpeechTranscription | None:
-    """Per-channel transcripts are joined when there is no single text.
+    """Per-channel transcripts are joined when there is no single text, and stay untimed.
 
+    xAI and ElevenLabs time each word, Vercel AI Gateway times segments when its model does, and OpenAI's current models report no timing.
     The language is a plain code for most providers; OpenAI sends a list of entries, and the first entry's code is used.
     """
     text = normalize_text(response.get("text"))
@@ -292,7 +302,75 @@ def parse_transcription(
     language = response.get(provider.language_key)
     if isinstance(language, list) and language and isinstance(language[0], dict):
         language = language[0].get("code")
-    return SpeechTranscription(text=text, language=normalize_text(language))
+    return SpeechTranscription(
+        text=text,
+        segments=_timed_words(response.get("words"))
+        or _gateway_segments(response.get("segments")),
+        language=normalize_text(language),
+    )
+
+
+def _timed_words(words: Any) -> list[TranscriptChunk]:
+    """ElevenLabs also lists spacing and audio events, and its timings can be null; only timed words count."""
+    if not isinstance(words, list):
+        return []
+    timed = []
+    for word in words:
+        if not isinstance(word, dict) or word.get("type", "word") != "word":
+            continue
+        start, end = _seconds(word.get("start")), _seconds(word.get("end"))
+        word_text = normalize_text(word.get("text"))
+        if start is not None and end is not None and word_text:
+            timed.append((start, end, word_text))
+    return _lines(timed)
+
+
+def _gateway_segments(segments: Any) -> list[TranscriptChunk]:
+    if not isinstance(segments, list):
+        return []
+    return [
+        TranscriptChunk(start_seconds=start, end_seconds=end, text=segment_text)
+        for segment in segments
+        if isinstance(segment, dict)
+        and (start := _seconds(segment.get("startSecond"))) is not None
+        and (end := _seconds(segment.get("endSecond"))) is not None
+        and (segment_text := normalize_text(segment.get("text")))
+    ]
+
+
+def _lines(words: list[tuple[float, float, str]]) -> list[TranscriptChunk]:
+    lines: list[TranscriptChunk] = []
+    line: list[tuple[float, float, str]] = []
+    for index, (start, end, word) in enumerate(words):
+        line.append((start, end, word))
+        next_start = words[index + 1][0] if index + 1 < len(words) else math.inf
+        if (
+            word.endswith(LINE_ENDINGS)
+            or next_start - end >= LINE_PAUSE_SECONDS
+            or end - line[0][0] >= LINE_MAX_SECONDS
+        ):
+            lines.append(
+                TranscriptChunk(
+                    start_seconds=line[0][0],
+                    end_seconds=end,
+                    text=_join_words([text for _, _, text in line]),
+                )
+            )
+            line = []
+    return lines
+
+
+def _join_words(words: list[str]) -> str:
+    joined = words[0]
+    for word in words[1:]:
+        joined += word if CJK.match(joined[-1]) or CJK.match(word[0]) else f" {word}"
+    return joined
+
+
+def _seconds(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value) if math.isfinite(value) and value >= 0 else None
 
 
 def audio_content_type(audio_path: Path) -> str:
