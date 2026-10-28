@@ -3,10 +3,10 @@ Evidence (re-verify on update):
   lines are cli/commands.py handlers; a line passes only the shared parts its workflow calls
   FFmpeg: ffmpeg_utils.py decode_keyframes, used by vision/candidates.py
   YouTube via yt-dlp: youtube/client.py (search, metadata, channel_videos, comments, audio and video downloads); responses archived by artifacts.py write_artifact
-  Captions: transcript.py fetch_transcript and youtube/caption.py; search/semantic.py and vision/workflow.py call it with allow_stt=False
+  Captions: transcript.py fetch_transcript and youtube/caption.py; search/semantic.py calls it with allow_stt=False
   Embeddings: embeddings/openai.py for semantic search, embeddings/gemini.py for vision when vision_embedding_key() is set
   Speech-to-text: transcript.py _stt_transcriber, stt/cloud.py and stt/local.py, only when captions are missing; vision reaches it through fetch_transcript when vision_embedding_key() is set
-  local stops: search/preprocessing.py filters and native sort, vision/candidates.py and vision/reranking.py frame picks, youtube/comments.py filter and interleave, cli/health.py checks
+  local stops: search/candidates.py filters and native sort, vision/candidates.py and vision/reranking.py frame picks, youtube/comments.py filter and interleave, cli/health.py checks
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="748" viewBox="0 0 1120 748" role="img" aria-labelledby="title desc">
   <title id="title">How the commands fit together</title>

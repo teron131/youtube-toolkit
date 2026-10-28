@@ -1,4 +1,7 @@
-"""App-specific settings, environment overrides, and defaults shared by retrieval clients, search, and readiness checks."""
+"""App settings: the per-user settings file and nonblank environment overrides, plus the embedding and speech-to-text model IDs and setting defaults.
+
+The vision command's limits also live here because the vision package needs its optional extra to import, while the CLI parser needs them on every run.
+"""
 
 from __future__ import annotations
 
@@ -12,13 +15,6 @@ from urllib.parse import urlparse
 from dotenv.parser import parse_stream
 from platformdirs import user_config_path
 
-DEFAULT_SEARCH_MIN_VIEWS = 10_000
-DEFAULT_SEARCH_MIN_DURATION = "3:00"
-DEFAULT_SEARCH_MAX_DURATION = "8:00:00"
-DEFAULT_YOUTUBE_SEARCH_LIMIT = 10
-DEFAULT_CHANNEL_SEARCH_LIMIT = 30
-DEFAULT_LAST_VIDEOS = 10
-MAX_CONCURRENT_METADATA_FETCHES = 8
 DEFAULT_VISION_MAX_FRAMES = 96
 MAX_VISION_FRAMES = 96
 DEFAULT_VISION_MIN_SIMILARITY = 0.3

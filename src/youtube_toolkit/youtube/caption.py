@@ -14,7 +14,12 @@ import urllib.request
 
 from ..execution import retry_transient
 from ..identity import ALLOWED_CAPTION_HOST_SUFFIXES, validate_url
-from ..schemas import TranscriptChunk, TranscriptDocument, VideoMetadata
+from ..schemas import (
+    TranscriptChunk,
+    TranscriptDocument,
+    TranscriptSource,
+    VideoMetadata,
+)
 
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 CAPTION_REQUEST_ATTEMPTS = 3
@@ -32,11 +37,10 @@ def fetch_caption_transcript(
     metadata_payload: dict,
     *,
     languages: Sequence[str],
-    source: str,
 ) -> TranscriptDocument:
     metadata = VideoMetadata.from_yt_dlp(metadata_payload)
     caption_url, language, caption_source = select_caption_track(
-        metadata_payload, languages, source
+        metadata_payload, languages
     )
     caption_payload = fetch_caption_payload(caption_url)
     chunks = extract_timed_chunks(caption_payload)
@@ -60,20 +64,17 @@ def fetch_caption_transcript(
 def select_caption_track(
     metadata: dict,
     languages: Sequence[str],
-    source: str,
-) -> tuple[str, str, str]:
+) -> tuple[str, str, TranscriptSource]:
     """Manual subtitles in any preferred language outrank automatic captions, which are taken only in the spoken language of the video.
 
     Preferred languages in the spoken language's family are tried first, so a Chinese video with English and Chinese subtitles yields Chinese.
     """
-    if source not in {"auto", "manual", "any"}:
-        raise ValueError("caption source must be auto, manual, or any")
-    manual = {} if source == "auto" else metadata.get("subtitles") or {}
-    automatic = {} if source == "manual" else metadata.get("automatic_captions") or {}
+    manual = metadata.get("subtitles") or {}
+    automatic = metadata.get("automatic_captions") or {}
     spoken = metadata.get("language")
     if not isinstance(spoken, str) or not spoken:
         spoken = None
-    candidates = [
+    candidates: list[tuple[TranscriptSource, str, list[dict]]] = [
         ("subtitles", key, manual[key])
         for language in _spoken_first(languages, spoken)
         for key in _language_keys(language, manual)

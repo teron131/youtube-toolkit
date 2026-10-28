@@ -55,10 +55,9 @@ def chart(heights=(20, 30, 40, 50)) -> np.ndarray:
     )
 
 
-@pytest.mark.parametrize("explicit_output", [True, False])
 @pytest.mark.parametrize("fallback", ["local_only", "no_key", "no_captions"])
 def test_local_selection_reports_its_reason_and_cleans_up(
-    monkeypatch, tmp_path, explicit_output, fallback
+    monkeypatch, tmp_path, fallback
 ) -> None:
     metadata_calls = []
     transcript_calls = []
@@ -76,7 +75,7 @@ def test_local_selection_reports_its_reason_and_cleans_up(
         def download_transcription_audio(self, _ref):
             pytest.fail("no speech-to-text route is configured here")
 
-    def transcript(metadata, *, languages, source):
+    def transcript(metadata, *, languages):
         transcript_calls.append(metadata)
         raise CaptionTranscriptUnavailable("No captions")
 
@@ -102,8 +101,7 @@ def test_local_selection_reports_its_reason_and_cleans_up(
         workflow, "GeminiEmbeddingClient", lambda _key: pytest.fail("no embedding call")
     )
     monkeypatch.chdir(tmp_path)
-    output_options = {"output_dir": tmp_path} if explicit_output else {}
-    result = workflow.sample_vision(VIDEO_ID, local_only=local_only, **output_options)
+    result = workflow.sample_vision(VIDEO_ID, local_only=local_only)
     assert metadata_calls == [VIDEO_ID]
     assert bool(transcript_calls) is (fallback == "no_captions")
     assert result["selection_mode"] == "visual"
@@ -127,17 +125,16 @@ def test_local_selection_reports_its_reason_and_cleans_up(
     assert Path(result["collage_paths"][0]).is_file()
     assert not list(Path(result["collage_paths"][0]).parent.glob("work-*"))
     assert result["media_dir"] is None
-    if not explicit_output:
-        first_collage = Path(result["collage_paths"][0])
-        first_contents = first_collage.read_bytes()
-        second = workflow.sample_vision(VIDEO_ID, local_only=local_only)
-        assert metadata_calls == [VIDEO_ID, VIDEO_ID]
-        second_collage = Path(second["collage_paths"][0])
-        assert first_collage.parent != second_collage.parent
-        assert VIDEO_ID in first_collage.parent.name
-        assert VIDEO_ID in second_collage.parent.name
-        assert first_collage.read_bytes() == first_contents
-        assert second_collage.is_file()
+    first_collage = Path(result["collage_paths"][0])
+    first_contents = first_collage.read_bytes()
+    second = workflow.sample_vision(VIDEO_ID, local_only=local_only)
+    assert metadata_calls == [VIDEO_ID, VIDEO_ID]
+    second_collage = Path(second["collage_paths"][0])
+    assert first_collage.parent != second_collage.parent
+    assert VIDEO_ID in first_collage.parent.name
+    assert VIDEO_ID in second_collage.parent.name
+    assert first_collage.read_bytes() == first_contents
+    assert second_collage.is_file()
 
 
 @pytest.mark.parametrize("limit", [0, 97, -1])
@@ -159,8 +156,9 @@ def test_sample_vision_rejects_long_video_before_download(
 
     monkeypatch.setattr(workflow, "YtDlpClient", FakeClient)
     monkeypatch.setattr(workflow.shutil, "which", lambda _: "ffmpeg")
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(ValueError, match="longer than 2 hours"):
-        workflow.sample_vision(VIDEO_ID, output_dir=tmp_path)
+        workflow.sample_vision(VIDEO_ID)
 
 
 def test_slot_selection_takes_candidates_nearest_slot_middles(
@@ -377,7 +375,19 @@ def semantic_video(monkeypatch, tmp_path):
         return [store_frame(directory, timestamp, chart()) for timestamp in [12, 112]]
 
     monkeypatch.setattr(workflow, "collect_candidates", candidates)
+    monkeypatch.chdir(tmp_path)
     return tmp_path
+
+
+def test_artifact_directory_errors_keep_vision_context(semantic_video) -> None:
+    archive = semantic_video / ".cache" / "youtube-toolkit"
+    archive.mkdir(parents=True)
+    (archive / "vision").write_text("not a directory", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="Vision artifact filesystem error") as error:
+        workflow.sample_vision(VIDEO_ID, local_only=True)
+
+    assert isinstance(error.value.__cause__, FileExistsError)
 
 
 @pytest.mark.parametrize("empty", [False, True])
@@ -404,7 +414,7 @@ def test_semantic_selection_searches_beyond_output_budget_and_does_not_fill(
             )
 
     monkeypatch.setattr(workflow, "GeminiEmbeddingClient", Embedder)
-    result = workflow.sample_vision(VIDEO_ID, output_dir=semantic_video, max_frames=1)
+    result = workflow.sample_vision(VIDEO_ID, max_frames=1)
     assert result["selection_mode"] == "semantic"
     assert result["candidate_count"] == 2
     assert result["timestamps_seconds"] == ([] if empty else [112])
@@ -417,15 +427,12 @@ def test_semantic_selection_searches_beyond_output_budget_and_does_not_fill(
     if not empty:
         assert result["frames"][0]["relevance"]["selection_rank"] == 1
         assert result["frames"][0]["relevance"]["matches"][0]["cosine"] == 1
-    assert not list(semantic_video.glob("work-*"))
+    assert not list(semantic_video.glob(".cache/youtube-toolkit/vision/*/work-*"))
 
 
-def test_embedding_failure_stops_before_download_and_preserves_prior_collage(
+def test_embedding_failure_stops_before_download_and_writes_no_artifacts(
     monkeypatch, semantic_video
 ) -> None:
-    prior = semantic_video / f"{VIDEO_ID}_vision_page1.jpg"
-    prior.write_bytes(b"prior")
-
     class Embedder:
         def __init__(self, _key):
             pass
@@ -440,9 +447,8 @@ def test_embedding_failure_stops_before_download_and_preserves_prior_collage(
         lambda *_args, **_kwargs: pytest.fail("download must wait for text embeddings"),
     )
     with pytest.raises(EmbeddingError, match="503"):
-        workflow.sample_vision(VIDEO_ID, output_dir=semantic_video)
-    assert prior.read_bytes() == b"prior"
-    assert not list(semantic_video.glob("work-*"))
+        workflow.sample_vision(VIDEO_ID)
+    assert not (semantic_video / ".cache/youtube-toolkit/vision").exists()
 
 
 def test_explicit_local_only_skips_configured_embedding_client(
@@ -456,9 +462,7 @@ def test_explicit_local_only_skips_configured_embedding_client(
         "fetch_transcript",
         lambda *_args, **_kwargs: pytest.fail("no captions"),
     )
-    result = workflow.sample_vision(
-        VIDEO_ID, output_dir=semantic_video, local_only=True
-    )
+    result = workflow.sample_vision(VIDEO_ID, local_only=True)
     assert result["selection_mode"] == "visual"
     assert result["candidate_count"] == 2
     assert result["embedding_usage"] is None
@@ -474,7 +478,7 @@ def test_missing_captions_fall_back_to_speech_to_text_for_ranking(
         audio.write_bytes(b"audio")
         return audio
 
-    def no_captions(_metadata, *, languages, source):
+    def no_captions(_metadata, *, languages):
         raise CaptionTranscriptUnavailable("No captions")
 
     segments = [
@@ -494,7 +498,6 @@ def test_missing_captions_fall_back_to_speech_to_text_for_ranking(
                 EmbeddingUsage(0, 0, 0),
             )
 
-    monkeypatch.chdir(semantic_video)
     monkeypatch.setattr(workflow, "fetch_transcript", fetch_transcript)
     monkeypatch.setattr(
         workflow.YtDlpClient,
@@ -515,7 +518,7 @@ def test_missing_captions_fall_back_to_speech_to_text_for_ranking(
     )
     monkeypatch.setattr(workflow, "GeminiEmbeddingClient", Embedder)
 
-    result = workflow.sample_vision(VIDEO_ID, output_dir=semantic_video)
+    result = workflow.sample_vision(VIDEO_ID)
 
     assert not audio.exists()
     if timed:
@@ -544,10 +547,8 @@ def test_auto_clean_off_leaves_video_and_candidates_beside_collages(
             )
 
     monkeypatch.setattr(workflow, "GeminiEmbeddingClient", Embedder)
-    result = workflow.sample_vision(
-        VIDEO_ID, output_dir=semantic_video, auto_clean=False
-    )
+    result = workflow.sample_vision(VIDEO_ID, auto_clean=False)
     media = Path(result["media_dir"])
-    assert media.parent == semantic_video.resolve()
+    assert media.parent == Path(result["collage_paths"][0]).parent
     assert (media / f"{VIDEO_ID}.mp4").read_bytes() == b"video"
     assert len(list((media / "candidates").glob("*.jpg"))) == 2

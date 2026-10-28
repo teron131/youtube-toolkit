@@ -9,16 +9,9 @@ from typing import Any
 from ..embeddings.openai import EmbeddingClient
 from ..execution import collect_concurrently
 from ..schemas import TranscriptDocument
-from ..transcript import TranscriptOptions, fetch_transcript
-from .preprocessing import (
-    ChunkResult,
-    VideoResult,
-    candidate_id,
-    normalized_upload_date,
-    video_fields,
-    video_result,
-)
-from .request import ResolvedRequest, SearchRequest
+from ..transcript import fetch_transcript
+from .candidates import ChunkResult, VideoResult, video_fields, video_result
+from .request import ResolvedRequest
 
 MAX_CONCURRENT_TRANSCRIPT_FETCHES = 16
 TRANSCRIPT_CHUNK_CHARS = 1200
@@ -49,13 +42,6 @@ def search_transcripts(
 ) -> list[VideoResult] | list[ChunkResult]:
     """Title, transcript, and chunk-embedding failures become per-result warnings; the search fails only when a query cannot be embedded or no transcript chunk could be."""
     request = resolved.request
-    candidates = [
-        {
-            **candidate,
-            "upload_date": normalized_upload_date(candidate.get("upload_date")),
-        }
-        for candidate in candidates
-    ]
     if not candidates:
         raise unprepared_embeddings_error([])
     with EmbeddingClient() as embedder:
@@ -63,7 +49,7 @@ def search_transcripts(
             embedder.embed(query) for query in dict.fromkeys(request.queries)
         ]
         candidates, title_failures = shortlist_by_title(
-            request, candidates, query_embeddings, embedder=embedder
+            candidates, query_embeddings, limit=resolved.limit, embedder=embedder
         )
         documents, transcript_failures = fetch_semantic_transcripts(candidates)
         chunks = prepare_transcript_chunks(candidates, documents)
@@ -86,32 +72,32 @@ def search_transcripts(
     if resolved.return_type == "chunk":
         return [
             chunk_result(chunk, warnings=warnings_for(chunk.prepared.video_id))
-            for chunk in scored[: request.limit]
+            for chunk in scored[: resolved.limit]
         ]
 
     video_scores: dict[str, float] = {}
     for chunk in scored:
         video_scores.setdefault(chunk.prepared.video_id, chunk.similarity)
     ranked_candidates = sorted(
-        (
-            {**candidate, "score": video_scores[video_id]}
-            for candidate in candidates
-            if (video_id := candidate_id(candidate)) in video_scores
-        ),
-        key=lambda candidate: candidate["score"],
+        (candidate for candidate in candidates if candidate["id"] in video_scores),
+        key=lambda candidate: video_scores[candidate["id"]],
         reverse=True,
     )
     return [
-        video_result(candidate, warnings=warnings_for(str(candidate_id(candidate))))
-        for candidate in ranked_candidates[: request.limit]
+        video_result(
+            candidate,
+            score=video_scores[candidate["id"]],
+            warnings=warnings_for(candidate["id"]),
+        )
+        for candidate in ranked_candidates[: resolved.limit]
     ]
 
 
 def shortlist_by_title(
-    request: SearchRequest,
     candidates: list[dict[str, Any]],
     query_embeddings: list[list[float]],
     *,
+    limit: int,
     embedder: EmbeddingClient,
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
     """Score titles before fetching transcripts to bound transcript and chunk-embedding work.
@@ -119,11 +105,9 @@ def shortlist_by_title(
     Candidates below the title threshold are dropped unless none pass; untitled or unembedded candidates are dropped only when some title scored.
     """
     titles = {
-        video_id: title.strip()
+        candidate["id"]: title.strip()
         for candidate in candidates
-        if (video_id := candidate_id(candidate)) is not None
-        and isinstance((title := candidate.get("title")), str)
-        and title.strip()
+        if isinstance((title := candidate.get("title")), str) and title.strip()
     }
     vectors, text_failures = embedder.embed(list(titles.values()))
     failures = {
@@ -137,8 +121,7 @@ def shortlist_by_title(
         (
             (best_similarity(query_embeddings, vectors[title]), candidate)
             for candidate in candidates
-            if (video_id := candidate_id(candidate)) in titles
-            and (title := titles[video_id]) in vectors
+            if (title := titles.get(candidate["id"])) is not None and title in vectors
         ),
         key=lambda item: item[0],
         reverse=True,
@@ -146,32 +129,29 @@ def shortlist_by_title(
     relevant = [
         candidate for score, candidate in scored if score >= TITLE_MIN_SIMILARITY
     ]
-    limit = min(
+    shortlist_size = min(
         len(candidates),
         TITLE_PREFILTER_MAX,
-        max(request.limit * TITLE_PREFILTER_FACTOR, TITLE_PREFILTER_MIN),
+        max(limit * TITLE_PREFILTER_FACTOR, TITLE_PREFILTER_MIN),
     )
-    return (relevant or [candidate for _score, candidate in scored])[:limit], failures
+    shortlist = relevant or [candidate for _score, candidate in scored]
+    return shortlist[:shortlist_size], failures
 
 
 def fetch_semantic_transcripts(
     candidates: list[dict[str, Any]],
 ) -> tuple[dict[str, TranscriptDocument], dict[str, str]]:
     """Speech-to-text is never used here: a search should stay as cheap to repeat as a YouTube search, and transcribing every uncaptioned candidate would not be."""
-    jobs = {
-        video_id: (video_id, candidate.get("metadata"))
-        for candidate in candidates
-        if (video_id := candidate_id(candidate)) is not None
-    }
 
-    def fetch(job: tuple[str, dict[str, Any] | None]) -> TranscriptDocument:
-        video_id, metadata = job
+    def fetch(candidate: dict[str, Any]) -> TranscriptDocument:
         return fetch_transcript(
-            video_id, options=TranscriptOptions(allow_stt=False), metadata=metadata
+            candidate["id"], allow_stt=False, metadata=candidate.get("metadata")
         )
 
     documents, failures = collect_concurrently(
-        jobs, fetch, max_workers=MAX_CONCURRENT_TRANSCRIPT_FETCHES
+        {candidate["id"]: candidate for candidate in candidates},
+        fetch,
+        max_workers=MAX_CONCURRENT_TRANSCRIPT_FETCHES,
     )
     return documents, {video_id: str(error) for video_id, error in failures.items()}
 
@@ -182,19 +162,17 @@ def prepare_transcript_chunks(
 ) -> list[PreparedChunk]:
     prepared: list[PreparedChunk] = []
     for candidate in candidates:
-        video_id = candidate_id(candidate)
-        if video_id is None or video_id not in documents:
+        document = documents.get(candidate["id"])
+        if document is None:
             continue
         prepared.extend(
             PreparedChunk(
-                video_id=video_id,
+                video_id=candidate["id"],
                 chunk_index=chunk_index,
                 text=text,
                 candidate=candidate,
             )
-            for chunk_index, text in enumerate(
-                split_transcript_chunks(documents[video_id].text)
-            )
+            for chunk_index, text in enumerate(split_transcript_chunks(document.text))
         )
     return prepared
 

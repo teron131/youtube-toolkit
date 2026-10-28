@@ -8,21 +8,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..config import MAX_CONCURRENT_METADATA_FETCHES
 from ..execution import collect_concurrently
-from ..youtube import YtDlpClient
-from .discovery import channel_listings, youtube_candidates
-from .preprocessing import (
+from ..schemas import normalize_upload_date
+from ..youtube import MAX_CONCURRENT_METADATA_FETCHES, YtDlpClient
+from .candidates import (
     ChunkResult,
     VideoResult,
-    candidate_id,
     dedupe_candidates,
     filter_candidates,
-    normalized_upload_date,
     popularity,
     rank_by_value,
     video_result,
 )
+from .discovery import channel_listings, youtube_candidates
 from .request import ResolvedRequest, SearchRequest, resolve_request
 
 YOUTUBE_OVERSAMPLE_FACTOR = 3
@@ -42,7 +40,7 @@ def search_videos(request: SearchRequest) -> list[VideoResult] | list[ChunkResul
     if resolved.sort == "recency":
         candidates = rank_by_value(
             candidates,
-            value=lambda candidate: candidate.get("upload_date"),
+            value=lambda candidate: candidate["upload_date"],
         )
     elif resolved.sort == "popularity":
         candidates = rank_by_value(
@@ -50,7 +48,7 @@ def search_videos(request: SearchRequest) -> list[VideoResult] | list[ChunkResul
             value=popularity,
         )
 
-    return [video_result(candidate) for candidate in candidates[: request.limit]]
+    return [video_result(candidate) for candidate in candidates[: resolved.limit]]
 
 
 def collect_candidates(resolved: ResolvedRequest) -> list[dict[str, Any]]:
@@ -58,19 +56,19 @@ def collect_candidates(resolved: ResolvedRequest) -> list[dict[str, Any]]:
     request = resolved.request
     fields = required_fields(resolved)
     date_filtered = resolved.upload_cutoff is not None
-    date_fetch_limit = request.limit * DATE_FILTER_OVERSAMPLE_FACTOR
+    date_fetch_limit = resolved.limit * DATE_FILTER_OVERSAMPLE_FACTOR
     if not request.channels:
         entries = youtube_candidates(
             resolved,
             fetch_limit=date_fetch_limit
             if date_filtered
-            else request.limit * YOUTUBE_OVERSAMPLE_FACTOR,
+            else resolved.limit * YOUTUBE_OVERSAMPLE_FACTOR,
         )
         return hydrate_candidates(entries, resolved, fields=fields)
     candidates: list[dict[str, Any]] = []
     for listing in channel_listings(
         request,
-        limit=date_fetch_limit if date_filtered else request.limit,
+        limit=date_fetch_limit if date_filtered else resolved.limit,
     ):
         candidates.extend(
             hydrate_candidates(listing, resolved, fields=fields, newest_first=True)
@@ -117,10 +115,9 @@ def hydrate_candidates(
     for start in range(0, len(survivors), max(batch_size, 1)):
         batch = survivors[start : start + batch_size]
         missing = {
-            video_id: video_id
+            candidate["id"]: candidate["id"]
             for candidate in batch
             if any(candidate.get(field) is None for field in fields)
-            and (video_id := candidate_id(candidate)) is not None
         }
         metadata_by_id, _failures = collect_concurrently(
             missing,
@@ -128,24 +125,22 @@ def hydrate_candidates(
             max_workers=MAX_CONCURRENT_METADATA_FETCHES,
         )
         for candidate in batch:
-            video_id = candidate_id(candidate)
-            metadata = metadata_by_id.get(video_id) if video_id is not None else None
+            metadata = metadata_by_id.get(candidate["id"])
             hydrated.append(
                 candidate
-                if video_id is None or metadata is None
+                if metadata is None
                 else {
                     **candidate,
                     **metadata,
-                    "id": video_id,
-                    "upload_date": normalized_upload_date(metadata.get("upload_date")),
-                    "source": candidate.get("source"),
+                    "id": candidate["id"],
+                    "upload_date": normalize_upload_date(metadata.get("upload_date")),
+                    "source": candidate["source"],
                     "metadata": metadata,
                 }
             )
         if stop_before is not None and any(
-            (upload_date := normalized_upload_date(candidate.get("upload_date")))
-            is not None
-            and upload_date < stop_before
+            candidate["upload_date"] is not None
+            and candidate["upload_date"] < stop_before
             for candidate in hydrated[start:]
         ):
             break

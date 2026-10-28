@@ -15,8 +15,7 @@ from youtube_toolkit.schemas import (
     VideoMetadata,
 )
 from youtube_toolkit.transcript import (
-    DEFAULT_TRANSCRIPT_LANGUAGES,
-    TranscriptOptions,
+    SUBTITLE_LANGUAGES,
     fetch_transcript,
 )
 from youtube_toolkit.youtube.caption import (
@@ -185,11 +184,7 @@ def test_caption_text_is_converted_to_taiwan_traditional(
     )
     monkeypatch.chdir(tmp_path)
 
-    document = fetch_transcript(
-        "JpSHyEIZ_bo",
-        options=TranscriptOptions(languages=(language,)),
-        client=FakeClient(),
-    )
+    document = fetch_transcript("JpSHyEIZ_bo", client=FakeClient())
 
     assert document.language == language
     assert document.text == expected
@@ -275,7 +270,7 @@ def test_any_caption_source_falls_back_to_manual_subtitles() -> None:
         },
     }
 
-    assert select_caption_track(metadata, ["en"], "any") == (
+    assert select_caption_track(metadata, ["en"]) == (
         "https://www.youtube.com/api/timedtext?v=example",
         "en",
         "subtitles",
@@ -296,7 +291,7 @@ def test_language_without_json3_track_counts_as_unavailable() -> None:
     }
 
     with pytest.raises(CaptionTranscriptUnavailable):
-        select_caption_track(metadata, ["en"], "any")
+        select_caption_track(metadata, ["en"])
 
 
 def test_default_languages_include_chinese_caption_fallbacks() -> None:
@@ -312,9 +307,7 @@ def test_default_languages_include_chinese_caption_fallbacks() -> None:
         },
     }
 
-    assert select_caption_track(
-        metadata, list(DEFAULT_TRANSCRIPT_LANGUAGES), "any"
-    ) == (
+    assert select_caption_track(metadata, list(SUBTITLE_LANGUAGES)) == (
         "https://www.youtube.com/api/timedtext?v=example&lang=zh-Hant",
         "zh-Hant",
         "subtitles",
@@ -340,9 +333,7 @@ def test_default_languages_prefer_hong_kong_and_cantonese_before_simplified() ->
         },
     }
 
-    assert select_caption_track(
-        metadata, list(DEFAULT_TRANSCRIPT_LANGUAGES), "any"
-    ) == (
+    assert select_caption_track(metadata, list(SUBTITLE_LANGUAGES)) == (
         "https://www.youtube.com/api/timedtext?v=example&lang=yue-HK",
         "yue-HK",
         "subtitles",
@@ -369,9 +360,7 @@ def test_default_languages_prefer_manual_english_before_automatic_chinese() -> N
         },
     }
 
-    assert select_caption_track(
-        metadata, list(DEFAULT_TRANSCRIPT_LANGUAGES), "any"
-    ) == (
+    assert select_caption_track(metadata, list(SUBTITLE_LANGUAGES)) == (
         "https://www.youtube.com/api/timedtext?v=example&lang=en",
         "en",
         "subtitles",
@@ -404,7 +393,7 @@ def test_default_languages_prefer_original_captions_over_machine_translations(
         },
         "subtitles": {},
     }
-    assert select_caption_track(metadata, DEFAULT_TRANSCRIPT_LANGUAGES, "any") == (
+    assert select_caption_track(metadata, SUBTITLE_LANGUAGES) == (
         caption_track(expected_lang)["url"],
         expected_key,
         "automatic_captions",
@@ -432,7 +421,7 @@ def test_manual_subtitles_follow_spoken_language_before_automatic_captions(
         "subtitles": {key: [caption_track(key)] for key in manual},
     }
 
-    assert select_caption_track(metadata, DEFAULT_TRANSCRIPT_LANGUAGES, "any") == (
+    assert select_caption_track(metadata, SUBTITLE_LANGUAGES) == (
         caption_track(expected[0].removesuffix("-orig"))["url"],
         *expected,
     )
@@ -471,15 +460,8 @@ def test_metadata_drops_machine_translated_captions(monkeypatch, tmp_path) -> No
     assert archived["payload"]["automatic_captions"] == originals
 
 
-@pytest.mark.parametrize(
-    "options",
-    [
-        TranscriptOptions(languages=("zh",)),
-        TranscriptOptions(source="manual"),
-    ],
-)
-def test_transcript_archives_preserve_timing_and_retrieval_options(
-    monkeypatch, tmp_path, options
+def test_transcript_archives_preserve_timing_and_retrieval_policy(
+    monkeypatch, tmp_path
 ) -> None:
     from youtube_toolkit.schemas import TranscriptDocument, VideoChapter, VideoMetadata
 
@@ -497,7 +479,7 @@ def test_transcript_archives_preserve_timing_and_retrieval_options(
             ],
         ),
         language="en",
-        source="manual",
+        source="subtitles",
         chunks=[
             TranscriptChunk(start_seconds=1.5, end_seconds=4.0, text="An example.")
         ],
@@ -516,7 +498,7 @@ def test_transcript_archives_preserve_timing_and_retrieval_options(
     assert fetch_transcript("JpSHyEIZ_bo") == expected
     assert fetch_transcript("https://youtu.be/JpSHyEIZ_bo") == expected
     assert len(calls) == 2
-    assert fetch_transcript("JpSHyEIZ_bo", options=options) == expected
+    assert fetch_transcript("JpSHyEIZ_bo", allow_stt=False) == expected
     assert len(calls) == 3
     import json
 
@@ -525,11 +507,11 @@ def test_transcript_archives_preserve_timing_and_retrieval_options(
     assert all("JpSHyEIZ_bo" in path.name for path in paths)
     entries = [json.loads(path.read_text(encoding="utf-8")) for path in paths]
     assert all(entry["payload"] == asdict(expected) for entry in entries)
-    assert any(
-        entry["request"]["languages"] == list(options.languages)
-        and entry["request"]["source"] == options.source
-        for entry in entries
-    )
+    assert {
+        "video_id": "JpSHyEIZ_bo",
+        "languages": list(SUBTITLE_LANGUAGES),
+        "allow_stt": False,
+    } in [entry["request"] for entry in entries]
     previous = {path: path.read_bytes() for path in paths}
     old_artifact = paths[0].parent / "old-copy.json"
     old_artifact.write_text("broken JSON", encoding="utf-8")
@@ -564,8 +546,8 @@ def test_caption_only_policy_never_uses_stt(
             video_id,
             {
                 "video_id": video_id,
-                "languages": list(DEFAULT_TRANSCRIPT_LANGUAGES),
-                "source": "any",
+                "languages": list(SUBTITLE_LANGUAGES),
+                "allow_stt": True,
             },
             asdict(document),
         )
@@ -578,9 +560,7 @@ def test_caption_only_policy_never_uses_stt(
             pytest.fail("caption-only policy must not download STT audio")
 
     with pytest.raises(CaptionTranscriptUnavailable):
-        fetch_transcript(
-            video_id, options=TranscriptOptions(allow_stt=False), client=FakeClient()
-        )
+        fetch_transcript(video_id, allow_stt=False, client=FakeClient())
 
 
 def test_stt_without_any_route_keeps_caption_failure_without_audio_work(

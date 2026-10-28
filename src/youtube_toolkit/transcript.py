@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, replace
 from pathlib import Path
 import re
 from typing import Any, Protocol, TypedDict
@@ -16,6 +16,7 @@ from .schemas import (
     SpeechTranscription,
     TranscriptChunk,
     TranscriptDocument,
+    TranscriptSource,
     VideoMetadata,
     normalize_text,
 )
@@ -31,7 +32,8 @@ from .youtube import (
     fetch_caption_transcript,
 )
 
-DEFAULT_TRANSCRIPT_LANGUAGES = (
+# Ranks manual subtitles only; automatic captions are taken in the video's spoken language, whatever it is.
+SUBTITLE_LANGUAGES = (
     "en",
     "zh-Hant",
     "zh-HK",
@@ -54,24 +56,14 @@ TRANSCRIPT_LANGUAGE_LABELS = {
     "zh-CN": "Chinese (Simplified)",
     "zh": "Chinese",
 }
-TRANSCRIPT_SOURCE_LABELS = {
-    "automatic_captions": "automatic captions",
+TRANSCRIPT_SOURCE_LABELS: dict[TranscriptSource, str] = {
     "subtitles": "manual captions",
-    "auto": "automatic captions",
-    "manual": "manual captions",
+    "automatic_captions": "automatic captions",
+    "speech-to-text": "speech-to-text",
 }
 UNSAFE_FILENAME_CHARACTERS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 FILENAME_WHITESPACE = re.compile(r"\s+")
 REPEATED_UNDERSCORES = re.compile(r"_+")
-
-
-@dataclass(frozen=True, slots=True)
-class TranscriptOptions:
-    """Languages rank manual subtitles; automatic captions are used only in the spoken language of the video, never as machine translations."""
-
-    languages: tuple[str, ...] = DEFAULT_TRANSCRIPT_LANGUAGES
-    source: str = "any"
-    allow_stt: bool = True
 
 
 class TranscriptClient(Protocol):
@@ -90,7 +82,7 @@ class TranscriptExportResult(TypedDict):
 def fetch_transcript(
     video_ref: VideoRef,
     *,
-    options: TranscriptOptions | None = None,
+    allow_stt: bool = True,
     client: TranscriptClient | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> TranscriptDocument:
@@ -98,7 +90,6 @@ def fetch_transcript(
 
     Supplied metadata must be a response the current operation fetched for this video; otherwise metadata is fetched fresh.
     """
-    options = options or TranscriptOptions()
     video_id = require_video_id(video_ref)
     if metadata is not None and metadata.get("id") != video_id:
         raise ValueError("Supplied metadata does not match requested video")
@@ -106,13 +97,9 @@ def fetch_transcript(
     if metadata is None:
         metadata = client.metadata(video_ref)
     try:
-        document = fetch_caption_transcript(
-            metadata, languages=options.languages, source=options.source
-        )
+        document = fetch_caption_transcript(metadata, languages=SUBTITLE_LANGUAGES)
     except CaptionTranscriptUnavailable:
-        if not options.allow_stt:
-            raise
-        transcribe = _stt_transcriber()
+        transcribe = _stt_transcriber() if allow_stt else None
         if transcribe is None:
             raise
         document = _fetch_stt_transcript(metadata, client=client, transcribe=transcribe)
@@ -124,9 +111,8 @@ def fetch_transcript(
     )
     request = {
         "video_id": video_id,
-        "languages": list(options.languages),
-        "source": options.source,
-        "allow_stt": options.allow_stt,
+        "languages": list(SUBTITLE_LANGUAGES),
+        "allow_stt": allow_stt,
     }
     write_artifact("transcripts", video_id, request, asdict(document))
     return document
@@ -226,14 +212,10 @@ def _render_export(
     if metadata.like_count is not None:
         lines.append(f"Likes: {metadata.like_count:,}")
     lines.append(f"URL: {metadata.url}")
-    language = TRANSCRIPT_LANGUAGE_LABELS.get(document.language, document.language)
-    if language == "speech-to-text":
-        language = None
-    if language:
+    if document.language != "speech-to-text":
+        language = TRANSCRIPT_LANGUAGE_LABELS.get(document.language, document.language)
         lines.append(f"Language: {language}")
-    source = TRANSCRIPT_SOURCE_LABELS.get(document.source, document.source)
-    if source:
-        lines.append(f"Transcript source: {source}")
+    lines.append(f"Transcript source: {TRANSCRIPT_SOURCE_LABELS[document.source]}")
 
     transcript = document.text
     if timestamps:

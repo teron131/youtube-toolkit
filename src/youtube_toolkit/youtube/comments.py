@@ -11,6 +11,8 @@ from ..identity import VideoRef, normalize_youtube_url, require_video_id
 from .client import YtDlpClient
 
 DEFAULT_COMMENT_LIMIT = 100
+# Keep comment pagination bounded even when a caller overrides the normal sample size.
+MAX_COMMENT_LIMIT = 1000
 
 
 def search_comments(
@@ -21,6 +23,8 @@ def search_comments(
     The limit applies before filtering; sparse matches never trigger additional retrievals.
     The archive retains the unfiltered sample in Top order using the same lean fields as the output.
     """
+    if not 1 <= limit <= MAX_COMMENT_LIMIT:
+        raise ValueError(f"--limit must be between 1 and {MAX_COMMENT_LIMIT}")
     payload = YtDlpClient().comments(video_ref, limit=limit)
     comments = payload.get("comments") or []
     document = {

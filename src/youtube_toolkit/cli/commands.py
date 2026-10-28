@@ -6,7 +6,6 @@ import argparse
 from dataclasses import asdict
 from typing import Any
 
-from ..config import DEFAULT_CHANNEL_SEARCH_LIMIT, DEFAULT_YOUTUBE_SEARCH_LIMIT
 from ..schemas import VideoMetadata
 from ..search import (
     ChannelTarget,
@@ -87,13 +86,6 @@ def stt_setup(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def search(args: argparse.Namespace) -> list[VideoResult] | list[ChunkResult]:
-    limit = args.limit
-    if limit is None:
-        limit = (
-            DEFAULT_CHANNEL_SEARCH_LIMIT
-            if args.channels
-            else DEFAULT_YOUTUBE_SEARCH_LIMIT
-        )
     return search_videos(
         SearchRequest(
             queries=tuple(query for query in args.queries if query),
@@ -102,7 +94,7 @@ def search(args: argparse.Namespace) -> list[VideoResult] | list[ChunkResult]:
             channels=tuple(
                 ChannelTarget.from_ref(channel) for channel in args.channels
             ),
-            limit=limit,
+            limit=args.limit,
             sort=args.sort,
             min_views=args.min_views,
             min_duration=args.min_duration,

@@ -289,7 +289,7 @@ def test_video_transcript_command_selects_plain_or_timestamped_output(
             url="https://www.youtube.com/watch?v=JpSHyEIZ_bo",
         ),
         language="en",
-        source="manual",
+        source="subtitles",
         chunks=[
             TranscriptChunk(start_seconds=0.0, end_seconds=2.5, text="First sentence."),
             TranscriptChunk(
@@ -563,7 +563,6 @@ def test_search_command_builds_default_youtube_request(monkeypatch) -> None:
             queries=("agents", "agent skills", "tool use"),
             mode="native",
             return_type=None,
-            limit=commands.DEFAULT_YOUTUBE_SEARCH_LIMIT,
             sort="relevance",
             min_views=5000,
             min_duration="3:00",
@@ -614,7 +613,6 @@ def test_search_command_builds_channel_request(monkeypatch) -> None:
                 ChannelTarget(channel_handle="@OpenAI"),
                 ChannelTarget(youtube_channel_id="UC1234567890123456789012"),
             ),
-            limit=commands.DEFAULT_CHANNEL_SEARCH_LIMIT,
             sort="popularity",
             min_views=5000,
             min_duration="3:00",
@@ -626,12 +624,12 @@ def test_search_command_builds_channel_request(monkeypatch) -> None:
 def test_emit_json_truncates_long_text_fields(capsys, monkeypatch) -> None:
     monkeypatch.setattr(output, "MAX_STDOUT_TEXT_FIELD_CHARS", 20)
 
-    output.emit_json({"title": "y" * 100, "transcript": "x" * 100})
+    output.emit_json({"title": "y" * 100, "description": "x" * 100})
 
     payload = json.loads(capsys.readouterr().out)
     assert payload == {
         "title": "y" * 100,
-        "transcript": "x" * 20,
+        "description": "x" * 20,
     }
 
     output.emit_json("z" * 100)
@@ -657,15 +655,13 @@ def test_doctor_reports_local_artifacts_without_creating_them(
     monkeypatch.delenv("EMBEDDING_API_KEY", raising=False)
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     monkeypatch.setattr(health, "local_stt_installed", lambda: False)
-    payload = health.run_doctor(argparse.Namespace())
-    assert payload["artifacts"] == str(tmp_path / ".cache" / "youtube-toolkit")
-    assert payload["embedding"]["status"] == "missing"
-    assert not (tmp_path / ".cache").exists()
     assert main(["doctor"]) == 0
     report = capsys.readouterr().out
-    assert str(tmp_path / ".cache" / "youtube-toolkit") in report
+    assert f"  artifacts  {tmp_path / '.cache' / 'youtube-toolkit'}\n" in report
+    assert "  embedding  Set EMBEDDING_API_KEY" in report
     assert "Set XAI_API_KEY" in report
     assert "database" not in report
+    assert not (tmp_path / ".cache").exists()
 
 
 def test_stt_setup_reports_both_routes_and_bills_only_when_asked(monkeypatch) -> None:
@@ -771,7 +767,7 @@ def test_setup_saves_keys_without_echoing_or_exporting_them(
     assert "secret-embedding-key" not in captured.out + captured.err
     assert "secret-gemini-key" not in captured.out + captured.err
     assert dict(os.environ) == before
-    assert health.embedding_api_health()["status"] == "configured"
+    assert health.embedding_health() == "Configured (example-model)"
     assert "Configured (Gemini API)" in health.stt_health()
 
 

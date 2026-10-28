@@ -1,16 +1,12 @@
-"""JSON output policy and human-readable command renderers."""
+"""Stdout JSON policy for command results."""
 
 from __future__ import annotations
 
 import json
 import sys
 
-from .health import DoctorReport
-
 MAX_STDOUT_TEXT_FIELD_CHARS = 400_000
-LONG_STDOUT_TEXT_FIELDS = frozenset(
-    {"description", "overview", "summary", "text", "transcript"}
-)
+LONG_STDOUT_TEXT_FIELDS = frozenset({"description", "text"})
 
 
 def emit_json(payload: object) -> None:
@@ -20,21 +16,6 @@ def emit_json(payload: object) -> None:
         stdout_payload(payload, key=root_key), sys.stdout, indent=2, ensure_ascii=False
     )
     print()
-
-
-def render_doctor(report: DoctorReport) -> str:
-    return "\n".join(
-        [
-            "YouTube Toolkit",
-            f"  yt-dlp     {report['yt_dlp_version']}",
-            f"  config     {report['config']}",
-            f"  artifacts  {report['artifacts']}",
-            f"  vision     {'available' if report['vision'] else 'not installed'}",
-            f"  ffmpeg     {'available' if report['ffmpeg'] else 'not installed'}",
-            f"  embedding  {report['embedding']['detail']}",
-            f"  stt        {report['stt']}",
-        ]
-    )
 
 
 def stdout_payload(payload: object, *, key: str | None = None) -> object:

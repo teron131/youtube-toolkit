@@ -10,12 +10,13 @@ import pytest
 from youtube_toolkit.config import EmbeddingConfig
 from youtube_toolkit.embeddings.openai import EmbeddingClient
 from youtube_toolkit.schemas import TranscriptChunk, TranscriptDocument, VideoMetadata
+from youtube_toolkit.search.candidates import VideoResult
 import youtube_toolkit.search.discovery as search_discovery
-from youtube_toolkit.search.preprocessing import VideoResult
 from youtube_toolkit.search.request import (
     ChannelTarget,
     SearchRequest,
     parse_duration,
+    resolve_request,
 )
 import youtube_toolkit.search.semantic as search_semantic
 import youtube_toolkit.search.workflow as search_workflow
@@ -48,11 +49,10 @@ def search_transcript_side_effects(monkeypatch) -> dict[str, Any]:
     def fake_fetch_live_transcript(
         video_id: str,
         *,
-        options=None,
+        allow_stt: bool,
         metadata: dict | None = None,
     ) -> TranscriptDocument:
-        assert options is not None
-        assert not options.allow_stt
+        assert not allow_stt
         fetched_video_ids.append(video_id)
         supplied_metadata[video_id] = metadata
         return TranscriptDocument(
@@ -420,7 +420,7 @@ def test_channel_search_fetches_channel_listing(
             "title": "OpenAI agents",
             "channel_id": "UC1234567890123456789012",
             "channel_handle": "@OpenAI",
-            "upload_date": "20260706",
+            "upload_date": "2026-07-06",
             "duration": 600,
             "view_count": 25_000,
             "like_count": None,
@@ -1219,7 +1219,7 @@ def test_semantic_video_results_include_partial_transcript_warnings(
     def fake_fetch_transcript(
         video_id: str,
         *,
-        options=None,
+        allow_stt: bool,
         metadata: dict | None = None,
     ) -> TranscriptDocument:
         return fake_fetch_live_transcript(video_id)
@@ -1294,7 +1294,7 @@ def test_semantic_search_defaults_to_chunk_results(
     def fake_fetch_transcript(
         video_id: str,
         *,
-        options=None,
+        allow_stt: bool,
         metadata: dict | None = None,
     ) -> TranscriptDocument:
         return fake_fetch_live_transcript(video_id)
@@ -1357,7 +1357,7 @@ def test_live_semantic_search_fetches_transcripts_concurrently(
         }
 
     def fake_fetch_live_transcript(
-        video_id: str, *, options=None, metadata: dict | None = None
+        video_id: str, *, allow_stt: bool, metadata: dict | None = None
     ) -> TranscriptDocument:
         all_fetches_started.wait(timeout=1)
         return TranscriptDocument(
@@ -1405,6 +1405,15 @@ def test_chunk_results_require_semantic_mode() -> None:
                 return_type="chunk",
             )
         )
+
+
+@pytest.mark.parametrize(
+    ("channels", "limit"),
+    [((), 10), ((ChannelTarget.from_ref("@OpenAI"),), 30)],
+)
+def test_search_limit_defaults_higher_for_channel_searches(channels, limit) -> None:
+    request = SearchRequest(queries=("agents",), channels=channels)
+    assert resolve_request(request).limit == limit
 
 
 def test_search_query_is_optional_only_for_native_channel_search(monkeypatch) -> None:
@@ -1643,7 +1652,7 @@ def test_semantic_search_reports_when_no_transcripts_can_be_prepared(
     def fail_fetch_transcript(
         video_id: str,
         *,
-        options=None,
+        allow_stt: bool,
         metadata: dict | None = None,
     ) -> TranscriptDocument:
         raise RuntimeError("captions unavailable")
@@ -1761,7 +1770,7 @@ def test_search_result_keeps_raw_metadata_when_transcript_fetch_fails(
     def fail_fetch_transcript(
         video_id: str,
         *,
-        options=None,
+        allow_stt: bool,
         metadata: dict | None = None,
     ) -> TranscriptDocument:
         raise RuntimeError("captions unavailable")

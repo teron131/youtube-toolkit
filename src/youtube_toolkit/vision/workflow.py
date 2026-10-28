@@ -25,7 +25,7 @@ from ..transcript import fetch_transcript
 from ..youtube import YtDlpClient
 from ..youtube.caption import extract_sponsorblock_intervals
 from .candidates import collect_candidates, select_slot_frames
-from .collages import publish_collages, render_timestamped_collages
+from .collages import render_timestamped_collages
 from .reranking import FrameRanking, rerank_frames
 from .text import prepare_targets
 
@@ -37,7 +37,6 @@ SPONSOR_TITLE = re.compile(r"\b(?:sponsor(?:ed|ship)?|advertisement|ad break)\b"
 def sample_vision(
     video_ref: VideoRef,
     *,
-    output_dir: Path | None = None,
     max_frames: int = DEFAULT_VISION_MAX_FRAMES,
     min_similarity: float = DEFAULT_VISION_MIN_SIMILARITY,
     min_gap_seconds: float = DEFAULT_VISION_MIN_GAP_SECONDS,
@@ -48,7 +47,7 @@ def sample_vision(
 
     The transcript is fetched only when Gemini credentials exist, since local selection never reads it; without captions it comes from configured speech-to-text, which ranks frames only when the route reports timing.
     max_frames limits the output, never the candidate search; embedding API errors propagate.
-    Without output_dir, collages go to a new directory in the working directory's archive; an explicit output_dir has this video's earlier collages replaced.
+    Collages go to a new directory in the working directory's archive.
     """
     if not 1 <= max_frames <= MAX_VISION_FRAMES:
         raise ValueError(f"max_frames must be between 1 and {MAX_VISION_FRAMES}")
@@ -113,14 +112,9 @@ def sample_vision(
         embedder = GeminiEmbeddingClient(api_key)
         embedded_texts = embedder.embed([], [target.text for target in targets])
         usage = embedded_texts.usage
-    destination = output_dir
+    destination = None
     try:
-        destination = (
-            (output_dir or create_artifact_directory("vision", video_id))
-            .expanduser()
-            .resolve()
-        )
-        destination.mkdir(parents=True, exist_ok=True)
+        destination = create_artifact_directory("vision", video_id)
         with TemporaryDirectory(
             prefix="work-", dir=destination, delete=auto_clean
         ) as work_dir_name:
@@ -164,8 +158,9 @@ def sample_vision(
                     min_gap_seconds=min_gap_seconds,
                 )
             selected.sort(key=lambda frame: frame.timestamp_seconds)
-            staged_collages = render_timestamped_collages(selected, work_dir / "vision")
-            collage_paths = publish_collages(staged_collages, destination, video_id)
+            collage_paths = render_timestamped_collages(
+                selected, destination / f"{video_id}_vision"
+            )
     except OSError as error:
         raise RuntimeError(
             f"Vision artifact filesystem error under {destination}: {error}"
