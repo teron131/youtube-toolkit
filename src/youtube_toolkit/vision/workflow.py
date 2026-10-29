@@ -1,4 +1,4 @@
-"""Own video preflight, the choice between Gemini ranking and local time slots, temporary media lifecycle, and the vision result."""
+"""Own video preflight, the choice of ranking route (decision model, Gemini embeddings, local embeddings, or time slots), temporary media lifecycle, and the vision result."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import shutil
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import Any, Literal
 
 from ..artifacts import create_artifact_directory
 from ..config import (
@@ -16,6 +16,7 @@ from ..config import (
     DEFAULT_VISION_MAX_FRAMES,
     DEFAULT_VISION_MIN_GAP_SECONDS,
     MAX_VISION_FRAMES,
+    decision_config,
     local_embedding_cutoffs,
     vision_embedding_key,
 )
@@ -26,13 +27,14 @@ from ..embeddings import (
     local_embedding_installed,
 )
 from ..identity import VideoRef, require_video_id
-from ..schemas import VideoMetadata
+from ..schemas import TranscriptDocument, VideoMetadata
 from ..transcript import fetch_transcript
 from ..youtube import YtDlpClient
 from ..youtube.caption import extract_sponsorblock_intervals
-from .candidates import collect_candidates, select_slot_frames
+from .candidates import collect_candidates, select_ranked_frames, select_slot_frames
 from .collages import render_timestamped_collages
-from .reranking import FrameRanking, rerank_frames
+from .decisions import MIN_SCORE, DecisionUsage, score_frames
+from .reranking import rerank_frames
 from .text import prepare_targets
 
 MAX_VIDEO_DURATION_SECONDS = 2 * 60 * 60
@@ -49,12 +51,12 @@ def sample_vision(
     local_only: bool = False,
     auto_clean: bool = True,
 ) -> dict[str, Any]:
-    """With a timed transcript, Gemini ranks the video's keyframes when credentials exist, otherwise the local embedding model when its libraries are installed; without either, time slots spread a local selection across the same keyframes.
+    """With a timed transcript, the first available route ranks the video's keyframes: the decision model with DECISION_API_KEY, Gemini embeddings with a Gemini key, then the local embedding model when its libraries are installed; without any, time slots spread a local selection across the same keyframes.
 
-    local_only skips Gemini and speech-to-text, so the local model ranks against captions only.
+    local_only skips both APIs and speech-to-text, so the local model ranks against captions only.
     The transcript is fetched only when a model will rank, since time slots never read it; without captions it comes from configured speech-to-text, which ranks frames only when the route reports timing.
-    min_similarity None means the cutoff measured for the ranking model.
-    max_frames limits the output, never the candidate search; embedding errors propagate.
+    min_similarity applies to embedding routes, and None means the cutoff measured for the ranking model.
+    max_frames limits the output, never the candidate search; ranking errors propagate.
     Collages go to a new directory in the working directory's archive.
     """
     if not 1 <= max_frames <= MAX_VISION_FRAMES:
@@ -89,12 +91,23 @@ def sample_vision(
             f"Video is longer than {MAX_VIDEO_DURATION_SECONDS // 3600} hours"
         )
     excluded_intervals = _excluded_intervals(metadata, duration)
-    configured_key = None if local_only else vision_embedding_key()
-    use_local = configured_key is None and local_embedding_installed()
+    decision = None if local_only else decision_config()
+    gemini_key = None if local_only else vision_embedding_key()
+    route: Literal["decision", "gemini", "local"] | None
+    if decision:
+        route = "decision"
+    elif gemini_key:
+        route = "gemini"
+    elif local_embedding_installed():
+        route = "local"
+    else:
+        route = None
     transcript_warning = None
     embedding_warning = None
+    decision_warning = None
+    document: TranscriptDocument | None = None
     targets = []
-    if configured_key or use_local:
+    if route:
         try:
             document = fetch_transcript(
                 video_ref, allow_stt=not local_only, client=client, metadata=metadata
@@ -103,6 +116,7 @@ def sample_vision(
         except (RuntimeError, ValueError) as error:
             transcript_warning = f"No timed transcript; using visual sampling: {error}"
         else:
+            # Every route needs timed text to place frames in; the decision route reads the lines themselves.
             targets = prepare_targets(document, excluded_intervals)
             if not targets:
                 untimed = all(
@@ -115,24 +129,31 @@ def sample_vision(
                     else "No usable timed transcript passages; using visual sampling."
                 )
     elif not local_only:
-        embedding_warning = "Set GEMINI_API_KEY or install youtube-toolkit[embeddings] for relative-relevance ranking; using local frame selection."
-    selection_mode = "semantic" if targets else "visual"
+        embedding_warning = "Set DECISION_API_KEY or GEMINI_API_KEY, or install youtube-toolkit[embeddings], for relevance ranking; using local frame selection."
+    if not targets:
+        route = None
+    selection_mode = {
+        "decision": "decision",
+        "gemini": "semantic",
+        "local": "semantic",
+        None: "visual",
+    }[route]
     embedding_model = None
     usage: EmbeddingUsage | None = None
+    decision_usage: DecisionUsage | None = None
     cutoffs = API_EMBEDDING_CUTOFFS
-    rankings: dict[float, tuple[int, FrameRanking]] = {}
-    if targets:
+    relevance: dict[float, dict[str, Any]] = {}
+    if route in ("gemini", "local"):
         # Texts need no video, so a bad key, quota, or model fails before the download and decoding.
-        if configured_key:
-            embedder = GeminiEmbeddingClient(configured_key)
+        if gemini_key:
+            embedder = GeminiEmbeddingClient(gemini_key)
         else:
             embedder = LocalImageEmbeddingClient()
             cutoffs, embedding_warning = local_embedding_cutoffs(embedder.model)
         embedding_model = embedder.model
         embedded_texts = embedder.embed([], [target.text for target in targets])
         usage = embedded_texts.usage
-    if min_similarity is None:
-        min_similarity = cutoffs.vision_match
+    match_floor = cutoffs.vision_match if min_similarity is None else min_similarity
     destination = None
     try:
         destination = create_artifact_directory("vision", video_id)
@@ -151,8 +172,36 @@ def sample_vision(
                 directory=work_dir / "candidates",
                 excluded_intervals=excluded_intervals,
             )
-            if targets:
-                selected = []
+            selected = []
+            if route == "decision" and document is not None and decision:
+                decisions, decision_usage = score_frames(candidates, document, decision)
+                if unscored := decisions.count(None):
+                    decision_warning = f"{unscored} of {len(candidates)} frames went unscored after repeated decision host errors and were left out of the ranking."
+                passing = {
+                    index: decision
+                    for index, decision in enumerate(decisions)
+                    if decision is not None and decision.score >= MIN_SCORE
+                }
+                order = sorted(
+                    passing,
+                    key=lambda index: (
+                        -passing[index].score,
+                        candidates[index].timestamp_seconds,
+                    ),
+                )
+                picks = select_ranked_frames(
+                    candidates,
+                    order,
+                    max_frames=max_frames,
+                    min_gap_seconds=min_gap_seconds,
+                )
+                for rank, (index, frame) in enumerate(picks, start=1):
+                    selected.append(frame)
+                    relevance[frame.timestamp_seconds] = {
+                        "selection_rank": rank,
+                        **asdict(passing[index]),
+                    }
+            elif route in ("gemini", "local"):
                 if candidates:
                     embedded_images = embedder.embed(
                         [frame.image_path for frame in candidates], []
@@ -164,14 +213,18 @@ def sample_vision(
                         targets,
                         [frame.timestamp_seconds for frame in candidates],
                         max_frames=max_frames,
-                        min_similarity=min_similarity,
+                        min_similarity=match_floor,
                         min_gap_seconds=min_gap_seconds,
                         duplicate_cosine=cutoffs.vision_duplicate,
                     )
                     for rank, ranking in enumerate(ranked, start=1):
                         frame = candidates[ranking.index].load()
                         selected.append(frame)
-                        rankings[frame.timestamp_seconds] = (rank, ranking)
+                        relevance[frame.timestamp_seconds] = {
+                            "selection_rank": rank,
+                            "rrf_score": ranking.score,
+                            "matches": [asdict(match) for match in ranking.matches],
+                        }
             else:
                 selected = select_slot_frames(
                     candidates,
@@ -190,14 +243,7 @@ def sample_vision(
     frame_results = []
     for frame in selected:
         result = frame.to_dict()
-        result["relevance"] = None
-        if frame.timestamp_seconds in rankings:
-            rank, ranking = rankings[frame.timestamp_seconds]
-            result["relevance"] = {
-                "selection_rank": rank,
-                "rrf_score": ranking.score,
-                "matches": [asdict(match) for match in ranking.matches],
-            }
+        result["relevance"] = relevance.get(frame.timestamp_seconds)
         frame_results.append(result)
     return {
         "video_id": video_id,
@@ -208,8 +254,13 @@ def sample_vision(
         "embedding_warning": embedding_warning,
         "embedding_model": embedding_model,
         "embedding_usage": asdict(usage) if usage is not None else None,
+        "decision_model": decision.model if decision and route == "decision" else None,
+        "decision_warning": decision_warning,
+        "decision_usage": asdict(decision_usage)
+        if decision_usage is not None
+        else None,
         "candidate_count": len(candidates),
-        "min_similarity": min_similarity,
+        "min_similarity": None if route == "decision" else match_floor,
         "min_gap_seconds": min_gap_seconds,
         "frame_count": len(selected),
         "timestamps_seconds": [frame.timestamp_seconds for frame in selected],

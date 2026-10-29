@@ -6,6 +6,7 @@ Checks inspect configuration and installed packages only: they send no API reque
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from importlib.util import find_spec
 import shutil
 
@@ -32,10 +33,11 @@ def run_doctor(args: argparse.Namespace) -> str:
             f"  yt-dlp     {yt_dlp.version.__version__}",
             f"  config     {config.config_path()}",
             f"  artifacts  {artifact_root()}",
-            f"  vision     {'available' if vision_available() else 'not installed'}",
+            f"  vision     {_checked(vision_health)}",
             f"  ffmpeg     {'available' if shutil.which('ffmpeg') else 'not installed'}",
-            f"  embedding  {embedding_health()}",
-            f"  stt        {stt_health()}",
+            f"  embedding  {_checked(embedding_health)}",
+            f"  decision   {_checked(decision_health)}",
+            f"  stt        {_checked(stt_health)}",
         ]
     )
 
@@ -55,6 +57,25 @@ def embedding_health() -> str:
     return f"Configured ({embedding.model})"
 
 
+def vision_health() -> str:
+    """Name the route `youtube vision` would rank with, in its order of preference."""
+    if not vision_available():
+        return "not installed"
+    if decision := config.decision_config():
+        return f"available; ranks with {decision.model} at {decision.host}"
+    if config.vision_embedding_key():
+        return "available; ranks with Gemini embeddings"
+    if local_embedding_installed():
+        return f"available; ranks with local {config.local_embedding_model()}"
+    return "available; picks by time slots until `youtube setup --decisions` or `--embeddings` saves a key, or youtube-toolkit[embeddings] is installed"
+
+
+def decision_health() -> str:
+    if decision := config.decision_config():
+        return f"Configured ({decision.model} at {decision.host})"
+    return "Set DECISION_API_KEY with `youtube setup --decisions`"
+
+
 def stt_health() -> str:
     provider = cloud_provider()
     if cloud_stt_configured():
@@ -65,6 +86,14 @@ def stt_health() -> str:
     if not local_model_downloaded(model):
         return f"Local {model} downloads on first use, or now with `youtube stt-setup`"
     return f"Configured (local {model}); `youtube stt-setup` checks that it runs"
+
+
+def _checked(check: Callable[[], str]) -> str:
+    """A key setting that names an unset variable reports on its own line instead of stopping the whole report."""
+    try:
+        return check()
+    except ValueError as error:
+        return str(error)
 
 
 def vision_available() -> bool:

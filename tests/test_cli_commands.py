@@ -720,6 +720,56 @@ def test_doctor_names_the_speech_to_text_route_or_the_next_step(
     assert expected in health.stt_health()
 
 
+@pytest.mark.parametrize(
+    ("environment", "installed", "expected"),
+    [
+        (
+            {
+                "DECISION_API_KEY": "key",
+                "DECISION_URL": "https://openrouter.ai/api/alpha/decisions",
+                "GEMINI_API_KEY": "key",
+            },
+            True,
+            "available; ranks with perplexity/pplx-decider-flash-v1.2 at openrouter.ai",
+        ),
+        ({"GEMINI_API_KEY": "key"}, True, "available; ranks with Gemini embeddings"),
+        (
+            {},
+            True,
+            "available; ranks with local jinaai/jina-embeddings-v5-omni-small-retrieval",
+        ),
+        (
+            {},
+            False,
+            "available; picks by time slots until `youtube setup --decisions`",
+        ),
+    ],
+)
+def test_doctor_names_the_vision_ranking_route_in_preference_order(
+    monkeypatch, environment, installed, expected
+) -> None:
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(health, "local_embedding_installed", lambda: installed)
+    monkeypatch.setattr(health, "vision_available", lambda: True)
+
+    assert health.vision_health().startswith(expected)
+
+
+def test_doctor_reports_a_key_named_after_an_unset_variable_on_its_own_line(
+    monkeypatch, capsys
+) -> None:
+    monkeypatch.setenv("DECISION_API_KEY", "MISSING_API_KEY")
+    monkeypatch.setattr(health, "local_stt_installed", lambda: False)
+    assert main(["doctor"]) == 0
+    report = capsys.readouterr().out
+    assert (
+        "  decision   DECISION_API_KEY names MISSING_API_KEY, which is not set"
+        in report
+    )
+    assert "  stt        Set XAI_API_KEY" in report
+
+
 def test_vision_requires_dependencies_before_fetch(monkeypatch, capsys) -> None:
     def reject() -> None:
         raise RuntimeError("Vision dependencies missing")
@@ -740,9 +790,20 @@ def test_setup_saves_keys_without_echoing_or_exporting_them(
     ):
         monkeypatch.delenv(name, raising=False)
     answers = iter(
-        ["https://embedding.example/v1", "example-model", "512", "", "", "gemini", ""]
+        [
+            "https://embedding.example/v1",
+            "example-model",
+            "512",
+            "",
+            "",
+            "",
+            "",
+            "vercel",
+            "",
+        ]
     )
-    keys = iter(["secret-embedding-key", "secret-gemini-key"])
+    # The decision key names the variable that speech-to-text then saves, so one key serves both.
+    keys = iter(["secret-embedding-key", "AI_GATEWAY_API_KEY", "secret-gateway-key"])
     monkeypatch.setattr(setup.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda: next(answers))
     monkeypatch.setattr(setup.getpass, "getpass", lambda *_args, **_kwargs: next(keys))
@@ -757,18 +818,38 @@ def test_setup_saves_keys_without_echoing_or_exporting_them(
         "EMBEDDING_BASE_URL": "https://embedding.example/v1",
         "EMBEDDING_MODEL": "example-model",
         "EMBEDDING_DIMENSIONS": "512",
-        "STT_PROVIDER": "gemini",
-        "GEMINI_API_KEY": "secret-gemini-key",
+        "DECISION_API_KEY": "AI_GATEWAY_API_KEY",
+        "STT_PROVIDER": "vercel",
+        "AI_GATEWAY_API_KEY": "secret-gateway-key",
     }
     assert json.loads(captured.out) == {
         "config_path": str(config.config_path()),
         "saved_settings": list(saved),
     }
     assert "secret-embedding-key" not in captured.out + captured.err
-    assert "secret-gemini-key" not in captured.out + captured.err
+    assert "secret-gateway-key" not in captured.out + captured.err
     assert dict(os.environ) == before
     assert health.embedding_health() == "Configured (example-model)"
-    assert "Configured (Gemini API)" in health.stt_health()
+    assert config.config_value("DECISION_API_KEY") == "secret-gateway-key"
+    assert health.decision_health() == (
+        "Configured (perplexity/pplx-decider-flash-v1.2 at ai-gateway.vercel.sh)"
+    )
+    assert "Configured (Vercel AI Gateway API)" in health.stt_health()
+
+
+def test_setup_decisions_saves_the_key_url_and_model(monkeypatch) -> None:
+    config.save_config({"DECISION_API_KEY": "keep-key"})
+    answers = iter(["https://openrouter.ai/api/alpha/decisions", "example/decider"])
+    monkeypatch.setattr(setup.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda: next(answers))
+    monkeypatch.setattr(setup.getpass, "getpass", lambda *_args, **_kwargs: "")
+
+    assert main(["setup", "--decisions"]) == 0
+    assert config.read_config() == {
+        "DECISION_API_KEY": "keep-key",
+        "DECISION_URL": "https://openrouter.ai/api/alpha/decisions",
+        "DECISION_MODEL": "example/decider",
+    }
 
 
 def test_setup_keeps_or_removes_saved_values_without_changing_other_settings(

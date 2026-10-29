@@ -246,6 +246,11 @@ def _add_setup_command(subparsers: argparse._SubParsersAction) -> None:
         "--embeddings", action="store_true", help="Configure embedding settings only"
     )
     setup_parser.add_argument(
+        "--decisions",
+        action="store_true",
+        help="Configure decision model settings only",
+    )
+    setup_parser.add_argument(
         "--stt", action="store_true", help="Configure speech-to-text settings only"
     )
     setup_parser.set_defaults(handler=run_setup)

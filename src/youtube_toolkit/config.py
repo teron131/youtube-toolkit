@@ -1,4 +1,4 @@
-"""App settings: the per-user settings file and nonblank environment overrides, plus the embedding and speech-to-text model IDs, setting defaults, and the similarity cutoffs measured for each embedding route.
+"""App settings: the per-user settings file and nonblank environment overrides, plus the embedding, decision, and speech-to-text model IDs, setting defaults, and the similarity cutoffs measured for each embedding route.
 
 The vision command's limits also live here because the vision package needs its optional extra to import, while the CLI parser needs them on every run.
 """
@@ -36,6 +36,12 @@ DEFAULT_EMBEDDING_CONCURRENCY = 16
 MAX_EMBEDDING_CONCURRENCY = 50
 # A Hugging Face model ID; EMBEDDING_LOCAL_MODEL can name any other model that loads in sentence-transformers, and vision also needs it to embed images.
 DEFAULT_LOCAL_EMBEDDING_MODEL = "jinaai/jina-embeddings-v5-omni-small-retrieval"
+# TypeSafe's System One endpoint on Vercel AI Gateway; DECISION_URL can name any host that accepts the same request, such as OpenRouter's https://openrouter.ai/api/alpha/decisions.
+DEFAULT_DECISION_URL = "https://ai-gateway.vercel.sh/typesafe/v1/systemone"
+# DECISION_MODEL can name another model that reads images, though vision's score cutoff was measured on this one.
+DEFAULT_DECISION_MODEL = "perplexity/pplx-decider-flash-v1.2"
+# An API key setting holding a name of this shape, such as GEMINI_API_KEY, uses that variable's value; real keys never look like this.
+KEY_REFERENCE = re.compile(r"[A-Z_][A-Z0-9_]*_KEY")
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +118,33 @@ def embedding_concurrency(job_count: int) -> int:
     return min(job_count, max(1, min(configured, MAX_EMBEDDING_CONCURRENCY)))
 
 
+@dataclass(frozen=True, slots=True)
+class DecisionConfig:
+    url: str
+    api_key: str
+    model: str
+
+    def __post_init__(self) -> None:
+        if urlparse(self.url).scheme not in {"http", "https"}:
+            raise ValueError("DECISION_URL must use http or https")
+
+    @property
+    def host(self) -> str:
+        return urlparse(self.url).netloc
+
+
+def decision_config() -> DecisionConfig | None:
+    """None when DECISION_API_KEY is unset, which leaves vision to the embedding routes."""
+    api_key = config_value("DECISION_API_KEY")
+    if api_key is None:
+        return None
+    return DecisionConfig(
+        url=config_value("DECISION_URL") or DEFAULT_DECISION_URL,
+        api_key=api_key,
+        model=config_value("DECISION_MODEL") or DEFAULT_DECISION_MODEL,
+    )
+
+
 def stt_provider_name() -> str:
     """Name the cloud speech-to-text provider chosen with STT_PROVIDER."""
     return config_value("STT_PROVIDER") or DEFAULT_STT_PROVIDER
@@ -153,7 +186,24 @@ def local_stt_model() -> str:
 
 
 def config_value(name: str) -> str | None:
-    """Prefer a nonblank environment override, then the app's saved setting, without modifying the process environment."""
+    """Prefer a nonblank environment override, then the app's saved setting, without modifying the process environment.
+
+    An API key setting that names another variable resolves to that variable's value, and raises when it is unset rather than leaving the feature unconfigured.
+    """
+    value = _setting(name)
+    if (
+        value is None
+        or not name.endswith("_API_KEY")
+        or not KEY_REFERENCE.fullmatch(value)
+    ):
+        return value
+    referenced = _setting(value)
+    if referenced is None:
+        raise ValueError(f"{name} names {value}, which is not set")
+    return referenced
+
+
+def _setting(name: str) -> str | None:
     value = os.environ.get(name, "").strip()
     return value or read_config().get(name, "").strip() or None
 

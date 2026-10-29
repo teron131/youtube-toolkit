@@ -1,4 +1,4 @@
-"""Collect a video's keyframes as disk-backed candidates and, without Gemini ranking, spread the selection across them in equal time slots."""
+"""Collect a video's keyframes as disk-backed candidates, then select from them best first for decision ranking or, without a ranking model, in equal time slots, dropping pixel repeats either way."""
 
 from __future__ import annotations
 
@@ -151,6 +151,34 @@ def select_slot_frames(
             continue
         selected.append(frame)
         selected_stats.append(stats)
+    return selected
+
+
+def select_ranked_frames(
+    candidates: list[StoredFrame],
+    order: list[int],
+    *,
+    max_frames: int,
+    min_gap_seconds: float,
+) -> list[tuple[int, DecodedFrame]]:
+    """Walk candidate indexes in order, skipping any within min_gap_seconds of a pick or looking like one, so a screen that returns minutes later is picked once."""
+    selected: list[tuple[int, DecodedFrame]] = []
+    selected_stats: list[_PixelStats] = []
+    for index in order:
+        candidate = candidates[index]
+        if any(
+            abs(candidate.timestamp_seconds - frame.timestamp_seconds) < min_gap_seconds
+            for _, frame in selected
+        ):
+            continue
+        frame = candidate.load()
+        stats = _PixelStats.from_gray(_gray(frame.image))
+        if any(stats.ssim(other) >= REPEAT_SIMILARITY for other in selected_stats):
+            continue
+        selected.append((index, frame))
+        selected_stats.append(stats)
+        if len(selected) == max_frames:
+            break
     return selected
 
 
