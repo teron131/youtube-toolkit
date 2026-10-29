@@ -22,6 +22,7 @@ def rank(images, texts, targets, times, *, threshold=0.3, gap=10, limit=96):
         max_frames=limit,
         min_similarity=threshold,
         min_gap_seconds=gap,
+        duplicate_cosine=0.96,
     )
 
 

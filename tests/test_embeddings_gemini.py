@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 
 from youtube_toolkit.embeddings import gemini as embeddings
+from youtube_toolkit.embeddings.results import EmbeddingError, EmbeddingUsage
 
 
 def vector(index=0):
@@ -77,7 +78,7 @@ def test_images_and_text_are_separate_deduplicated_inputs_with_aligned_rows(
     assert result.texts[0, 2] == 1
     assert result.texts[1, 3] == 1
     assert np.allclose(np.linalg.norm(result.images, axis=1), 1)
-    assert result.usage == embeddings.EmbeddingUsage(258, 5, 263)
+    assert result.usage == EmbeddingUsage(258, 5, 263)
     client.embed([first], ["same", "other"])
     assert len(requests) == 2
 
@@ -125,20 +126,20 @@ def test_batches_are_bounded_and_completion_order_does_not_reorder_inputs(
     assert maximum_active == 2
     assert result.images.shape == (0, 768)
     assert result.texts.argmax(axis=1).tolist() == [*range(68), 0, 67]
-    assert result.usage == embeddings.EmbeddingUsage(0, 68, 68)
+    assert result.usage == EmbeddingUsage(0, 68, 68)
 
 
 @pytest.mark.parametrize(
     ("usage", "expected"),
     [
-        (None, embeddings.EmbeddingUsage(None, None, None)),
-        ({"promptTokenCount": 9}, embeddings.EmbeddingUsage(None, None, 9)),
+        (None, EmbeddingUsage(None, None, None)),
+        ({"promptTokenCount": 9}, EmbeddingUsage(None, None, 9)),
         (
             {
                 "promptTokenCount": 9,
                 "promptTokenDetails": [{"modality": "TEXT", "tokenCount": 9}],
             },
-            embeddings.EmbeddingUsage(None, 9, 9),
+            EmbeddingUsage(None, 9, 9),
         ),
         (
             {
@@ -147,7 +148,7 @@ def test_batches_are_bounded_and_completion_order_does_not_reorder_inputs(
                     {"modality": "TEXT", "tokenCount": 9},
                 ]
             },
-            embeddings.EmbeddingUsage(258, 9, None),
+            EmbeddingUsage(258, 9, None),
         ),
     ],
 )
@@ -184,7 +185,7 @@ def test_partial_batch_usage_keeps_aggregate_unknown(monkeypatch) -> None:
     result = embeddings.GeminiEmbeddingClient("key").embed(
         [], [str(index) for index in range(33)]
     )
-    assert result.usage == embeddings.EmbeddingUsage(None, None, None)
+    assert result.usage == EmbeddingUsage(None, None, None)
 
 
 @pytest.mark.parametrize(
@@ -213,7 +214,7 @@ def test_malformed_responses_fail_without_returning_partial_vectors(
         "urlopen",
         lambda _request, **_kwargs: io.BytesIO(json.dumps(payload).encode()),
     )
-    with pytest.raises(embeddings.EmbeddingError) as caught:
+    with pytest.raises(EmbeddingError) as caught:
         embeddings.GeminiEmbeddingClient("private-key").embed([], ["private-input"])
     assert "private-key" not in str(caught.value)
     assert "private-input" not in str(caught.value)
@@ -227,7 +228,7 @@ def test_one_failed_batch_fails_the_call(monkeypatch) -> None:
     monkeypatch.setattr(embeddings, "BATCH_SIZE", 32)
     monkeypatch.setattr(embeddings, "MAX_WORKERS", 2)
     monkeypatch.setattr(embeddings.urllib.request, "urlopen", respond)
-    with pytest.raises(embeddings.EmbeddingError, match="vector count"):
+    with pytest.raises(EmbeddingError, match="vector count"):
         embeddings.GeminiEmbeddingClient("key").embed(
             [], [str(index) for index in range(33)]
         )
@@ -267,7 +268,7 @@ def test_auth_failure_is_not_retried_and_keeps_a_safe_error_message(
         raise failure
 
     monkeypatch.setattr(embeddings.urllib.request, "urlopen", respond)
-    with pytest.raises(embeddings.EmbeddingError, match="HTTP 401") as caught:
+    with pytest.raises(EmbeddingError, match="HTTP 401") as caught:
         embeddings.GeminiEmbeddingClient("private-key").embed([], ["private-input"])
     assert len(calls) == 1
     assert caught.value.__cause__ is failure
@@ -297,7 +298,7 @@ def test_http_failure_names_google_reason_code_without_message_text(
         )
 
     monkeypatch.setattr(embeddings.urllib.request, "urlopen", respond)
-    with pytest.raises(embeddings.EmbeddingError) as caught:
+    with pytest.raises(EmbeddingError) as caught:
         embeddings.GeminiEmbeddingClient("key").embed([], ["private-input"])
     assert str(caught.value) == (
         "Gemini embedding request failed (HTTP 400, API_KEY_INVALID)"
@@ -331,7 +332,7 @@ def test_network_failure_is_bounded_and_preserves_cause(monkeypatch) -> None:
 
     monkeypatch.setattr(embeddings.urllib.request, "urlopen", respond)
     monkeypatch.setattr("youtube_toolkit.execution.time.sleep", lambda _delay: None)
-    with pytest.raises(embeddings.EmbeddingError, match="connection failed") as caught:
+    with pytest.raises(EmbeddingError, match="connection failed") as caught:
         embeddings.GeminiEmbeddingClient("key").embed([], ["caption"])
     assert len(calls) == 3
     assert caught.value.__cause__ is failure
@@ -346,7 +347,7 @@ def test_invalid_json_is_not_retried(monkeypatch) -> None:
         return io.BytesIO(b"invalid private response")
 
     monkeypatch.setattr(embeddings.urllib.request, "urlopen", respond)
-    with pytest.raises(embeddings.EmbeddingError, match="not valid JSON"):
+    with pytest.raises(EmbeddingError, match="not valid JSON"):
         embeddings.GeminiEmbeddingClient("key").embed([], ["caption"])
     assert len(calls) == 1
 
@@ -359,4 +360,4 @@ def test_empty_inputs_make_no_requests(monkeypatch) -> None:
     )
     result = embeddings.GeminiEmbeddingClient("key").embed([], [])
     assert result.images.shape == result.texts.shape == (0, 768)
-    assert result.usage == embeddings.EmbeddingUsage(0, 0, 0)
+    assert result.usage == EmbeddingUsage(0, 0, 0)

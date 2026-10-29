@@ -1,6 +1,6 @@
 """Local speech-to-text through the Hugging Face transformers automatic-speech-recognition (ASR) pipeline, for the model ID in STT_LOCAL_MODEL.
 
-Nothing here is specific to one model: the same pipeline call runs any Hugging Face ASR model on an Nvidia GPU, then the Apple GPU, then the CPU.
+Nothing here is specific to one model: the same pipeline call runs any Hugging Face ASR model on the best available device.
 The one step transformers does not handle uniformly is long audio, so recordings are cut into short pieces first.
 A model that is not on this machine yet is downloaded the first time it is needed.
 The heavy libraries are imported inside the functions that need them, so commands that never transcribe locally do not pay for loading them.
@@ -17,6 +17,7 @@ import warnings
 
 from ..config import DEFAULT_LOCAL_STT_MODEL, local_stt_model
 from ..ffmpeg_utils import SAMPLE_RATE, decode_audio
+from ..huggingface import model_downloaded, quiet_transformers, torch_device
 from ..schemas import SpeechTranscription, TranscriptChunk
 from .synthetic_audio import tone_recording
 
@@ -42,13 +43,7 @@ def local_stt_installed() -> bool:
 
 
 def local_model_downloaded(model: str) -> bool:
-    if not local_stt_installed():
-        return False
-    if Path(model).is_dir():
-        return True
-    from huggingface_hub import try_to_load_from_cache
-
-    return isinstance(try_to_load_from_cache(model, "config.json"), str)
+    return local_stt_installed() and model_downloaded(model)
 
 
 def check_local_stt() -> dict[str, Any]:
@@ -116,22 +111,12 @@ def load_recognizer() -> Any:
 
 
 def _build_recognizer(model: str) -> Any:
-    downloaded = local_model_downloaded(model)
+    quiet_transformers(downloaded=local_model_downloaded(model))
     import torch
     from transformers import pipeline
-    from transformers.utils import logging as transformers_logging
 
-    # The CLI prints JSON on stdout and errors on stderr; library chatter belongs in neither, except progress for a download that can take minutes.
-    transformers_logging.set_verbosity_error()
-    if downloaded:
-        transformers_logging.disable_progress_bar()
     warnings.filterwarnings("ignore", category=UserWarning, module="transformers")
-    if torch.cuda.is_available():
-        device = "cuda"
-    elif torch.backends.mps.is_available():
-        device = "mps"
-    else:
-        device = "cpu"
+    device = torch_device()
     # GPUs run half precision fastest and in half the memory; CPUs need full precision.
     dtype = torch.float32 if device == "cpu" else torch.float16
     return pipeline(

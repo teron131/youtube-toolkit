@@ -1,4 +1,4 @@
-"""Build and install the YouTube CLI with optional visual extraction and local speech-to-text dependencies."""
+"""Build and install the YouTube CLI with optional visual extraction, local embedding, and local speech-to-text dependencies."""
 
 from __future__ import annotations
 
@@ -34,9 +34,21 @@ def built_wheel_path() -> Path:
 
 
 def wheel_requirement(
-    wheel_path: Path, *, vision: bool = False, stt: bool = False
+    wheel_path: Path,
+    *,
+    vision: bool = False,
+    embeddings: bool = False,
+    stt: bool = False,
 ) -> str:
-    extras = [name for name, wanted in (("vision", vision), ("stt", stt)) if wanted]
+    extras = [
+        name
+        for name, wanted in (
+            ("vision", vision),
+            ("embeddings", embeddings),
+            ("stt", stt),
+        )
+        if wanted
+    ]
     return f"{wheel_path}[{','.join(extras)}]" if extras else str(wheel_path)
 
 
@@ -48,6 +60,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--vision",
         action="store_true",
         help="Include visual extraction dependencies; ffmpeg must be installed separately",
+    )
+    parser.add_argument(
+        "--embeddings",
+        action="store_true",
+        help="Include local embedding dependencies for semantic search and vision without an API key; EMBEDDING_LOCAL_MODEL can name any Hugging Face model that loads in sentence-transformers",
     )
     parser.add_argument(
         "--stt",
@@ -70,7 +87,9 @@ def main(argv: list[str] | None = None) -> None:
         "--force",
         "--python",
         sys.executable,
-        wheel_requirement(wheel_path, vision=args.vision, stt=args.stt),
+        wheel_requirement(
+            wheel_path, vision=args.vision, embeddings=args.embeddings, stt=args.stt
+        ),
     )
     tool_bin_dir = Path(
         run("uv", "tool", "dir", "--bin", capture_output=True).stdout.strip()

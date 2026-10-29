@@ -8,12 +8,15 @@ import http.client
 import json
 from pathlib import Path
 import re
+from typing import TYPE_CHECKING
 import urllib.error
 import urllib.request
 
-import numpy as np
-
 from ..execution import collect_concurrently, retry_transient
+from .results import EmbeddingError, EmbeddingResult, EmbeddingUsage, sum_reported
+
+if TYPE_CHECKING:
+    import numpy as np
 
 MODEL = "gemini-embedding-2"
 DIMENSIONS = 768
@@ -23,33 +26,6 @@ BATCH_SIZE = 64
 MAX_WORKERS = 4
 REQUEST_TIMEOUT_SECONDS = 90
 REASON_CODE = re.compile(r"[A-Z][A-Z0-9_]*")
-
-
-class EmbeddingError(RuntimeError):
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class EmbeddingUsage:
-    """None means the provider did not report complete usage for that field."""
-
-    image_tokens: int | None
-    text_tokens: int | None
-    total_tokens: int | None
-
-    def __add__(self, other: EmbeddingUsage) -> EmbeddingUsage:
-        return EmbeddingUsage(
-            _sum_reported([self.image_tokens, other.image_tokens]),
-            _sum_reported([self.text_tokens, other.text_tokens]),
-            _sum_reported([self.total_tokens, other.total_tokens]),
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class EmbeddingResult:
-    images: np.ndarray
-    texts: np.ndarray
-    usage: EmbeddingUsage
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,12 +39,15 @@ class GeminiEmbeddingClient:
         if not api_key.strip():
             raise ValueError("Gemini embedding API key must not be empty")
         self._api_key = api_key.strip()
+        self.model = MODEL
 
     def embed(self, image_paths: list[Path], texts: list[str]) -> EmbeddingResult:
         """Duplicate inputs share requests within this call, but output rows preserve every supplied input in order.
 
         A failed batch fails the call; partial vectors are never returned as a complete ranking input.
         """
+        import numpy as np
+
         inputs: dict[bytes | str, int] = {}
         image_rows = []
         for path in image_paths:
@@ -103,9 +82,9 @@ class GeminiEmbeddingClient:
             vectors[image_rows],
             vectors[text_rows],
             EmbeddingUsage(
-                _sum_reported([batch.usage.image_tokens for batch in batches]),
-                _sum_reported([batch.usage.text_tokens for batch in batches]),
-                _sum_reported([batch.usage.total_tokens for batch in batches]),
+                sum_reported([batch.usage.image_tokens for batch in batches]),
+                sum_reported([batch.usage.text_tokens for batch in batches]),
+                sum_reported([batch.usage.total_tokens for batch in batches]),
             ),
         )
 
@@ -200,6 +179,8 @@ def _error_reason(error: urllib.error.HTTPError) -> str | None:
 
 
 def _parse_response(payload: object, inputs: list[bytes | str]) -> _BatchResult:
+    import numpy as np
+
     if not isinstance(payload, dict):
         raise EmbeddingError("Gemini embedding response must be an object")
     embeddings = payload.get("embeddings")
@@ -255,10 +236,10 @@ def _parse_usage(payload: object, inputs: list[bytes | str]) -> EmbeddingUsage:
         if modality in counts:
             counts[modality].append(_token_count(detail.get("tokenCount")))
     return EmbeddingUsage(
-        _sum_reported(counts["IMAGE"])
+        sum_reported(counts["IMAGE"])
         if counts["IMAGE"] or not any(isinstance(item, bytes) for item in inputs)
         else None,
-        _sum_reported(counts["TEXT"])
+        sum_reported(counts["TEXT"])
         if counts["TEXT"] or not any(isinstance(item, str) for item in inputs)
         else None,
         total,
@@ -273,12 +254,3 @@ def _token_count(value: object) -> int | None:
             "Gemini embedding token count must be a nonnegative integer"
         )
     return value
-
-
-def _sum_reported(counts: list[int | None]) -> int | None:
-    total = 0
-    for count in counts:
-        if count is None:
-            return None
-        total += count
-    return total

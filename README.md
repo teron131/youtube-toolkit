@@ -6,15 +6,16 @@ A YouTube CLI for agents: simple search and fetching of videos, metadata, transc
 
 ## Install
 
-Requires Python 3.13+ and uv. The installer builds the checkout and installs `youtube` as a uv tool: an isolated environment with the command in uv's tool bin directory, usually `~/.local/bin`, so it runs from any directory without touching the system Python (`uv tool update-shell` adds that directory to PATH if needed). Rerun it after pulling changes; it replaces the previous install and finishes with `youtube doctor`. `--vision` and `--stt` add optional dependencies and need `ffmpeg` installed separately.
+Requires Python 3.13+ and uv. The installer builds the checkout and installs `youtube` as a uv tool: an isolated environment with the command in uv's tool bin directory, usually `~/.local/bin`, so it runs from any directory without touching the system Python (`uv tool update-shell` adds that directory to PATH if needed). Rerun it after pulling changes; it replaces the previous install and finishes with `youtube doctor`. `--vision`, `--embeddings`, and `--stt` add optional dependencies; `--vision` and `--stt` also need `ffmpeg` installed separately.
 
 ```bash
 uv run python scripts/install.py
 uv run python scripts/install.py --vision
+uv run python scripts/install.py --embeddings
 uv run python scripts/install.py --stt
 ```
 
-`--stt` installs Hugging Face `transformers` and PyTorch for local speech-to-text. Run the checkout directly with `uv run youtube`.
+`--embeddings` installs `sentence-transformers` and PyTorch for local embeddings, and `--stt` installs Hugging Face `transformers` and PyTorch for local speech-to-text. Run the checkout directly with `uv run youtube`.
 
 ## Configuration
 
@@ -70,7 +71,7 @@ Search covers YouTube, or the uploads of channels named with `--channels`, which
 
 ### Semantic search
 
-`--mode semantic` shortlists videos by title, then ranks their caption passages with an embedding API. It returns passages, or videos ranked by their best passage with `--return video`; each passage scores against its closest query.
+`--mode semantic` shortlists videos by title, then ranks their caption passages with an embedding API, or a local model without a key. It returns passages, or videos ranked by their best passage with `--return video`; each passage scores against its closest query.
 
 ```bash
 youtube search "agent memory" --mode semantic --limit 5
@@ -79,11 +80,14 @@ youtube search "model evals" --channels @OpenAI --mode semantic --return video
 
 | Variable | Default |
 | --- | --- |
-| `EMBEDDING_API_KEY` | Required |
+| `EMBEDDING_API_KEY` | Required for the API; without it the local model runs when installed |
 | `EMBEDDING_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta/openai/`, or any OpenAI-compatible endpoint |
 | `EMBEDDING_MODEL` | `gemini-embedding-2` |
 | `EMBEDDING_DIMENSIONS` | 768 |
 | `EMBEDDING_CONCURRENCY` | 16, clamped to 1–50 |
+| `EMBEDDING_LOCAL_MODEL` | `jinaai/jina-embeddings-v5-omni-small-retrieval` (CC BY-NC 4.0, non-commercial), or any model that loads in `sentence-transformers` |
+
+The local model downloads on first use and runs on an Nvidia GPU, the Apple GPU, or the CPU. Each embedding model has its own similarity scale: a frame and another video's speech score about 0.33 with Gemini but 0.13 with the default local model, so scores and cutoffs compare only within one model. The cutoffs were therefore measured for each default model; another local model reuses the default's cutoffs, with a warning in `warnings`.
 
 It reads captions only, never speech-to-text. Partial failures appear in `warnings`, and the command fails only when no passage can be embedded. `chunk_index` is not a timestamp; use `transcript --timestamps` for timing.
 
@@ -123,19 +127,19 @@ Without usable captions, `transcript` falls back to [speech-to-text](#speech-to-
 
 ![How vision picks frames: caption or speech-to-text text and keyframes are embedded, matched, ranked per scope, fused, and deduplicated into collages, with a dashed time-slot lane when there is no image embedding model or timed transcript.](docs/vision-pipeline.svg)
 
-With an image embedding key and a timed transcript, Gemini Embedding 2 ranks the candidates against the transcript's keywords, sentences, and paragraphs. A frame matches only text spoken from five seconds before to two seconds after it, scored relative to its similarity to the whole transcript, so silent stretches yield no ranked frames. Reciprocal rank fusion merges the three scopes, then frames within the minimum gap or with image-embedding cosine 0.96 or more to a pick are skipped. The cutoff is never lowered to fill the requested count.
+With a timed transcript, Gemini Embedding 2 ranks the candidates when a key is set, otherwise the local embedding model when installed, against the transcript's keywords, sentences, and paragraphs. A frame matches only text spoken from five seconds before to two seconds after it, scored relative to its similarity to the whole transcript, so silent stretches yield no ranked frames. Reciprocal rank fusion merges the three scopes, then frames within the minimum gap or with image-embedding cosine at the model's duplicate cutoff or more to a pick are skipped: 0.96 for both Gemini and the default local model. The cutoff is never lowered to fill the requested count.
 
-The key is `GEMINI_API_KEY`, or `EMBEDDING_API_KEY` when the embedding settings point at Gemini Embedding 2 on Google. The transcript is the one `transcript` returns, so a video without captions runs speech-to-text. Without a key or a timed transcript, or with `--local-only`, vision takes the candidate nearest the middle of each time slot of at least 12 seconds, skipping picks within the minimum gap of the previous one or repeating any earlier one. `selection_mode` and the warnings say which ran and why. A rejected key fails within seconds, before the video downloads, and names Google's reason code.
+The key is `GEMINI_API_KEY`, or `EMBEDDING_API_KEY` when the embedding settings point at Gemini Embedding 2 on Google. The transcript is the one `transcript` returns, so a video without captions runs speech-to-text. `--local-only` skips Gemini and speech-to-text, so the local model ranks against captions only. Without a ranking model or a timed transcript, vision takes the candidate nearest the middle of each time slot of at least 12 seconds, skipping picks within the minimum gap of the previous one or repeating any earlier one. `selection_mode` and the warnings say which ran and why. A rejected key fails within seconds, before the video downloads, and names Google's reason code.
 
 | Option or limit | Value |
 | --- | --- |
 | `--max-frames` | 1–96, default 96; the result can be shorter |
-| `--min-similarity` | Raw cosine floor, default 0.30 |
+| `--min-similarity` | Raw cosine floor on the ranking model's scale, default its cutoff: 0.30 for Gemini, 0.059 for the default local model |
 | `--min-gap` | Seconds between frames, default 10 |
 | Collage page | Up to six 960×540 frames, 2 columns × 3 rows |
 | Video limits | 2 hours, 500 MiB download |
 
-Collages go under `.cache/youtube-toolkit/vision/`; the video and candidate images are deleted afterwards unless `--no-auto-clean` keeps them, reported as `media_dir`. JSON includes `candidate_count`, `embedding_usage`, and per frame raw `visual_scores` and, for ranked picks, `relevance`: rank, RRF score, and matched texts with raw and relative cosine. Scores are measurements, not probabilities.
+Collages go under `.cache/youtube-toolkit/vision/`; the video and candidate images are deleted afterwards unless `--no-auto-clean` keeps them, reported as `media_dir`. JSON includes `candidate_count`, `embedding_model`, `embedding_usage` (no token counts for local models), and per frame raw `visual_scores` and, for ranked picks, `relevance`: rank, RRF score, and matched texts with raw and relative cosine. Scores are measurements on the ranking model's scale, not probabilities.
 
 ## Speech-to-text
 

@@ -11,6 +11,7 @@ import shutil
 
 from .. import config
 from ..artifacts import artifact_root
+from ..embeddings import local_embedding_downloaded, local_embedding_installed
 from ..stt import (
     cloud_provider,
     cloud_stt_configured,
@@ -41,7 +42,12 @@ def run_doctor(args: argparse.Namespace) -> str:
 
 def embedding_health() -> str:
     if config.config_value("EMBEDDING_API_KEY") is None:
-        return "Set EMBEDDING_API_KEY with `youtube setup --embeddings` for semantic search"
+        if not local_embedding_installed():
+            return "Set EMBEDDING_API_KEY with `youtube setup --embeddings`, or install youtube-toolkit[embeddings] for local models"
+        model = config.local_embedding_model()
+        if not local_embedding_downloaded(model):
+            return f"Local {model} downloads on first use"
+        return f"Configured (local {model})"
     try:
         embedding = config.embedding_config_from_env()
     except ValueError as error:

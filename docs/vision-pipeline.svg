@@ -2,8 +2,8 @@
 Evidence (re-verify on update):
   Captions, 3 scopes (CHUNK): vision/text.py prepare_targets, SENTENCE_SECONDS, PARAGRAPH_SECONDS, KeywordExtractor top 5 per paragraph
   Video, Keyframes (SAMPLE), Sponsors (FILTER), Near-copies (DEDUP, pixel SSIM 0.98 within 10 s): vision/candidates.py collect_candidates, ffmpeg_utils.py decode_keyframes
-  Embed (EMBED): embeddings/gemini.py, texts embedded before the download in vision/workflow.py
-  Match (5 s before to 2 s after), Rank per scope, Fuse (RRF), 10 s gap, Near-copies by vectors (DEDUP, embedding cosine 0.96): vision/reranking.py rerank_frames
+  Embed (EMBED): embeddings/gemini.py, or embeddings/local.py without a key, texts embedded before the download in vision/workflow.py
+  Match (5 s before to 2 s after), Rank per scope, Fuse (RRF), 10 s gap, Near-copies by vectors (DEDUP, embedding cosine 0.96 for Gemini and local): vision/reranking.py rerank_frames
   Time slots (SELECT), local 10 s gap, Repeats (DEDUP, pixel SSIM 0.95 to any earlier pick): vision/candidates.py select_slot_frames
   Collages, six per page: vision/collages.py
   dashed local lane: vision/workflow.py uses select_slot_frames without image embedding credentials (vision_embedding_key), without a timed transcript from captions or speech-to-text, or with the local-only flag

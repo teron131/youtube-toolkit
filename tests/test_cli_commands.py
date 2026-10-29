@@ -740,7 +740,7 @@ def test_setup_saves_keys_without_echoing_or_exporting_them(
     ):
         monkeypatch.delenv(name, raising=False)
     answers = iter(
-        ["https://embedding.example/v1", "example-model", "512", "", "gemini", ""]
+        ["https://embedding.example/v1", "example-model", "512", "", "", "gemini", ""]
     )
     keys = iter(["secret-embedding-key", "secret-gemini-key"])
     monkeypatch.setattr(setup.sys.stdin, "isatty", lambda: True)
@@ -781,7 +781,7 @@ def test_setup_keeps_or_removes_saved_values_without_changing_other_settings(
             "XAI_API_KEY": "unrelated-key",
         }
     )
-    answers = iter(["", "-", "", ""])
+    answers = iter(["", "-", "", "", ""])
     monkeypatch.setattr(setup.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda: next(answers))
     monkeypatch.setattr(setup.getpass, "getpass", lambda *_args, **_kwargs: "")
@@ -836,7 +836,7 @@ def test_setup_rejects_invalid_settings_without_replacing_config(
 ) -> None:
     path = config.save_config({"EMBEDDING_API_KEY": "old-key"})
     before = path.read_bytes()
-    answers = iter(["", "", "zero", ""])
+    answers = iter(["", "", "zero", "", ""])
     monkeypatch.setattr(setup.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda: next(answers))
     monkeypatch.setattr(setup.getpass, "getpass", lambda *_args, **_kwargs: "new-key")

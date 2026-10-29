@@ -12,13 +12,19 @@ from typing import Any
 
 from ..artifacts import create_artifact_directory
 from ..config import (
+    API_EMBEDDING_CUTOFFS,
     DEFAULT_VISION_MAX_FRAMES,
     DEFAULT_VISION_MIN_GAP_SECONDS,
-    DEFAULT_VISION_MIN_SIMILARITY,
     MAX_VISION_FRAMES,
+    local_embedding_cutoffs,
     vision_embedding_key,
 )
-from ..embeddings.gemini import MODEL, EmbeddingUsage, GeminiEmbeddingClient
+from ..embeddings import (
+    EmbeddingUsage,
+    GeminiEmbeddingClient,
+    LocalImageEmbeddingClient,
+    local_embedding_installed,
+)
 from ..identity import VideoRef, require_video_id
 from ..schemas import VideoMetadata
 from ..transcript import fetch_transcript
@@ -38,20 +44,24 @@ def sample_vision(
     video_ref: VideoRef,
     *,
     max_frames: int = DEFAULT_VISION_MAX_FRAMES,
-    min_similarity: float = DEFAULT_VISION_MIN_SIMILARITY,
+    min_similarity: float | None = None,
     min_gap_seconds: float = DEFAULT_VISION_MIN_GAP_SECONDS,
     local_only: bool = False,
     auto_clean: bool = True,
 ) -> dict[str, Any]:
-    """Gemini ranks the video's keyframes when credentials and a timed transcript are available; otherwise time slots spread a local selection across the same keyframes.
+    """With a timed transcript, Gemini ranks the video's keyframes when credentials exist, otherwise the local embedding model when its libraries are installed; without either, time slots spread a local selection across the same keyframes.
 
-    The transcript is fetched only when Gemini credentials exist, since local selection never reads it; without captions it comes from configured speech-to-text, which ranks frames only when the route reports timing.
-    max_frames limits the output, never the candidate search; embedding API errors propagate.
+    local_only skips Gemini and speech-to-text, so the local model ranks against captions only.
+    The transcript is fetched only when a model will rank, since time slots never read it; without captions it comes from configured speech-to-text, which ranks frames only when the route reports timing.
+    min_similarity None means the cutoff measured for the ranking model.
+    max_frames limits the output, never the candidate search; embedding errors propagate.
     Collages go to a new directory in the working directory's archive.
     """
     if not 1 <= max_frames <= MAX_VISION_FRAMES:
         raise ValueError(f"max_frames must be between 1 and {MAX_VISION_FRAMES}")
-    if not math.isfinite(min_similarity) or not -1 <= min_similarity <= 1:
+    if min_similarity is not None and (
+        not math.isfinite(min_similarity) or not -1 <= min_similarity <= 1
+    ):
         raise ValueError("min_similarity must be finite and between -1 and 1")
     if not math.isfinite(min_gap_seconds) or min_gap_seconds < 0:
         raise ValueError("min_gap_seconds must be finite and non-negative")
@@ -80,12 +90,15 @@ def sample_vision(
         )
     excluded_intervals = _excluded_intervals(metadata, duration)
     configured_key = None if local_only else vision_embedding_key()
+    use_local = configured_key is None and local_embedding_installed()
     transcript_warning = None
     embedding_warning = None
     targets = []
-    if configured_key:
+    if configured_key or use_local:
         try:
-            document = fetch_transcript(video_ref, client=client, metadata=metadata)
+            document = fetch_transcript(
+                video_ref, allow_stt=not local_only, client=client, metadata=metadata
+            )
         # Speech-to-text reports a recording without speech as ValueError, which leaves nothing to rank against, as missing captions do.
         except (RuntimeError, ValueError) as error:
             transcript_warning = f"No timed transcript; using visual sampling: {error}"
@@ -102,16 +115,24 @@ def sample_vision(
                     else "No usable timed transcript passages; using visual sampling."
                 )
     elif not local_only:
-        embedding_warning = "Set GEMINI_API_KEY for relative-relevance ranking; using local frame selection."
-    api_key = configured_key if targets else None
-    selection_mode = "semantic" if api_key else "visual"
+        embedding_warning = "Set GEMINI_API_KEY or install youtube-toolkit[embeddings] for relative-relevance ranking; using local frame selection."
+    selection_mode = "semantic" if targets else "visual"
+    embedding_model = None
     usage: EmbeddingUsage | None = None
+    cutoffs = API_EMBEDDING_CUTOFFS
     rankings: dict[float, tuple[int, FrameRanking]] = {}
-    if api_key:
-        # Texts need no video, so a bad key or quota fails before the download and decoding.
-        embedder = GeminiEmbeddingClient(api_key)
+    if targets:
+        # Texts need no video, so a bad key, quota, or model fails before the download and decoding.
+        if configured_key:
+            embedder = GeminiEmbeddingClient(configured_key)
+        else:
+            embedder = LocalImageEmbeddingClient()
+            cutoffs, embedding_warning = local_embedding_cutoffs(embedder.model)
+        embedding_model = embedder.model
         embedded_texts = embedder.embed([], [target.text for target in targets])
         usage = embedded_texts.usage
+    if min_similarity is None:
+        min_similarity = cutoffs.vision_match
     destination = None
     try:
         destination = create_artifact_directory("vision", video_id)
@@ -130,7 +151,7 @@ def sample_vision(
                 directory=work_dir / "candidates",
                 excluded_intervals=excluded_intervals,
             )
-            if api_key:
+            if targets:
                 selected = []
                 if candidates:
                     embedded_images = embedder.embed(
@@ -145,6 +166,7 @@ def sample_vision(
                         max_frames=max_frames,
                         min_similarity=min_similarity,
                         min_gap_seconds=min_gap_seconds,
+                        duplicate_cosine=cutoffs.vision_duplicate,
                     )
                     for rank, ranking in enumerate(ranked, start=1):
                         frame = candidates[ranking.index].load()
@@ -184,7 +206,7 @@ def sample_vision(
         "selection_mode": selection_mode,
         "transcript_warning": transcript_warning,
         "embedding_warning": embedding_warning,
-        "embedding_model": MODEL if api_key else None,
+        "embedding_model": embedding_model,
         "embedding_usage": asdict(usage) if usage is not None else None,
         "candidate_count": len(candidates),
         "min_similarity": min_similarity,
