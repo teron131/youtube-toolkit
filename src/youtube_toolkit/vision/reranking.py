@@ -13,8 +13,6 @@ RRF_CONSTANT = 60
 PADDING_BEFORE_SECONDS = 2
 PADDING_AFTER_SECONDS = 5
 LEVELS = ("keyword", "sentence", "paragraph")
-# At 0.95, distinct slides that share a template already count as duplicates too often.
-DUPLICATE_COSINE = 0.96
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,12 +39,13 @@ def rerank_frames(
     max_frames: int,
     min_similarity: float,
     min_gap_seconds: float,
+    duplicate_cosine: float,
 ) -> list[FrameRanking]:
     """Consume normalized vectors aligned with targets/timestamps and return selection rank order.
 
     A frame matches only text whose padded span contains its timestamp, and eligibility uses that match's raw cosine.
     Ranking subtracts the frame's mean similarity to every unique text at that scale across the whole transcript before RRF.
-    A frame is dropped when it lies within the minimum gap of a selected frame or duplicates one by image cosine of at least DUPLICATE_COSINE, so a screen recurring minutes apart is selected once.
+    A frame is dropped when it lies within the minimum gap of a selected frame or duplicates one by image cosine of at least duplicate_cosine, so a screen recurring minutes apart is selected once.
     Empty eligibility stays empty, and an exact minimum timestamp gap is allowed.
     """
     if max_frames < 1 or not timestamps or not targets:
@@ -120,7 +119,7 @@ def rerank_frames(
     for index in order:
         if any(
             abs(timestamps[index] - timestamps[row.index]) < min_gap_seconds
-            or image_vectors[index] @ image_vectors[row.index] >= DUPLICATE_COSINE
+            or image_vectors[index] @ image_vectors[row.index] >= duplicate_cosine
             for row in selected
         ):
             continue

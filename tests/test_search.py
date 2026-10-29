@@ -7,7 +7,11 @@ from typing import Any, cast
 
 import pytest
 
-from youtube_toolkit.config import EmbeddingConfig
+from youtube_toolkit.config import (
+    API_EMBEDDING_CUTOFFS,
+    LOCAL_EMBEDDING_CUTOFFS,
+    EmbeddingConfig,
+)
 from youtube_toolkit.embeddings.openai import EmbeddingClient
 from youtube_toolkit.schemas import TranscriptChunk, TranscriptDocument, VideoMetadata
 from youtube_toolkit.search.candidates import VideoResult
@@ -1828,3 +1832,25 @@ def test_search_preserves_provider_handle_for_filters_and_results(
     result = cast(dict[str, Any], results[0])
     metadata = result if mode == "native" else result["video"]
     assert metadata["channel_handle"] == "@CreatorHandle"
+
+
+def test_semantic_search_embeds_locally_only_without_an_api_key(monkeypatch) -> None:
+    class Local:
+        model = "example/local-model"
+
+    monkeypatch.delenv("EMBEDDING_API_KEY", raising=False)
+    monkeypatch.setattr(search_semantic, "local_embedding_installed", lambda: True)
+    monkeypatch.setattr(search_semantic, "LocalTextEmbeddingClient", Local)
+    embedder, cutoffs, warning = search_semantic.text_embedder()
+    assert isinstance(embedder, Local)
+    assert cutoffs == LOCAL_EMBEDDING_CUTOFFS
+    assert warning is not None
+    assert "not example/local-model" in warning
+
+    monkeypatch.setenv("EMBEDDING_API_KEY", "embedding-key")
+    monkeypatch.setattr(search_semantic, "EmbeddingClient", lambda: "api client")
+    assert search_semantic.text_embedder() == (
+        "api client",
+        API_EMBEDDING_CUTOFFS,
+        None,
+    )

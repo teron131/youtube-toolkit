@@ -12,7 +12,8 @@ import pytest
 from youtube_toolkit import ffmpeg_utils, vision
 from youtube_toolkit.cli import commands
 from youtube_toolkit.cli.parser import build_parser
-from youtube_toolkit.embeddings.gemini import (
+from youtube_toolkit.config import LOCAL_EMBEDDING_CUTOFFS
+from youtube_toolkit.embeddings.results import (
     EmbeddingError,
     EmbeddingResult,
     EmbeddingUsage,
@@ -292,7 +293,7 @@ def test_video_vision_cli_routes_to_public_extraction(monkeypatch) -> None:
 def test_vision_defaults_allow_multiple_six_frame_pages() -> None:
     args = build_parser().parse_args(["vision", VIDEO_ID])
     assert args.max_frames == 96
-    assert args.min_similarity == 0.3
+    assert args.min_similarity is None
     assert args.min_gap == 10
     assert args.local_only is False
     assert args.auto_clean is True
@@ -396,6 +397,8 @@ def test_semantic_selection_searches_beyond_output_budget_and_does_not_fill(
     monkeypatch, semantic_video, empty
 ) -> None:
     class Embedder:
+        model = "gemini-embedding-2"
+
         def __init__(self, key):
             assert key == "test-key"
 
@@ -435,6 +438,8 @@ def test_embedding_failure_stops_before_download_and_writes_no_artifacts(
     monkeypatch, semantic_video
 ) -> None:
     class Embedder:
+        model = "gemini-embedding-2"
+
         def __init__(self, _key):
             pass
 
@@ -469,6 +474,39 @@ def test_explicit_local_only_skips_configured_embedding_client(
     assert result["embedding_usage"] is None
 
 
+@pytest.mark.parametrize("local_only", [False, True])
+def test_local_model_ranks_without_a_key_on_its_own_cutoffs(
+    monkeypatch, semantic_video, local_only
+) -> None:
+    class Embedder:
+        model = "example/local-model"
+
+        def embed(self, images, texts):
+            return EmbeddingResult(
+                np.tile([1.0, 0.0], (len(images), 1)),
+                np.tile([1.0, 0.0], (len(texts), 1)),
+                EmbeddingUsage(None, None, None),
+            )
+
+    transcript = workflow.fetch_transcript
+    allowed: list[bool] = []
+
+    def fetch(*args, allow_stt: bool, **kwargs):
+        allowed.append(allow_stt)
+        return transcript(*args, **kwargs)
+
+    monkeypatch.setattr(workflow, "fetch_transcript", fetch)
+    monkeypatch.setattr(workflow, "vision_embedding_key", lambda: None)
+    monkeypatch.setattr(workflow, "local_embedding_installed", lambda: True)
+    monkeypatch.setattr(workflow, "LocalImageEmbeddingClient", Embedder)
+    result = workflow.sample_vision(VIDEO_ID, local_only=local_only)
+    assert result["selection_mode"] == "semantic"
+    assert result["embedding_model"] == "example/local-model"
+    assert result["min_similarity"] == LOCAL_EMBEDDING_CUTOFFS.vision_match
+    assert "not example/local-model" in result["embedding_warning"]
+    assert allowed == [not local_only]
+
+
 @pytest.mark.parametrize("timed", [True, False])
 def test_missing_captions_fall_back_to_speech_to_text_for_ranking(
     monkeypatch, semantic_video, timed
@@ -489,6 +527,8 @@ def test_missing_captions_fall_back_to_speech_to_text_for_ranking(
     text = " ".join(segment.text for segment in segments)
 
     class Embedder:
+        model = "gemini-embedding-2"
+
         def __init__(self, _key):
             pass
 
@@ -537,6 +577,8 @@ def test_auto_clean_off_leaves_video_and_candidates_beside_collages(
     monkeypatch, semantic_video
 ) -> None:
     class Embedder:
+        model = "gemini-embedding-2"
+
         def __init__(self, _key):
             pass
 

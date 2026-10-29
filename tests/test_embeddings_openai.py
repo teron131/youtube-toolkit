@@ -12,7 +12,8 @@ from youtube_toolkit.config import (
     EmbeddingConfig,
     embedding_concurrency,
 )
-from youtube_toolkit.embeddings.openai import EmbeddingClient, EmbeddingError
+from youtube_toolkit.embeddings.openai import EmbeddingClient
+from youtube_toolkit.embeddings.results import EmbeddingError
 from youtube_toolkit.search.semantic import split_transcript_chunks
 
 

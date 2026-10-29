@@ -6,7 +6,17 @@ from dataclasses import dataclass
 import math
 from typing import Any
 
-from ..embeddings.openai import EmbeddingClient
+from ..config import (
+    API_EMBEDDING_CUTOFFS,
+    EmbeddingCutoffs,
+    config_value,
+    local_embedding_cutoffs,
+)
+from ..embeddings import (
+    EmbeddingClient,
+    LocalTextEmbeddingClient,
+    local_embedding_installed,
+)
 from ..execution import collect_concurrently
 from ..schemas import TranscriptDocument
 from ..transcript import fetch_transcript
@@ -19,8 +29,6 @@ TRANSCRIPT_CHUNK_OVERLAP_CHARS = 200
 TITLE_PREFILTER_FACTOR = 3
 TITLE_PREFILTER_MIN = 15
 TITLE_PREFILTER_MAX = 60
-TITLE_MIN_SIMILARITY = 0.3
-RESULT_MIN_SIMILARITY = 0.5
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,12 +52,17 @@ def search_transcripts(
     request = resolved.request
     if not candidates:
         raise unprepared_embeddings_error([])
-    with EmbeddingClient() as embedder:
+    embedder, cutoffs, cutoff_warning = text_embedder()
+    with embedder:
         query_embeddings = [
             embedder.embed(query) for query in dict.fromkeys(request.queries)
         ]
         candidates, title_failures = shortlist_by_title(
-            candidates, query_embeddings, limit=resolved.limit, embedder=embedder
+            candidates,
+            query_embeddings,
+            limit=resolved.limit,
+            embedder=embedder,
+            min_similarity=cutoffs.search_title,
         )
         documents, transcript_failures = fetch_semantic_transcripts(candidates)
         chunks = prepare_transcript_chunks(candidates, documents)
@@ -58,9 +71,12 @@ def search_transcripts(
         raise unprepared_embeddings_error(
             [*transcript_failures.values(), *chunk_failures.values()]
         )
-    scored = score_chunks(chunks, vectors, query_embeddings)
+    scored = score_chunks(
+        chunks, vectors, query_embeddings, min_similarity=cutoffs.search_result
+    )
 
     shared_warnings = [
+        *([cutoff_warning] if cutoff_warning else []),
         *compact_stage_failures("title embedding", title_failures),
         *compact_stage_failures("transcript preparation", transcript_failures),
     ]
@@ -93,12 +109,24 @@ def search_transcripts(
     ]
 
 
+def text_embedder() -> tuple[
+    EmbeddingClient | LocalTextEmbeddingClient, EmbeddingCutoffs, str | None
+]:
+    """An embedding API key wins; without one the local model runs when its libraries are installed, as with speech-to-text."""
+    if config_value("EMBEDDING_API_KEY") is None and local_embedding_installed():
+        client = LocalTextEmbeddingClient()
+        cutoffs, warning = local_embedding_cutoffs(client.model)
+        return client, cutoffs, warning
+    return EmbeddingClient(), API_EMBEDDING_CUTOFFS, None
+
+
 def shortlist_by_title(
     candidates: list[dict[str, Any]],
     query_embeddings: list[list[float]],
     *,
     limit: int,
-    embedder: EmbeddingClient,
+    embedder: EmbeddingClient | LocalTextEmbeddingClient,
+    min_similarity: float,
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
     """Score titles before fetching transcripts to bound transcript and chunk-embedding work.
 
@@ -126,9 +154,7 @@ def shortlist_by_title(
         key=lambda item: item[0],
         reverse=True,
     )
-    relevant = [
-        candidate for score, candidate in scored if score >= TITLE_MIN_SIMILARITY
-    ]
+    relevant = [candidate for score, candidate in scored if score >= min_similarity]
     shortlist_size = min(
         len(candidates),
         TITLE_PREFILTER_MAX,
@@ -181,6 +207,8 @@ def score_chunks(
     chunks: list[PreparedChunk],
     vectors: dict[str, list[float]],
     query_embeddings: list[list[float]],
+    *,
+    min_similarity: float,
 ) -> list[ScoredChunk]:
     scored: list[ScoredChunk] = []
     for chunk in chunks:
@@ -188,7 +216,7 @@ def score_chunks(
         if vector is None:
             continue
         similarity = best_similarity(query_embeddings, vector)
-        if similarity < RESULT_MIN_SIMILARITY:
+        if similarity < min_similarity:
             continue
         scored.append(ScoredChunk(prepared=chunk, similarity=similarity))
     return sorted(scored, key=lambda chunk: chunk.similarity, reverse=True)

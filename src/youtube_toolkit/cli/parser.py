@@ -8,7 +8,6 @@ from ..config import (
     DEFAULT_LOCAL_STT_MODEL,
     DEFAULT_VISION_MAX_FRAMES,
     DEFAULT_VISION_MIN_GAP_SECONDS,
-    DEFAULT_VISION_MIN_SIMILARITY,
     MAX_VISION_FRAMES,
 )
 from ..youtube import DEFAULT_COMMENT_LIMIT, DEFAULT_LAST_VIDEOS, MAX_COMMENT_LIMIT
@@ -123,8 +122,7 @@ def _add_video_commands(subparsers: argparse._SubParsersAction) -> None:
     vision_parser.add_argument(
         "--min-similarity",
         type=float,
-        default=DEFAULT_VISION_MIN_SIMILARITY,
-        help="Minimum raw cosine for semantic matches (default: %(default)s)",
+        help="Minimum raw cosine for semantic matches (default: the cutoff measured for the ranking embedding model)",
     )
     vision_parser.add_argument(
         "--min-gap",
@@ -135,7 +133,7 @@ def _add_video_commands(subparsers: argparse._SubParsersAction) -> None:
     vision_parser.add_argument(
         "--local-only",
         action="store_true",
-        help="Pick evenly spaced frames locally without captions or Gemini embedding requests",
+        help="Skip Gemini and speech-to-text: rank against captions with the local embedding model when installed, otherwise pick evenly spaced frames",
     )
     vision_parser.add_argument(
         "--auto-clean",

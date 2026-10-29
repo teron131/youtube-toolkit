@@ -8,10 +8,7 @@ from openai import APIError, OpenAI
 
 from ..config import EmbeddingConfig, embedding_concurrency, embedding_config_from_env
 from ..execution import collect_concurrently
-
-
-class EmbeddingError(RuntimeError):
-    """Covers invalid embedding configuration as well as failed or empty API responses."""
+from .results import EmbeddingError
 
 
 class EmbeddingClient:

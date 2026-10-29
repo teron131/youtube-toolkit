@@ -1,4 +1,4 @@
-"""App settings: the per-user settings file and nonblank environment overrides, plus the embedding and speech-to-text model IDs and setting defaults.
+"""App settings: the per-user settings file and nonblank environment overrides, plus the embedding and speech-to-text model IDs, setting defaults, and the similarity cutoffs measured for each embedding route.
 
 The vision command's limits also live here because the vision package needs its optional extra to import, while the CLI parser needs them on every run.
 """
@@ -17,7 +17,6 @@ from platformdirs import user_config_path
 
 DEFAULT_VISION_MAX_FRAMES = 96
 MAX_VISION_FRAMES = 96
-DEFAULT_VISION_MIN_SIMILARITY = 0.3
 DEFAULT_VISION_MIN_GAP_SECONDS = 10.0
 
 DEFAULT_STT_PROVIDER = "xai"
@@ -35,6 +34,32 @@ DEFAULT_EMBEDDING_MODEL = "gemini-embedding-2"
 DEFAULT_EMBEDDING_DIMENSIONALITY = 768
 DEFAULT_EMBEDDING_CONCURRENCY = 16
 MAX_EMBEDDING_CONCURRENCY = 50
+# A Hugging Face model ID; EMBEDDING_LOCAL_MODEL can name any other model that loads in sentence-transformers, and vision also needs it to embed images.
+DEFAULT_LOCAL_EMBEDDING_MODEL = "jinaai/jina-embeddings-v5-omni-small-retrieval"
+
+
+@dataclass(frozen=True, slots=True)
+class EmbeddingCutoffs:
+    """Cosine cutoffs only hold on the similarity scale of the model they were measured on."""
+
+    vision_match: float
+    vision_duplicate: float
+    search_title: float
+    search_result: float
+
+
+# Measured on gemini-embedding-2, the default for both API routes; other API models reuse them.
+# A 0.95 duplicate cutoff already merged distinct slides that share a template too often.
+API_EMBEDDING_CUTOFFS = EmbeddingCutoffs(
+    vision_match=0.3, vision_duplicate=0.96, search_title=0.3, search_result=0.5
+)
+# Measured on DEFAULT_LOCAL_EMBEDDING_MODEL over four graded test videos and set conservatively, as the most lenient value any one video needed, because dropping a useful frame or passage costs more than keeping an extra one.
+# The match and search cutoffs pass the share of pairs the API cutoff passes on each video; the search pairs are keyword-to-paragraph transcript pairs, since no labeled search queries exist.
+# The duplicate cutoff is the lowest at which no video lost more distinct frames than with Gemini's 0.96; real-world footage set it, and it leaves more repeats than Gemini.
+# Other local models reuse all four with a warning.
+LOCAL_EMBEDDING_CUTOFFS = EmbeddingCutoffs(
+    vision_match=0.059, vision_duplicate=0.96, search_title=-0.049, search_result=0.045
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +130,21 @@ def vision_embedding_key() -> str | None:
     ):
         return config_value("EMBEDDING_API_KEY")
     return None
+
+
+def local_embedding_model() -> str:
+    """Return the Hugging Face model ID chosen with EMBEDDING_LOCAL_MODEL for local embeddings."""
+    return config_value("EMBEDDING_LOCAL_MODEL") or DEFAULT_LOCAL_EMBEDDING_MODEL
+
+
+def local_embedding_cutoffs(model: str) -> tuple[EmbeddingCutoffs, str | None]:
+    """Return the local cutoffs and, for a model they were not measured on, a warning to show with its results."""
+    if model == DEFAULT_LOCAL_EMBEDDING_MODEL:
+        return LOCAL_EMBEDDING_CUTOFFS, None
+    return (
+        LOCAL_EMBEDDING_CUTOFFS,
+        f"Similarity cutoffs were measured on {DEFAULT_LOCAL_EMBEDDING_MODEL}, not {model}; matches may be too strict or too loose.",
+    )
 
 
 def local_stt_model() -> str:

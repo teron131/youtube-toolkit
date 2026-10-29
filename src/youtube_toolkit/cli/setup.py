@@ -15,6 +15,7 @@ from ..config import (
     DEFAULT_EMBEDDING_CONCURRENCY,
     DEFAULT_EMBEDDING_DIMENSIONALITY,
     DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_LOCAL_EMBEDDING_MODEL,
     DEFAULT_LOCAL_STT_MODEL,
     DEFAULT_STT_PROVIDER,
 )
@@ -62,6 +63,7 @@ def _setup_embeddings(settings: dict[str, str]) -> None:
     _prompt(settings, "EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
     _prompt(settings, "EMBEDDING_DIMENSIONS", str(DEFAULT_EMBEDDING_DIMENSIONALITY))
     _prompt(settings, "EMBEDDING_CONCURRENCY", str(DEFAULT_EMBEDDING_CONCURRENCY))
+    _prompt(settings, "EMBEDDING_LOCAL_MODEL", DEFAULT_LOCAL_EMBEDDING_MODEL)
     base_url = settings.get("EMBEDDING_BASE_URL", DEFAULT_EMBEDDING_BASE_URL)
     if urlparse(base_url).scheme not in {"http", "https"}:
         raise ValueError(
