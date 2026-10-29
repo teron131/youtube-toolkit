@@ -22,10 +22,11 @@ uv run python scripts/install.py --stt
 ```bash
 youtube setup
 youtube setup --embeddings
+youtube setup --decisions
 youtube setup --stt
 ```
 
-Setup saves embedding and speech-to-text settings, or one of them with a flag. Keys are entered at hidden prompts, never as flags; Enter keeps a saved value and `-` removes it. Setup makes no API calls.
+Setup saves embedding, decision model, and speech-to-text settings, or one group with a flag. Keys are entered at hidden prompts, never as flags; Enter keeps a saved value and `-` removes it. Any `*_API_KEY` setting can instead hold another variable's name, such as `AI_GATEWAY_API_KEY`, to use that variable's value, so one key in your shell serves several settings without a copy; a named variable that is not set is an error. Setup makes no API calls, and `youtube doctor` names the route vision would rank with.
 
 | Platform | Settings file |
 | --- | --- |
@@ -125,21 +126,29 @@ Without usable captions, `transcript` falls back to [speech-to-text](#speech-to-
 
 `youtube vision` returns six-frame collages and per-frame JSON. Its candidates are the video's keyframes, which YouTube places every three to seven seconds, minus sponsor segments, dark frames, and near-copies.
 
-![How vision picks frames: caption or speech-to-text text and keyframes are embedded, matched, ranked per scope, fused, and deduplicated into collages, with a dashed time-slot lane when there is no image embedding model or timed transcript.](docs/vision-pipeline.svg)
+![How vision picks frames: three numbered lanes tried in order. With a decision key, each keyframe is asked about with the speech around it, scored, and taken best first; otherwise Gemini or local embeddings match keyframes to caption text, rank, fuse, and deduplicate them; with neither, or without a timed transcript, a dashed time-slot lane picks them. Every lane ends in collages.](docs/vision-pipeline.svg)
 
-With a timed transcript, Gemini Embedding 2 ranks the candidates when a key is set, otherwise the local embedding model when installed, against the transcript's keywords, sentences, and paragraphs. A frame matches only text spoken from five seconds before to two seconds after it, scored relative to its similarity to the whole transcript, so silent stretches yield no ranked frames. Reciprocal rank fusion merges the three scopes, then frames within the minimum gap or with image-embedding cosine at the model's duplicate cutoff or more to a pick are skipped: 0.96 for both Gemini and the default local model. The cutoff is never lowered to fill the requested count.
+With `DECISION_API_KEY` and a timed transcript, a decision model, `DECISION_MODEL` (default Perplexity Decider Flash), scores every candidate. Requests use TypeSafe's System One format, so `DECISION_URL` can name any host that accepts it. Each frame is shown with the transcript within 30 seconds of it and asked whether it shows specific information, whether the narrator leaves that information unsaid, and whether it shows the specific thing being described. Its score is the larger of the first two answers multiplied together and 0.4 times the third, so a frame counts for what it adds beyond the speech. Frames scoring under 0.30 are dropped, mostly talking heads and transitions, and the rest are taken best first, skipping frames within the minimum gap of a pick or pixel repeats (SSIM 0.95) of any pick. On four graded videos this score separated frames that add substantial information from frames that add none at AUC 0.80, against 0.54 for embedding ranking.
 
-The key is `GEMINI_API_KEY`, or `EMBEDDING_API_KEY` when the embedding settings point at Gemini Embedding 2 on Google. The transcript is the one `transcript` returns, so a video without captions runs speech-to-text. `--local-only` skips Gemini and speech-to-text, so the local model ranks against captions only. Without a ranking model or a timed transcript, vision takes the candidate nearest the middle of each time slot of at least 12 seconds, skipping picks within the minimum gap of the previous one or repeating any earlier one. `selection_mode` and the warnings say which ran and why. A rejected key fails within seconds, before the video downloads, and names Google's reason code.
+| Variable | Default |
+| --- | --- |
+| `DECISION_API_KEY` | Required for decision ranking: the key, or the name of the variable that holds it, such as `AI_GATEWAY_API_KEY` |
+| `DECISION_URL` | `https://ai-gateway.vercel.sh/typesafe/v1/systemone` (Vercel AI Gateway), or another System One endpoint such as OpenRouter's `https://openrouter.ai/api/alpha/decisions` |
+| `DECISION_MODEL` | `perplexity/pplx-decider-flash-v1.2`; another model must read images, and the 0.30 cutoff was measured on this one |
+
+Without that key, Gemini Embedding 2 ranks the candidates when its key is set, otherwise the local embedding model when installed, against the transcript's keywords, sentences, and paragraphs. A frame matches only text spoken from five seconds before to two seconds after it, scored relative to its similarity to the whole transcript, so silent stretches yield no ranked frames. Reciprocal rank fusion merges the three scopes, then frames within the minimum gap or with image-embedding cosine at the model's duplicate cutoff or more to a pick are skipped: 0.96 for both Gemini and the default local model. The cutoff is never lowered to fill the requested count.
+
+The Gemini key is `GEMINI_API_KEY`, or `EMBEDDING_API_KEY` when the embedding settings point at Gemini Embedding 2 on Google. The transcript is the one `transcript` returns, so a video without captions runs speech-to-text. `--local-only` skips the decision model, Gemini, and speech-to-text, so the local model ranks against captions only. Without a ranking model or a timed transcript, vision takes the candidate nearest the middle of each time slot of at least 12 seconds, skipping picks within the minimum gap of the previous one or repeating any earlier one. `selection_mode` and the warnings say which ran and why. A rejected Gemini key fails within seconds, before the video downloads, and names Google's reason code; a rejected decision key fails after the download, once every frame request is refused. Frame requests that keep failing, such as on 503 overload, get a second round once the rest finish; frames still failing are left out of the ranking and counted in `decision_warning`, and the command fails only when more than 10% of frames go unscored.
 
 | Option or limit | Value |
 | --- | --- |
 | `--max-frames` | 1–96, default 96; the result can be shorter |
-| `--min-similarity` | Raw cosine floor on the ranking model's scale, default its cutoff: 0.30 for Gemini, 0.059 for the default local model |
+| `--min-similarity` | Embedding routes only: raw cosine floor on the ranking model's scale, default its cutoff: 0.30 for Gemini, 0.059 for the default local model |
 | `--min-gap` | Seconds between frames, default 10 |
 | Collage page | Up to six 960×540 frames, 2 columns × 3 rows |
 | Video limits | 2 hours, 500 MiB download |
 
-Collages go under `.cache/youtube-toolkit/vision/`; the video and candidate images are deleted afterwards unless `--no-auto-clean` keeps them, reported as `media_dir`. JSON includes `candidate_count`, `embedding_model`, `embedding_usage` (no token counts for local models), and per frame raw `visual_scores` and, for ranked picks, `relevance`: rank, RRF score, and matched texts with raw and relative cosine. Scores are measurements on the ranking model's scale, not probabilities.
+Collages go under `.cache/youtube-toolkit/vision/`; the video and candidate images are deleted afterwards unless `--no-auto-clean` keeps them, reported as `media_dir`. JSON includes `candidate_count`, `decision_model` and `decision_usage` (input tokens and the host's reported cost), `embedding_model`, `embedding_usage` (no token counts for local models), and per frame raw `visual_scores` and, for ranked picks, `relevance`. Decision picks carry their rank, score, and the three answer probabilities; embedding picks carry rank, RRF score, and matched texts with raw and relative cosine, which are measurements on the ranking model's scale, not probabilities.
 
 ## Speech-to-text
 

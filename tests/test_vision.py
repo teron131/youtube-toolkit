@@ -12,7 +12,12 @@ import pytest
 from youtube_toolkit import ffmpeg_utils, vision
 from youtube_toolkit.cli import commands
 from youtube_toolkit.cli.parser import build_parser
-from youtube_toolkit.config import LOCAL_EMBEDDING_CUTOFFS
+from youtube_toolkit.config import (
+    DEFAULT_DECISION_MODEL,
+    DEFAULT_DECISION_URL,
+    LOCAL_EMBEDDING_CUTOFFS,
+    DecisionConfig,
+)
 from youtube_toolkit.embeddings.results import (
     EmbeddingError,
     EmbeddingResult,
@@ -26,10 +31,16 @@ from youtube_toolkit.schemas import (
 )
 from youtube_toolkit.transcript import fetch_transcript
 from youtube_toolkit.vision import candidates as frame_selection, workflow
+from youtube_toolkit.vision.decisions import (
+    MIN_SCORE,
+    DecisionUsage,
+    FrameDecision,
+)
 from youtube_toolkit.youtube.caption import CaptionTranscriptUnavailable
 from youtube_toolkit.youtube.client import VISION_VIDEO_FORMAT_SELECTOR, YtDlpClient
 
 VIDEO_ID = "JpSHyEIZ_bo"
+DECISION = DecisionConfig(DEFAULT_DECISION_URL, "decision-key", DEFAULT_DECISION_MODEL)
 
 
 SCORES = frame_selection.VisualScores(20.0, 0.01, 0.0)
@@ -195,6 +206,25 @@ def test_slot_selection_skips_empty_slots_close_picks_and_repeats(tmp_path) -> N
         candidates, duration=60, max_frames=96, min_gap_seconds=10
     )
     assert [frame.timestamp_seconds for frame in frames] == [6, 30, 54]
+
+
+def test_ranked_selection_skips_close_picks_and_repeats_of_any_pick(tmp_path) -> None:
+    first, second, third = chart(), chart((10, 20, 35, 60)), chart((60, 40, 25, 10))
+    candidates = [
+        store_frame(tmp_path, 10, first),
+        store_frame(tmp_path, 40, second),
+        store_frame(tmp_path, 45, third),
+        store_frame(tmp_path, 80, first),
+    ]
+
+    def picks(max_frames: int) -> list[int]:
+        selected = frame_selection.select_ranked_frames(
+            candidates, [1, 2, 3, 0], max_frames=max_frames, min_gap_seconds=10
+        )
+        return [index for index, _frame in selected]
+
+    assert picks(96) == [1, 3]
+    assert picks(1) == [1]
 
 
 def test_download_video_for_vision_uses_bounded_720p_video_only_preset(
@@ -472,6 +502,57 @@ def test_explicit_local_only_skips_configured_embedding_client(
     assert result["selection_mode"] == "visual"
     assert result["candidate_count"] == 2
     assert result["embedding_usage"] is None
+
+
+@pytest.mark.parametrize("local_only", [False, True])
+def test_decision_model_ranks_first_with_a_decision_key(
+    monkeypatch, semantic_video, local_only
+) -> None:
+    def score(frames, document, config):
+        assert config == DECISION
+        assert document.chunks
+        scored = [
+            FrameDecision(0.9, 0.9, 1.0, 0.2),
+            FrameDecision(MIN_SCORE / 2, 0.1, 0.1, 0.1),
+        ][: len(frames)]
+        return scored, DecisionUsage(200, 0.00002)
+
+    monkeypatch.setattr(workflow, "decision_config", lambda: DECISION)
+    monkeypatch.setattr(workflow, "score_frames", score)
+    monkeypatch.setattr(
+        workflow, "GeminiEmbeddingClient", lambda _key: pytest.fail("no embeddings")
+    )
+    result = workflow.sample_vision(VIDEO_ID, local_only=local_only)
+    if local_only:
+        assert result["selection_mode"] == "visual"
+        assert result["decision_model"] is None
+        return
+    assert result["selection_mode"] == "decision"
+    assert result["decision_model"] == DEFAULT_DECISION_MODEL
+    assert result["decision_usage"] == {"input_tokens": 200, "cost_usd": 0.00002}
+    assert result["min_similarity"] is None
+    assert result["decision_warning"] is None
+    assert result["timestamps_seconds"] == [12]
+    assert result["frames"][0]["relevance"] == {
+        "selection_rank": 1,
+        "score": 0.9,
+        "has_information": 0.9,
+        "unspoken": 1.0,
+        "illustrative": 0.2,
+    }
+
+
+def test_unscored_frames_are_left_out_with_a_warning(
+    monkeypatch, semantic_video
+) -> None:
+    def score(frames, document, config):
+        return [FrameDecision(0.9, 0.9, 1.0, 0.2), None], DecisionUsage(100, None)
+
+    monkeypatch.setattr(workflow, "decision_config", lambda: DECISION)
+    monkeypatch.setattr(workflow, "score_frames", score)
+    result = workflow.sample_vision(VIDEO_ID)
+    assert result["timestamps_seconds"] == [12]
+    assert result["decision_warning"].startswith("1 of 2 frames went unscored")
 
 
 @pytest.mark.parametrize("local_only", [False, True])

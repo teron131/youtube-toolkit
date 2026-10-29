@@ -35,6 +35,28 @@ def test_shared_embedding_configuration_preserves_caller_overrides(monkeypatch) 
     assert embedding.output_dimensionality == 512
 
 
+def test_decision_settings_need_only_a_key_and_default_to_vercel(monkeypatch) -> None:
+    assert config.decision_config() is None
+    monkeypatch.setenv("DECISION_API_KEY", "decision-key")
+    assert config.decision_config() == config.DecisionConfig(
+        config.DEFAULT_DECISION_URL, "decision-key", config.DEFAULT_DECISION_MODEL
+    )
+
+
+def test_a_key_setting_can_name_the_variable_that_holds_the_key(monkeypatch) -> None:
+    config.save_config({"DECISION_API_KEY": "AI_GATEWAY_API_KEY"})
+    with pytest.raises(
+        ValueError, match="DECISION_API_KEY names AI_GATEWAY_API_KEY, which is not set"
+    ):
+        config.config_value("DECISION_API_KEY")
+
+    monkeypatch.setenv("AI_GATEWAY_API_KEY", "gateway-key")
+    assert config.config_value("DECISION_API_KEY") == "gateway-key"
+    # Only key settings follow names; other settings keep the text as given.
+    monkeypatch.setenv("DECISION_MODEL", "SOME_MODEL_KEY")
+    assert config.config_value("DECISION_MODEL") == "SOME_MODEL_KEY"
+
+
 @pytest.mark.parametrize(
     ("settings", "expected"),
     [
