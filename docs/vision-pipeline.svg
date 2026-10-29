@@ -1,16 +1,16 @@
 <!--
 Evidence (re-verify on update):
   Captions, 3 scopes (CHUNK): vision/text.py prepare_targets, SENTENCE_SECONDS, PARAGRAPH_SECONDS, KeywordExtractor top 5 per paragraph
-  Video, Keyframes (SAMPLE), Sponsors (FILTER), Near-copies (DEDUP, pixel 0.98 within 10 s): vision/candidates.py collect_candidates, ffmpeg_utils.py decode_keyframes
+  Video, Keyframes (SAMPLE), Sponsors (FILTER), Near-copies (DEDUP, pixel SSIM 0.98 within 10 s): vision/candidates.py collect_candidates, ffmpeg_utils.py decode_keyframes
   Embed (EMBED): embeddings/gemini.py, texts embedded before the download in vision/workflow.py
   Match (5 s before to 2 s after), Rank per scope, Fuse (RRF), 10 s gap, Near-copies by vectors (DEDUP, embedding cosine 0.96): vision/reranking.py rerank_frames
-  Time slots (SELECT), local 10 s gap, Repeats (DEDUP, pixel 0.95 to the previous pick): vision/candidates.py select_slot_frames
+  Time slots (SELECT), local 10 s gap, Repeats (DEDUP, pixel SSIM 0.95 to any earlier pick): vision/candidates.py select_slot_frames
   Collages, six per page: vision/collages.py
   dashed local lane: vision/workflow.py uses select_slot_frames without image embedding credentials (vision_embedding_key), without a timed transcript from captions or speech-to-text, or with the local-only flag
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="600" viewBox="0 0 1120 600" role="img" aria-labelledby="title desc">
   <title id="title">How vision picks frames</title>
-  <desc id="desc">How the vision command picks frames, drawn as stops on two lanes that merge. Each stop carries a chip naming its layer: chunk, sample, filter, dedup, embed, match, rank, rerank or select. Text lane: captions, or timed speech-to-text when a video has none, are chunked into keywords, sentences and paragraphs, and the texts are embedded. Image lane: FFmpeg samples the 720p video&#x27;s keyframes, every 3 to 7 seconds; frames in sponsor segments and dark frames are filtered out, pixel near-copies are removed, and the remaining frames are embedded. The lanes merge where each frame is matched to text spoken from 5 seconds before to 2 seconds after it. Frames are ranked by relative score separately for keywords, sentences and paragraphs, and the three rankings are fused with reciprocal rank fusion. Walking that order, frames within 10 seconds of any pick and embedding near-copies are skipped, and the rest fill collages six per page. A dashed lane below runs without an image embedding model or a timed transcript: it takes one frame per time slot of 12 seconds or longer, skips frames within 10 seconds of the last pick and pixel repeats of it, and fills the same collages. All three dedup stops are orange: pixel similarity for candidates and repeats, embedding similarity for ranked picks.</desc>
+  <desc id="desc">How the vision command picks frames, drawn as stops on two lanes that merge. Each stop carries a chip naming its layer: chunk, sample, filter, dedup, embed, match, rank, rerank or select. Text lane: captions, or timed speech-to-text when a video has none, are chunked into keywords, sentences and paragraphs, and the texts are embedded. Image lane: FFmpeg samples the 720p video&#x27;s keyframes, every 3 to 7 seconds; frames in sponsor segments and dark frames are filtered out, near-copies by pixel SSIM are removed, and the remaining frames are embedded. The lanes merge where each frame is matched to text spoken from 5 seconds before to 2 seconds after it. Frames are ranked by relative score separately for keywords, sentences and paragraphs, and the three rankings are fused with reciprocal rank fusion. Walking that order, frames within 10 seconds of any pick and embedding near-copies are skipped, and the rest fill collages six per page. A dashed lane below runs without an image embedding model or a timed transcript: it takes one frame per time slot of 12 seconds or longer, skips frames within 10 seconds of the last pick and pixel SSIM repeats of any earlier pick, and fills the same collages. All three dedup stops are orange: pixel SSIM for candidates and repeats, embedding similarity for ranked picks.</desc>
   <defs>
     <style>
       /* Barlow (c) 2017 The Barlow Project Authors, SIL Open Font License 1.1; Basic Latin subset. */
@@ -90,7 +90,7 @@ Evidence (re-verify on update):
     <text x="268" y="410" class="name" text-anchor="middle">Sponsors</text>
     <text x="268" y="428" class="count" text-anchor="middle">and dark frames</text>
     <text x="362" y="410" class="name" text-anchor="middle">Near-copies</text>
-    <text x="362" y="428" class="count" text-anchor="middle">by pixels</text>
+    <text x="362" y="428" class="count" text-anchor="middle">pixel SSIM</text>
     <text x="460" y="410" class="name" text-anchor="middle">Embed</text>
     <text x="460" y="428" class="count" text-anchor="middle">frames</text>
     <text x="574" y="335" class="name" text-anchor="middle">Match</text>
@@ -108,7 +108,7 @@ Evidence (re-verify on update):
     <text x="856" y="550" class="name" text-anchor="middle">10 s gap</text>
     <text x="856" y="568" class="count" text-anchor="middle">to the last pick</text>
     <text x="950" y="550" class="name" text-anchor="middle">Repeats</text>
-    <text x="950" y="568" class="count" text-anchor="middle">by pixels</text>
+    <text x="950" y="568" class="count" text-anchor="middle">pixel SSIM</text>
     <text x="1050" y="550" class="name" text-anchor="middle">Collages</text>
     <text x="1050" y="568" class="count" text-anchor="middle">6 per page</text>
     <text x="668" y="377" class="name" text-anchor="middle">Rank</text>

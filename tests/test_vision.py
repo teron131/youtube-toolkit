@@ -186,13 +186,14 @@ def test_slot_selection_skips_empty_slots_close_picks_and_repeats(tmp_path) -> N
     candidates = [
         store_frame(tmp_path, 6, first),
         store_frame(tmp_path, 13, second),
+        store_frame(tmp_path, 30, second),
         store_frame(tmp_path, 42, first),
         store_frame(tmp_path, 54, third),
     ]
     frames = frame_selection.select_slot_frames(
         candidates, duration=60, max_frames=96, min_gap_seconds=10
     )
-    assert [frame.timestamp_seconds for frame in frames] == [6, 54]
+    assert [frame.timestamp_seconds for frame in frames] == [6, 30, 54]
 
 
 def test_download_video_for_vision_uses_bounded_720p_video_only_preset(

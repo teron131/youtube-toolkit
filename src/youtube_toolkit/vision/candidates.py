@@ -16,7 +16,7 @@ from ..ffmpeg_utils import decode_keyframes
 # On four graded videos, 10-15 s slots caught about 95% of key moments while 20 s slots caught 77%; 12 s keeps a margin before that drop.
 SLOT_SECONDS = 12
 REPEAT_SIMILARITY = 0.95
-MIN_THUMBNAIL_CONTRAST = 3.0
+MIN_CONTRAST = 3.0
 THUMBNAIL_WIDTH = 160
 THUMBNAIL_HEIGHT = 90
 DETECTOR_WIDTH = 320
@@ -76,7 +76,7 @@ def collect_candidates(
     """
     directory.mkdir(parents=True, exist_ok=True)
     candidates = []
-    recent: list[tuple[float, _ThumbnailStats]] = []
+    recent: list[tuple[float, _PixelStats]] = []
     for start in range(0, math.ceil(duration), DECODE_CHUNK_SECONDS):
         times, images = decode_keyframes(
             video_path, start, min(duration, start + DECODE_CHUNK_SECONDS), ffmpeg_path
@@ -90,19 +90,17 @@ def collect_candidates(
                 else float(cv2.absdiff(previous, gray).mean() / 255)
             )
             previous = gray
-            if gray.std() < MIN_THUMBNAIL_CONTRAST or any(
+            if gray.std() < MIN_CONTRAST or any(
                 left <= timestamp < right for left, right in excluded_intervals
             ):
                 continue
             recent = [
-                (time, thumbnail)
-                for time, thumbnail in recent
+                (time, stats)
+                for time, stats in recent
                 if timestamp - time <= DUPLICATE_LOOKBACK_SECONDS
             ]
-            thumbnail = _ThumbnailStats.from_gray(gray)
-            similarity = max(
-                (thumbnail.similarity(other) for _, other in recent), default=0.0
-            )
+            stats = _PixelStats.from_gray(gray)
+            similarity = max((stats.ssim(other) for _, other in recent), default=0.0)
             if similarity >= CANDIDATE_DUPLICATE_SIMILARITY:
                 continue
             scores = VisualScores(
@@ -111,7 +109,7 @@ def collect_candidates(
             path = directory / f"frame-{round(timestamp * 1000):09d}.jpg"
             Image.fromarray(images[index]).save(path, "JPEG", quality=95)
             candidates.append(StoredFrame(timestamp, path, scores))
-            recent.append((timestamp, thumbnail))
+            recent.append((timestamp, stats))
     return sorted(candidates, key=lambda frame: frame.timestamp_seconds)
 
 
@@ -124,7 +122,7 @@ def select_slot_frames(
 ) -> list[DecodedFrame]:
     """Split the video into equal slots of at least SLOT_SECONDS, never more than max_frames, and take the candidate nearest each slot's middle.
 
-    A slot yields nothing when it has no candidates, when its pick falls within min_gap_seconds of the previous pick, or when its pick looks like the previous pick, so static stretches give fewer frames.
+    A slot yields nothing when it has no candidates, when its pick falls within min_gap_seconds of the previous pick, or when its pick looks like any earlier pick, so static stretches and screens that return give fewer frames.
     """
     count = min(max_frames, math.ceil(duration / SLOT_SECONDS))
     width = duration / count
@@ -138,7 +136,7 @@ def select_slot_frames(
         ):
             picks[slot] = candidate
     selected: list[DecodedFrame] = []
-    previous: _ThumbnailStats | None = None
+    selected_stats: list[_PixelStats] = []
     for slot in sorted(picks):
         pick = picks[slot]
         if (
@@ -148,11 +146,11 @@ def select_slot_frames(
         ):
             continue
         frame = pick.load()
-        thumbnail = _ThumbnailStats.from_gray(_gray(frame.image))
-        if previous is not None and thumbnail.similarity(previous) >= REPEAT_SIMILARITY:
+        stats = _PixelStats.from_gray(_gray(frame.image))
+        if any(stats.ssim(other) >= REPEAT_SIMILARITY for other in selected_stats):
             continue
         selected.append(frame)
-        previous = thumbnail
+        selected_stats.append(stats)
     return selected
 
 
@@ -163,7 +161,7 @@ def _gray(image: np.ndarray) -> np.ndarray:
 
 
 @dataclass(frozen=True, slots=True)
-class _ThumbnailStats:
+class _PixelStats:
     """Prepare block moments and centered pixels once for repeated duplicate comparisons."""
 
     mean: np.ndarray
@@ -171,7 +169,7 @@ class _ThumbnailStats:
     centered_blocks: np.ndarray
 
     @classmethod
-    def from_gray(cls, gray: np.ndarray) -> _ThumbnailStats:
+    def from_gray(cls, gray: np.ndarray) -> _PixelStats:
         image = cv2.resize(
             gray, (THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT), interpolation=cv2.INTER_AREA
         )
@@ -190,7 +188,7 @@ class _ThumbnailStats:
             centered_blocks=blocks - mean[:, None],
         )
 
-    def similarity(self, other: _ThumbnailStats) -> float:
+    def ssim(self, other: _PixelStats) -> float:
         """Approximate FFmpeg SSIM over non-overlapping eight-pixel blocks from prepared moments."""
         covariance = (self.centered_blocks * other.centered_blocks).mean(axis=1)
         luminance_constant = (0.01 * 255) ** 2
