@@ -51,7 +51,7 @@ def sample_vision(
     local_only: bool = False,
     auto_clean: bool = True,
 ) -> dict[str, Any]:
-    """With a timed transcript, the first available route ranks the video's keyframes: the decision model with DECISION_API_KEY, Gemini embeddings with a Gemini key, then the local embedding model when its libraries are installed; without any, time slots spread a local selection across the same keyframes.
+    """The first available route ranks the video's keyframes: the decision model with DECISION_API_KEY, which reads the timed speech around each frame when there is any, then Gemini embeddings with a Gemini key or the local embedding model when its libraries are installed, both of which need timed speech; otherwise time slots spread a local selection across the same keyframes.
 
     local_only skips both APIs and speech-to-text, so the local model ranks against captions only.
     The transcript is fetched only when a model will rank, since time slots never read it; without captions it comes from configured speech-to-text, which ranks frames only when the route reports timing.
@@ -107,6 +107,11 @@ def sample_vision(
     decision_warning = None
     document: TranscriptDocument | None = None
     targets = []
+    fallback = (
+        "the decision model judges frames without speech"
+        if route == "decision"
+        else "using visual sampling"
+    )
     if route:
         try:
             document = fetch_transcript(
@@ -114,9 +119,8 @@ def sample_vision(
             )
         # Speech-to-text reports a recording without speech as ValueError, which leaves nothing to rank against, as missing captions do.
         except (RuntimeError, ValueError) as error:
-            transcript_warning = f"No timed transcript; using visual sampling: {error}"
+            transcript_warning = f"No timed transcript; {fallback}: {error}"
         else:
-            # Every route needs timed text to place frames in; the decision route reads the lines themselves.
             targets = prepare_targets(document, excluded_intervals)
             if not targets:
                 untimed = all(
@@ -124,13 +128,14 @@ def sample_vision(
                     for chunk in document.chunks
                 )
                 transcript_warning = (
-                    "Speech-to-text gave no timestamps; using visual sampling."
+                    f"Speech-to-text gave no timestamps; {fallback}."
                     if untimed
-                    else "No usable timed transcript passages; using visual sampling."
+                    else f"Too little timed speech to rank against; {fallback}."
                 )
     elif not local_only:
         embedding_warning = "Set DECISION_API_KEY or GEMINI_API_KEY, or install youtube-toolkit[embeddings], for relevance ranking; using local frame selection."
-    if not targets:
+    # Embedding routes match frames to timed speech, so without it they fall back to time slots; the decision model can judge a frame by its image alone.
+    if not targets and route != "decision":
         route = None
     selection_mode = {
         "decision": "decision",
@@ -173,8 +178,10 @@ def sample_vision(
                 excluded_intervals=excluded_intervals,
             )
             selected = []
-            if route == "decision" and document is not None and decision:
-                decisions, decision_usage = score_frames(candidates, document, decision)
+            if route == "decision" and decision:
+                decisions, decision_usage = score_frames(
+                    candidates, document if targets else None, decision
+                )
                 if unscored := decisions.count(None):
                     decision_warning = f"{unscored} of {len(candidates)} frames went unscored after repeated decision host errors and were left out of the ranking."
                 passing = {

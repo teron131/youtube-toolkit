@@ -6,6 +6,7 @@ from bisect import bisect_right
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 import math
+import re
 from typing import Literal
 
 from yake import KeywordExtractor
@@ -17,6 +18,14 @@ SENTENCE_SECONDS = 15
 PARAGRAPH_SECONDS = 45
 SENTENCE_ENDINGS = (".", "?", "!", "\u3002", "\uff1f", "\uff01")
 ENGLISH_HESITATIONS = frozenset({"uh", "um", "hmm"})
+# Captions mark sounds as [Music] or [Applause], music with note symbols, and speaker changes with >>.
+SOUND_ANNOTATION = re.compile(r"\[[^\]]*\]|[\u266a\u266b]|>>")
+# Each CJK character counts as a word, since those scripts put no spaces between words.
+SPEECH_WORD = re.compile(
+    r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]|[^\W_]+"
+)
+# Narration runs 100-200 words a minute; under 10 is automatic captioning hearing words in music, such as "Heat. Heat." over a wordless film, not speech to rank against.
+MIN_SPEECH_WORDS_PER_MINUTE = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,9 +44,20 @@ def prepare_targets(
 
     Caption chunks are indivisible, so an unusually long chunk can exceed the nominal grouping duration.
     Excluded intervals are half-open and remove chunks by their start time.
+    Sound annotations are not speech, and a video of known duration with under MIN_SPEECH_WORDS_PER_MINUTE of speech has no targets at all.
     """
     segments = _segments(document, excluded_intervals)
-    if not segments:
+    duration = document.metadata.duration_seconds
+    words = sum(
+        len(SPEECH_WORD.findall(chunk.text))
+        for segment in segments
+        for chunk in segment
+    )
+    if not segments or (
+        duration is not None
+        and math.isfinite(duration)
+        and words < MIN_SPEECH_WORDS_PER_MINUTE * duration / 60
+    ):
         return []
     sentences: list[TextTarget] = []
     paragraphs: list[TextTarget] = []
@@ -73,15 +93,19 @@ def _segments(
             if math.isfinite(boundary) and 0 < boundary < bound
         }
     )
+    spoken = (
+        replace(chunk, text=" ".join(SOUND_ANNOTATION.sub(" ", chunk.text).split()))
+        for chunk in document.chunks
+    )
     chunks = sorted(
         (
             chunk
-            for chunk in document.chunks
+            for chunk in spoken
             if math.isfinite(chunk.start_seconds)
             and math.isfinite(chunk.end_seconds)
             and 0 <= chunk.start_seconds < bound
             and chunk.end_seconds > chunk.start_seconds
-            and chunk.text.strip()
+            and chunk.text
             and not any(
                 start <= chunk.start_seconds < end for start, end in excluded_intervals
             )

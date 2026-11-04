@@ -123,6 +123,25 @@ def test_untimed_invalid_and_excluded_captions_do_not_create_targets():
     assert prepare_targets(document(chunks, duration=10), [(2, 3)]) == []
 
 
+def test_sound_annotations_and_sparse_words_are_not_speech():
+    music = [
+        TranscriptChunk(2, 4, "[bell]"),
+        TranscriptChunk(5, 7, ">> [music] ♪"),
+        TranscriptChunk(36, 39, "Heat. Heat."),
+    ]
+    assert prepare_targets(document(music, duration=77), []) == []
+    narrated = [
+        TranscriptChunk(0, 4, "[Music] The lens bends light"),
+        TranscriptChunk(4, 8, "into a sharp image on the sensor."),
+    ]
+    sentences = [
+        target.text
+        for target in prepare_targets(document(narrated, duration=60), [])
+        if target.level == "sentence"
+    ]
+    assert sentences == ["The lens bends light into a sharp image on the sensor."]
+
+
 def test_keyword_extraction_preserves_default_stopwords_and_parent_timing(monkeypatch):
     calls = []
 

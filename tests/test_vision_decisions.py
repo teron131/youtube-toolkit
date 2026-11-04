@@ -1,4 +1,4 @@
-"""Decision scoring shows each frame with the speech around it, combines added information and illustration into one score, and fails whole rather than ranking a partial set."""
+"""Decision scoring shows each frame with the speech around it, or says there is none, takes the best of shown information, illustration, and visual worth as one score, and fails whole rather than ranking a partial set."""
 
 from PIL import Image
 import pytest
@@ -39,13 +39,13 @@ def frame(tmp_path, timestamp: float, shade: int = 0) -> StoredFrame:
     return StoredFrame(timestamp, path, VisualScores(1.0, 0.0, 0.0))
 
 
-def result(has_information, unspoken, illustrative, *, cost=0.00001):
+def result(has_information, illustrative, visual, *, cost=0.00001):
     answers = {
         name: {"type": "noul", "noul": value}
         for name, value in (
             ("has_information", has_information),
-            ("unspoken", unspoken),
             ("illustrative", illustrative),
+            ("visual", visual),
         )
         if value is not None
     }
@@ -61,17 +61,30 @@ def test_context_marks_the_frame_among_lines_within_thirty_seconds() -> None:
     assert "Far" not in text
 
 
-def test_score_takes_information_the_speech_leaves_out_or_weighted_illustration(
+def test_context_says_so_when_no_speech_is_near_the_frame() -> None:
+    assert decisions._context(DOCUMENT, 195).endswith(f"\n{decisions.NO_SPEECH}")
+    assert decisions._context(None, 90).endswith(f"\n{decisions.NO_SPEECH}")
+    music = TranscriptDocument(
+        DOCUMENT.metadata, "en", "subtitles", [TranscriptChunk(85, 95, "[Music]")]
+    )
+    assert decisions._context(music, 90).endswith(f"\n{decisions.NO_SPEECH}")
+
+
+def test_score_takes_the_best_of_information_illustration_and_visual_worth_counted_in_full_without_speech(
     monkeypatch, tmp_path
 ) -> None:
-    frames = [frame(tmp_path, t, shade) for t, shade in ((10, 0), (20, 120), (30, 250))]
+    frames = [
+        frame(tmp_path, t, shade)
+        for t, shade in ((10, 0), (20, 120), (30, 250), (195, 60))
+    ]
     # Requests run concurrently, so each result is keyed by the frame image it answers.
     results = {
-        image_asset(frames[0].image_path)["data_base64"]: result(0.9, 0.8, 0.1),
-        image_asset(frames[1].image_path)["data_base64"]: result(0.9, 0.1, 0.9),
+        image_asset(frames[0].image_path)["data_base64"]: result(0.72, 0.1, 0.2),
+        image_asset(frames[1].image_path)["data_base64"]: result(0.1, 0.9, 0.3),
         image_asset(frames[2].image_path)["data_base64"]: result(
-            None, 0.9, 0.0, cost=None
+            None, 0.0, 0.9, cost=None
         ),
+        image_asset(frames[3].image_path)["data_base64"]: result(None, 0.0, 0.9),
     }
     calls = []
 
@@ -85,8 +98,13 @@ def test_score_takes_information_the_speech_leaves_out_or_weighted_illustration(
     monkeypatch.setattr(decisions, "decide_each", decide_each)
     scored, usage = decisions.score_frames(frames, DOCUMENT, CONFIG)
 
-    assert [item and round(item.score, 2) for item in scored] == [0.72, 0.36, 0.0]
-    assert usage == decisions.DecisionUsage(300, None)
+    assert [item and round(item.score, 2) for item in scored] == [
+        0.72,
+        0.36,
+        0.36,
+        0.9,
+    ]
+    assert usage == decisions.DecisionUsage(400, None)
     config, questions, inputs = calls[0]
     assert config == CONFIG
     assert inputs[0].state[1] == decisions.FRAME_ASSET
@@ -102,7 +120,7 @@ def test_a_few_failed_frames_go_unscored_but_more_fail_the_scoring(
     monkeypatch.setattr(
         decisions,
         "decide_each",
-        lambda *_args, **_kwargs: [failed, *[result(0.9, 0.9, 0.0)] * 9],
+        lambda *_args, **_kwargs: [failed, *[result(0.9, 0.0, 0.0)] * 9],
     )
     scored, usage = decisions.score_frames(frames, DOCUMENT, CONFIG)
     assert scored[0] is None
@@ -112,7 +130,11 @@ def test_a_few_failed_frames_go_unscored_but_more_fail_the_scoring(
     monkeypatch.setattr(
         decisions,
         "decide_each",
-        lambda *_args, **_kwargs: [failed, failed, *[result(0.9, 0.9, 0.0)] * 8],
+        lambda *_args, **_kwargs: [
+            failed,
+            failed,
+            *[result(0.9, 0.0, 0.0)] * 8,
+        ],
     )
     with pytest.raises(DecisionError, match=r"2 of 10 frame requests failed.*HTTP 503"):
         decisions.score_frames(frames, DOCUMENT, CONFIG)

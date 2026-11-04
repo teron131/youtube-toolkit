@@ -392,8 +392,16 @@ def semantic_video(monkeypatch, tmp_path):
         "en",
         "subtitles",
         [
-            TranscriptChunk(5, 15, "The circuit diagram explains the current."),
-            TranscriptChunk(108, 116, "The meter shows the current."),
+            TranscriptChunk(
+                5,
+                15,
+                "The circuit diagram explains how the current flows from the battery through each resistor.",
+            ),
+            TranscriptChunk(
+                108,
+                116,
+                "The meter shows the current dropping as we add a second resistor in series.",
+            ),
         ],
     )
     monkeypatch.setattr(workflow, "YtDlpClient", Client)
@@ -512,7 +520,7 @@ def test_decision_model_ranks_first_with_a_decision_key(
         assert config == DECISION
         assert document.chunks
         scored = [
-            FrameDecision(0.9, 0.9, 1.0, 0.2),
+            FrameDecision(0.9, 0.9, 0.2, 0.3),
             FrameDecision(MIN_SCORE / 2, 0.1, 0.1, 0.1),
         ][: len(frames)]
         return scored, DecisionUsage(200, 0.00002)
@@ -537,8 +545,8 @@ def test_decision_model_ranks_first_with_a_decision_key(
         "selection_rank": 1,
         "score": 0.9,
         "has_information": 0.9,
-        "unspoken": 1.0,
         "illustrative": 0.2,
+        "visual": 0.3,
     }
 
 
@@ -546,7 +554,7 @@ def test_unscored_frames_are_left_out_with_a_warning(
     monkeypatch, semantic_video
 ) -> None:
     def score(frames, document, config):
-        return [FrameDecision(0.9, 0.9, 1.0, 0.2), None], DecisionUsage(100, None)
+        return [FrameDecision(0.9, 0.9, 0.2, 0.3), None], DecisionUsage(100, None)
 
     monkeypatch.setattr(workflow, "decision_config", lambda: DECISION)
     monkeypatch.setattr(workflow, "score_frames", score)
@@ -602,8 +610,16 @@ def test_missing_captions_fall_back_to_speech_to_text_for_ranking(
         raise CaptionTranscriptUnavailable("No captions")
 
     segments = [
-        TranscriptChunk(5, 15, "The circuit diagram explains the current."),
-        TranscriptChunk(108, 116, "The meter shows the current."),
+        TranscriptChunk(
+            5,
+            15,
+            "The circuit diagram explains how the current flows from the battery through each resistor.",
+        ),
+        TranscriptChunk(
+            108,
+            116,
+            "The meter shows the current dropping as we add a second resistor in series.",
+        ),
     ]
     text = " ".join(segment.text for segment in segments)
 
