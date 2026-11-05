@@ -1,6 +1,8 @@
-"""Vision text targets preserve caption timing and every caption word at each matching scale."""
+"""Vision text targets filter sound annotations and sparse speech while preserving usable caption timing and words at each matching scale."""
 
 import math
+
+import pytest
 
 from youtube_toolkit.schemas import (
     TranscriptChunk,
@@ -121,6 +123,34 @@ def test_untimed_invalid_and_excluded_captions_do_not_create_targets():
         TranscriptChunk(2, 3, "Excluded"),
     ]
     assert prepare_targets(document(chunks, duration=10), [(2, 3)]) == []
+
+
+def test_sound_annotations_and_sparse_words_are_not_speech():
+    music = [
+        TranscriptChunk(2, 4, "[bell]"),
+        TranscriptChunk(5, 7, ">> [music] ♪"),
+        TranscriptChunk(36, 39, "Heat. Heat."),
+    ]
+    assert prepare_targets(document(music, duration=77), []) == []
+    narrated = [
+        TranscriptChunk(0, 4, "[Music] The lens bends light"),
+        TranscriptChunk(4, 8, "into a sharp image on the sensor."),
+    ]
+    sentences = [
+        target.text
+        for target in prepare_targets(document(narrated, duration=60), [])
+        if target.level == "sentence"
+    ]
+    assert sentences == ["The lens bends light into a sharp image on the sensor."]
+
+
+@pytest.mark.parametrize(
+    "text", ["AI讓我們看見更多細節", "讓我們看見更多細節AI", "AI 讓我們看見更多細節"]
+)
+def test_mixed_latin_and_cjk_speech_meets_the_minimum_without_spaces(text):
+    chunks = [TranscriptChunk(0, 60, text)]
+    targets = prepare_targets(document(chunks, duration=60, language="zh-Hant"), [])
+    assert [target.text for target in targets if target.level == "sentence"] == [text]
 
 
 def test_keyword_extraction_preserves_default_stopwords_and_parent_timing(monkeypatch):

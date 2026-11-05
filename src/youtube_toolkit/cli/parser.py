@@ -44,7 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(
         dest="command", required=True, parser_class=YoutubeArgumentParser
     )
-    _add_video_commands(subparsers)
+    _add_video_command(subparsers)
     _add_search_command(subparsers)
     _add_channel_command(subparsers)
     _add_setup_command(subparsers)
@@ -53,95 +53,91 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _add_video_commands(subparsers: argparse._SubParsersAction) -> None:
-    metadata_parser = subparsers.add_parser(
-        "metadata", help="Fetch video metadata JSON"
+def _add_video_command(subparsers: argparse._SubParsersAction) -> None:
+    video_parser = subparsers.add_parser(
+        "video",
+        help="Fetch a video's metadata, transcript, comments, or screenshots",
+        description="Each part flag adds that part to the output, keyed by part; with none, the output holds the metadata alone. Options for a part require its flag.",
     )
-    metadata_parser.add_argument(
+    video_parser.add_argument(
         "video_ref", metavar="url", help="YouTube video URL or ID"
     )
-    metadata_parser.set_defaults(handler=commands.metadata)
-
-    comments_parser = subparsers.add_parser(
-        "comments",
-        help="Search text within a video's Top comments",
-        description="Search a bounded sample of top-level comments by a case-insensitive literal keyword or phrase. Results alternate between YouTube's Top order and highest likes, skipping duplicates; replies are excluded.",
+    transcript = video_parser.add_argument_group("transcript")
+    transcript.add_argument(
+        "--transcript",
+        action="store_true",
+        help="Captions, or speech-to-text when configured and there are none",
     )
-    comments_parser.add_argument(
-        "video_ref", metavar="url", help="YouTube video URL or ID"
-    )
-    comments_parser.add_argument(
-        "query",
-        nargs="?",
-        default="",
-        help="Text to find in comments; omit or pass an empty string to return the full fetched sample",
-    )
-    comments_parser.add_argument(
-        "--limit",
-        type=int,
-        default=DEFAULT_COMMENT_LIMIT,
-        help=f"Maximum top-level comments to fetch before filtering (1-{MAX_COMMENT_LIMIT}; default: %(default)s)",
-    )
-    comments_parser.set_defaults(handler=commands.comments)
-
-    transcript_parser = subparsers.add_parser(
-        "transcript", help="Fetch a normalized transcript"
-    )
-    transcript_parser.add_argument(
-        "video_ref", metavar="url", help="YouTube video URL or ID"
-    )
-    transcript_parser.add_argument(
+    transcript.add_argument(
         "--timestamps",
         action="store_true",
-        help="Return timed transcript chunks instead of one text string",
+        default=None,
+        help="Timed transcript chunks instead of one text string",
     )
-    transcript_parser.add_argument(
+    transcript.add_argument(
         "--export",
         action="store_true",
-        help="Write metadata and transcript to a title-and-channel .txt file in the working directory",
+        default=None,
+        help="Write metadata and transcript to a title-and-channel .txt file in the working directory; with --vision, a .md file beside the collages instead",
     )
-    transcript_parser.add_argument(
+    transcript.add_argument(
         "--force",
         action="store_true",
         help="Replace an existing transcript export; requires --export",
     )
-    transcript_parser.set_defaults(handler=commands.transcript)
-
-    vision_parser = subparsers.add_parser(
-        "vision", help="Generate timestamped visual-context collages"
+    vision = video_parser.add_argument_group("vision")
+    vision.add_argument(
+        "--vision",
+        action="store_true",
+        help="Timestamped screenshot collages, ranked against the transcript when a model is set up",
     )
-    vision_parser.add_argument(
-        "video_ref", metavar="url", help="YouTube video URL or ID"
-    )
-    vision_parser.add_argument(
+    vision.add_argument(
         "--max-frames",
         type=int,
-        default=DEFAULT_VISION_MAX_FRAMES,
-        help=f"Maximum output screenshots (1-{MAX_VISION_FRAMES}; default: %(default)s); candidate coverage is independent",
+        help=f"Maximum output screenshots (1-{MAX_VISION_FRAMES}; default: {DEFAULT_VISION_MAX_FRAMES}); candidate coverage is independent",
     )
-    vision_parser.add_argument(
+    vision.add_argument(
         "--min-similarity",
         type=float,
         help="Minimum raw cosine for semantic matches (default: the cutoff measured for the ranking embedding model)",
     )
-    vision_parser.add_argument(
+    vision.add_argument(
         "--min-gap",
         type=float,
-        default=DEFAULT_VISION_MIN_GAP_SECONDS,
-        help="Minimum seconds between retained frames (default: %(default)s)",
+        help=f"Minimum seconds between retained frames (default: {DEFAULT_VISION_MIN_GAP_SECONDS})",
     )
-    vision_parser.add_argument(
+    vision.add_argument(
         "--local-only",
         action="store_true",
-        help="Skip Gemini and speech-to-text: rank against captions with the local embedding model when installed, otherwise pick evenly spaced frames",
+        default=None,
+        help="Skip the decision model, Gemini, and speech-to-text: rank against captions with the local embedding model when installed, otherwise pick evenly spaced frames",
     )
-    vision_parser.add_argument(
+    vision.add_argument(
         "--auto-clean",
         action=argparse.BooleanOptionalAction,
-        default=True,
         help="Delete the downloaded video and candidate frames after processing (default: on)",
     )
-    vision_parser.set_defaults(handler=commands.vision)
+    comments = video_parser.add_argument_group("comments")
+    comments.add_argument(
+        "--comments",
+        nargs="?",
+        const="",
+        metavar="QUERY",
+        type=normalize_arg_string,
+        help="Top-level comments containing QUERY as a case-insensitive literal; without QUERY, the whole sample. Results alternate between YouTube's Top order and highest likes; replies are excluded.",
+    )
+    comments.add_argument(
+        "--comment-limit",
+        type=int,
+        help=f"Top-level comments to fetch before filtering (1-{MAX_COMMENT_LIMIT}; default: {DEFAULT_COMMENT_LIMIT})",
+    )
+    metadata = video_parser.add_argument_group("metadata")
+    metadata.add_argument(
+        "--metadata",
+        action="store_true",
+        help="Video facts, including the description and chapters",
+    )
+    video_parser.set_defaults(handler=commands.video)
 
 
 def _add_search_command(subparsers: argparse._SubParsersAction) -> None:

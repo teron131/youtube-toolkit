@@ -19,31 +19,46 @@ OPENROUTER = DecisionConfig(
 
 
 @pytest.mark.parametrize(
-    ("config", "payload", "tokens", "cost"),
+    ("config", "payload", "tokens", "cost", "seconds"),
     [
         (
             VERCEL,
             {
-                "usage": {"input_tokens": 353},
-                "provider_metadata": {"gateway": {"cost": "0.00000353"}},
+                "usage": {"input_tokens": 353, "output_tokens": 3},
+                "provider_metadata": {
+                    "gateway": {
+                        "cost": "0.00000353",
+                        # A provider that failed before the one that answered.
+                        "routing": {
+                            "modelAttempts": [
+                                {
+                                    "providerAttempts": [
+                                        {"startTime": 1000, "endTime": 1140},
+                                        {"startTime": 1150, "endTime": 1512},
+                                    ]
+                                }
+                            ]
+                        },
+                    }
+                },
             },
-            353,
+            (353, 3),
             0.00000353,
+            0.502,
         ),
         (
             OPENROUTER,
             {"usage": {"input_tokens": 90, "cost": 0.0000009}},
-            90,
+            (90, None),
             0.0000009,
+            None,
         ),
-        (OPENROUTER, {}, None, None),
+        (OPENROUTER, {}, (None, None), None, None),
     ],
 )
 def test_request_carries_typesafe_shape_and_reads_each_hosts_usage(
-    monkeypatch, tmp_path, config, payload, tokens, cost
+    monkeypatch, config, payload, tokens, cost, seconds
 ) -> None:
-    image = tmp_path / "frame.jpg"
-    image.write_bytes(b"jpeg bytes")
     sent = []
 
     def urlopen(request, timeout):
@@ -56,11 +71,11 @@ def test_request_carries_typesafe_shape_and_reads_each_hosts_usage(
         config,
         state=["Transcript", "frame"],
         questions={"shown": {"type": "noul", "instructions": "Is it shown?"}},
-        assets={"frame": decisions.image_asset(image)},
+        assets={"frame": decisions.image_asset(b"jpeg bytes")},
     )
 
     assert result == decisions.DecisionResult(
-        {"shown": {"type": "noul", "noul": 0.9}}, tokens, cost
+        {"shown": {"type": "noul", "noul": 0.9}}, *tokens, cost, seconds
     )
     request = sent[0]
     assert request.full_url == config.url
@@ -111,7 +126,7 @@ def test_decide_each_retries_failures_once_after_the_burst_and_keeps_order(
         # "flaky" fails only its first request; "bad" fails every one.
         if state == "bad" or (state == "flaky" and calls.count("flaky") == 1):
             raise decisions.DecisionError("HTTP 503")
-        return decisions.DecisionResult({"q": {"noul": state}}, 1, None)
+        return decisions.DecisionResult({"q": {"noul": state}}, 1, 1, None, None)
 
     monkeypatch.setattr(decisions, "decide", decide)
     rows = decisions.decide_each(
@@ -121,7 +136,7 @@ def test_decide_each_retries_failures_once_after_the_burst_and_keeps_order(
     )
 
     assert rows[:2] == [
-        decisions.DecisionResult({"q": {"noul": state}}, 1, None)
+        decisions.DecisionResult({"q": {"noul": state}}, 1, 1, None, None)
         for state in ("ok", "flaky")
     ]
     assert isinstance(rows[2], decisions.DecisionError)

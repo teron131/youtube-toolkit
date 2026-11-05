@@ -1,12 +1,14 @@
-"""CLI command handlers: each translates parsed arguments into one retrieval workflow and returns its JSON payload."""
+"""CLI command handlers: each translates parsed arguments into retrieval workflows and returns their JSON payload."""
 
 from __future__ import annotations
 
 import argparse
 from dataclasses import asdict
+from functools import cache, partial
+from pathlib import Path
 from typing import Any
 
-from ..schemas import VideoMetadata
+from ..schemas import TranscriptDocument, VideoMetadata
 from ..search import (
     ChannelTarget,
     ChunkResult,
@@ -23,9 +25,11 @@ from ..stt import (
 from ..transcript import (
     TranscriptExportResult,
     fetch_transcript,
+    write_markdown_export,
     write_transcript_export,
 )
 from ..youtube import (
+    DEFAULT_COMMENT_LIMIT,
     ChannelOptions,
     YtDlpClient,
     fetch_channel_videos,
@@ -33,44 +37,98 @@ from ..youtube import (
 )
 from .health import require_vision
 
+# CLI option names that apply only with their part's flag, and the sample_vision parameter each vision option sets.
+VISION_OPTIONS = {
+    "max_frames": "max_frames",
+    "min_similarity": "min_similarity",
+    "min_gap": "min_gap_seconds",
+    "local_only": "local_only",
+    "auto_clean": "auto_clean",
+}
+PART_OPTIONS = {
+    "transcript": ("timestamps", "export"),
+    "vision": tuple(VISION_OPTIONS),
+    "comments": ("comment_limit",),
+}
 
-def transcript(
-    args: argparse.Namespace,
-) -> str | list[dict[str, Any]] | TranscriptExportResult:
+
+def video(args: argparse.Namespace) -> dict[str, Any]:
+    """Parts run fastest first and share one metadata fetch; comments alone skip it, since their own request carries the title."""
+    for part, options in PART_OPTIONS.items():
+        for option in options:
+            if getattr(args, option) is not None and getattr(args, part) in (
+                None,
+                False,
+            ):
+                raise ValueError(f"--{option.replace('_', '-')} requires --{part}")
     if args.force and not args.export:
         raise ValueError("--force requires --export")
-    document = fetch_transcript(args.video_ref)
+    if args.vision:
+        require_vision()
+    client = YtDlpClient()
+    payload = cache(partial(client.metadata, args.video_ref))
+    shown_alone = not (args.transcript or args.comments is not None or args.vision)
+    metadata = (
+        asdict(VideoMetadata.from_yt_dlp(payload()))
+        if args.metadata or shown_alone
+        else None
+    )
+    document = (
+        fetch_transcript(args.video_ref, client=client, metadata=payload())
+        if args.transcript
+        else None
+    )
+    comments = (
+        search_comments(
+            args.video_ref,
+            args.comments,
+            limit=DEFAULT_COMMENT_LIMIT
+            if args.comment_limit is None
+            else args.comment_limit,
+        )
+        if args.comments is not None
+        else None
+    )
+    vision = None
+    if args.vision:
+        from ..vision import sample_vision
+
+        vision = sample_vision(
+            args.video_ref,
+            metadata=payload(),
+            document=document,
+            **{
+                parameter: getattr(args, option)
+                for option, parameter in VISION_OPTIONS.items()
+                if getattr(args, option) is not None
+            },
+        )
+    parts = {
+        "transcript": None if document is None else _transcript(document, args, vision),
+        "vision": vision,
+        "comments": comments,
+        "metadata": metadata,
+    }
+    return {name: part for name, part in parts.items() if part is not None}
+
+
+def _transcript(
+    document: TranscriptDocument,
+    args: argparse.Namespace,
+    vision: dict[str, Any] | None,
+) -> str | list[dict[str, Any]] | TranscriptExportResult:
+    timestamps = bool(args.timestamps)
+    if args.export and vision is not None:
+        return write_markdown_export(
+            document, Path(vision["directory"]), timestamps=timestamps
+        )
     if args.export:
         return write_transcript_export(
-            document,
-            timestamps=args.timestamps,
-            force=args.force,
+            document, timestamps=timestamps, force=args.force
         )
-    if args.timestamps:
+    if timestamps:
         return [asdict(chunk) for chunk in document.chunks]
     return document.text
-
-
-def metadata(args: argparse.Namespace) -> dict[str, Any]:
-    return asdict(VideoMetadata.from_yt_dlp(YtDlpClient().metadata(args.video_ref)))
-
-
-def vision(args: argparse.Namespace) -> dict[str, Any]:
-    require_vision()
-    from ..vision import sample_vision
-
-    return sample_vision(
-        args.video_ref,
-        max_frames=args.max_frames,
-        min_similarity=args.min_similarity,
-        min_gap_seconds=args.min_gap,
-        local_only=args.local_only,
-        auto_clean=args.auto_clean,
-    )
-
-
-def comments(args: argparse.Namespace) -> dict[str, Any]:
-    return search_comments(args.video_ref, args.query, limit=args.limit)
 
 
 def channel(args: argparse.Namespace) -> dict[str, Any]:

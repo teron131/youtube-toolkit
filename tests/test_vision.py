@@ -32,7 +32,7 @@ from youtube_toolkit.schemas import (
 from youtube_toolkit.transcript import fetch_transcript
 from youtube_toolkit.vision import candidates as frame_selection, workflow
 from youtube_toolkit.vision.decisions import (
-    MIN_SCORE,
+    DecisionRanking,
     DecisionUsage,
     FrameDecision,
 )
@@ -280,53 +280,53 @@ def test_vision_download_failures_become_user_facing_runtime_errors(
         )
 
 
-def test_video_vision_cli_routes_to_public_extraction(monkeypatch) -> None:
-    args = build_parser().parse_args(
-        [
-            "vision",
-            VIDEO_ID,
-            "--max-frames",
-            "12",
-            "--min-similarity",
-            "0.4",
-            "--min-gap",
-            "5",
-            "--local-only",
-            "--no-auto-clean",
-        ]
-    )
-    expected = {
-        "video_id": VIDEO_ID,
-        "frame_count": 1,
-        "timestamps_seconds": [8.0],
-        "collage_paths": ["/example/page1.jpg"],
-    }
-    monkeypatch.setattr(
-        vision,
-        "sample_vision",
-        lambda video_ref, *, max_frames, min_similarity, min_gap_seconds, local_only, auto_clean: (
-            expected
-            if video_ref == VIDEO_ID
-            and max_frames == 12
-            and min_similarity == 0.4
-            and min_gap_seconds == 5
-            and local_only
-            and not auto_clean
-            else {}
+@pytest.mark.parametrize(
+    ("arguments", "options"),
+    [
+        ([], {}),
+        (
+            [
+                "--max-frames",
+                "12",
+                "--min-similarity",
+                "0.4",
+                "--min-gap",
+                "5",
+                "--local-only",
+                "--no-auto-clean",
+            ],
+            {
+                "max_frames": 12,
+                "min_similarity": 0.4,
+                "min_gap_seconds": 5,
+                "local_only": True,
+                "auto_clean": False,
+            },
         ),
-    )
+    ],
+)
+def test_video_vision_passes_only_given_options_to_extraction(
+    monkeypatch, arguments, options
+) -> None:
+    """Options left out keep sample_vision's own defaults, such as 96 frames."""
+    payload = {"id": VIDEO_ID, "duration": 120}
+    received = []
 
-    assert args.handler is commands.vision
-    assert commands.vision(args) == expected
+    class Client:
+        def metadata(self, _ref):
+            return payload
 
+    def sample_vision(video_ref, **kwargs):
+        received.append((video_ref, kwargs))
+        return {"frame_count": 1}
 
-def test_vision_defaults_allow_multiple_six_frame_pages() -> None:
-    args = build_parser().parse_args(["vision", VIDEO_ID])
-    assert args.max_frames == 96
-    assert args.min_similarity is None
-    assert args.min_gap == 10
-    assert args.local_only is False
-    assert args.auto_clean is True
+    monkeypatch.setattr(commands, "YtDlpClient", Client)
+    monkeypatch.setattr(commands, "require_vision", lambda: None)
+    monkeypatch.setattr(vision, "sample_vision", sample_vision)
+    args = build_parser().parse_args(["video", VIDEO_ID, "--vision", *arguments])
+
+    assert commands.video(args) == {"vision": {"frame_count": 1}}
+    assert received == [(VIDEO_ID, {"metadata": payload, "document": None, **options})]
 
 
 @pytest.mark.parametrize(
@@ -392,8 +392,16 @@ def semantic_video(monkeypatch, tmp_path):
         "en",
         "subtitles",
         [
-            TranscriptChunk(5, 15, "The circuit diagram explains the current."),
-            TranscriptChunk(108, 116, "The meter shows the current."),
+            TranscriptChunk(
+                5,
+                15,
+                "The circuit diagram explains how the current flows from the battery through each resistor.",
+            ),
+            TranscriptChunk(
+                108,
+                116,
+                "The meter shows the current dropping as we add a second resistor in series.",
+            ),
         ],
     )
     monkeypatch.setattr(workflow, "YtDlpClient", Client)
@@ -504,21 +512,46 @@ def test_explicit_local_only_skips_configured_embedding_client(
     assert result["embedding_usage"] is None
 
 
+def test_candidates_drop_a_cross_fade_between_their_neighbours(
+    monkeypatch, tmp_path
+) -> None:
+    before, after, later = chart(), chart((50, 40, 30, 20)), chart((10, 50, 10, 50))
+    fade = ((before.astype(np.uint16) + after) // 2).astype(np.uint8)
+
+    def decode(_path, _start, _stop, _ffmpeg):
+        return [5.0, 15.0, 25.0, 35.0], np.stack([before, fade, after, later])
+
+    monkeypatch.setattr(frame_selection, "decode_keyframes", decode)
+    directory = tmp_path / "candidates"
+    candidates = frame_selection.collect_candidates(
+        tmp_path / "video.mp4",
+        "ffmpeg",
+        duration=40,
+        directory=directory,
+        excluded_intervals=[],
+    )
+    assert [frame.timestamp_seconds for frame in candidates] == [5.0, 25.0, 35.0]
+    assert sorted(directory.iterdir()) == [frame.image_path for frame in candidates]
+
+
 @pytest.mark.parametrize("local_only", [False, True])
 def test_decision_model_ranks_first_with_a_decision_key(
     monkeypatch, semantic_video, local_only
 ) -> None:
-    def score(frames, document, config):
+    warning = "1 of 2 frame requests failed after repeated decision host errors, so those frames were left out of the ranking."
+
+    def rank(frames, document, config):
         assert config == DECISION
         assert document.chunks
-        scored = [
-            FrameDecision(0.9, 0.9, 1.0, 0.2),
-            FrameDecision(MIN_SCORE / 2, 0.1, 0.1, 0.1),
-        ][: len(frames)]
-        return scored, DecisionUsage(200, 0.00002)
+        assert len(frames) == 2
+        return DecisionRanking(
+            [(0, FrameDecision(0.95, 0.9, 0.3, 0.4, 0.2))],
+            DecisionUsage(200, 6, 0.00002, 3.1),
+            warning,
+        )
 
     monkeypatch.setattr(workflow, "decision_config", lambda: DECISION)
-    monkeypatch.setattr(workflow, "score_frames", score)
+    monkeypatch.setattr(workflow, "rank_frames", rank)
     monkeypatch.setattr(
         workflow, "GeminiEmbeddingClient", lambda _key: pytest.fail("no embeddings")
     )
@@ -529,30 +562,49 @@ def test_decision_model_ranks_first_with_a_decision_key(
         return
     assert result["selection_mode"] == "decision"
     assert result["decision_model"] == DEFAULT_DECISION_MODEL
-    assert result["decision_usage"] == {"input_tokens": 200, "cost_usd": 0.00002}
+    assert result["decision_usage"] == {
+        "input_tokens": 200,
+        "output_tokens": 6,
+        "cost_usd": 0.00002,
+        "provider_seconds": 3.1,
+    }
     assert result["min_similarity"] is None
-    assert result["decision_warning"] is None
+    assert result["decision_warning"] == warning
     assert result["timestamps_seconds"] == [12]
     assert result["frames"][0]["relevance"] == {
         "selection_rank": 1,
-        "score": 0.9,
+        "score": 0.95,
         "has_information": 0.9,
-        "unspoken": 1.0,
+        "visual": 0.3,
+        "impressive": 0.4,
         "illustrative": 0.2,
     }
 
 
-def test_unscored_frames_are_left_out_with_a_warning(
+def test_a_given_transcript_is_ranked_against_without_fetching(
     monkeypatch, semantic_video
 ) -> None:
-    def score(frames, document, config):
-        return [FrameDecision(0.9, 0.9, 1.0, 0.2), None], DecisionUsage(100, None)
+    given = workflow.fetch_transcript(VIDEO_ID)
+    ranked_against = []
 
+    def rank(frames, document, config):
+        ranked_against.append(document)
+        return DecisionRanking(
+            [(0, FrameDecision(0.95, 0.9, 0.3, 0.4, 0.2))],
+            DecisionUsage(None, None, None, None),
+            None,
+        )
+
+    monkeypatch.setattr(
+        workflow, "fetch_transcript", lambda *_args, **_kwargs: pytest.fail("fetch")
+    )
     monkeypatch.setattr(workflow, "decision_config", lambda: DECISION)
-    monkeypatch.setattr(workflow, "score_frames", score)
-    result = workflow.sample_vision(VIDEO_ID)
-    assert result["timestamps_seconds"] == [12]
-    assert result["decision_warning"].startswith("1 of 2 frames went unscored")
+    monkeypatch.setattr(workflow, "rank_frames", rank)
+    result = workflow.sample_vision(VIDEO_ID, document=given)
+    assert ranked_against == [given]
+    assert [Path(path).parent for path in result["collage_paths"]] == [
+        Path(result["directory"])
+    ]
 
 
 @pytest.mark.parametrize("local_only", [False, True])
@@ -602,8 +654,16 @@ def test_missing_captions_fall_back_to_speech_to_text_for_ranking(
         raise CaptionTranscriptUnavailable("No captions")
 
     segments = [
-        TranscriptChunk(5, 15, "The circuit diagram explains the current."),
-        TranscriptChunk(108, 116, "The meter shows the current."),
+        TranscriptChunk(
+            5,
+            15,
+            "The circuit diagram explains how the current flows from the battery through each resistor.",
+        ),
+        TranscriptChunk(
+            108,
+            116,
+            "The meter shows the current dropping as we add a second resistor in series.",
+        ),
     ]
     text = " ".join(segment.text for segment in segments)
 

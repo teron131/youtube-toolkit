@@ -33,7 +33,7 @@ from ..youtube import YtDlpClient
 from ..youtube.caption import extract_sponsorblock_intervals
 from .candidates import collect_candidates, select_ranked_frames, select_slot_frames
 from .collages import render_timestamped_collages
-from .decisions import MIN_SCORE, DecisionUsage, score_frames
+from .decisions import DecisionUsage, rank_frames
 from .reranking import rerank_frames
 from .text import prepare_targets
 
@@ -50,11 +50,13 @@ def sample_vision(
     min_gap_seconds: float = DEFAULT_VISION_MIN_GAP_SECONDS,
     local_only: bool = False,
     auto_clean: bool = True,
+    metadata: dict[str, Any] | None = None,
+    document: TranscriptDocument | None = None,
 ) -> dict[str, Any]:
-    """With a timed transcript, the first available route ranks the video's keyframes: the decision model with DECISION_API_KEY, Gemini embeddings with a Gemini key, then the local embedding model when its libraries are installed; without any, time slots spread a local selection across the same keyframes.
+    """The first available route ranks the video's keyframes: the decision model with DECISION_API_KEY, which judges frames by their pictures and, when there is timed speech, by whether they show what is being said, then Gemini embeddings with a Gemini key or the local embedding model when its libraries are installed, both of which need timed speech; otherwise time slots spread a local selection across the same keyframes.
 
     local_only skips both APIs and speech-to-text, so the local model ranks against captions only.
-    The transcript is fetched only when a model will rank, since time slots never read it; without captions it comes from configured speech-to-text, which ranks frames only when the route reports timing.
+    The transcript is fetched only when a model will rank and no document is given, since time slots never read it; without captions it comes from configured speech-to-text, which ranks frames only when the route reports timing.
     min_similarity applies to embedding routes, and None means the cutoff measured for the ranking model.
     max_frames limits the output, never the candidate search; ranking errors propagate.
     Collages go to a new directory in the working directory's archive.
@@ -72,7 +74,8 @@ def sample_vision(
     if ffmpeg_path is None:
         raise RuntimeError("ffmpeg is required for video vision extraction")
     client = YtDlpClient()
-    metadata = client.metadata(video_ref)
+    if metadata is None:
+        metadata = client.metadata(video_ref)
     fetched_video_id = require_video_id(str(metadata.get("id") or ""))
     if fetched_video_id != video_id:
         raise ValueError(
@@ -105,18 +108,25 @@ def sample_vision(
     transcript_warning = None
     embedding_warning = None
     decision_warning = None
-    document: TranscriptDocument | None = None
     targets = []
+    fallback = (
+        "the decision model judges frames without speech"
+        if route == "decision"
+        else "using visual sampling"
+    )
     if route:
-        try:
-            document = fetch_transcript(
-                video_ref, allow_stt=not local_only, client=client, metadata=metadata
-            )
-        # Speech-to-text reports a recording without speech as ValueError, which leaves nothing to rank against, as missing captions do.
-        except (RuntimeError, ValueError) as error:
-            transcript_warning = f"No timed transcript; using visual sampling: {error}"
-        else:
-            # Every route needs timed text to place frames in; the decision route reads the lines themselves.
+        if document is None:
+            try:
+                document = fetch_transcript(
+                    video_ref,
+                    allow_stt=not local_only,
+                    client=client,
+                    metadata=metadata,
+                )
+            # Speech-to-text reports a recording without speech as ValueError, which leaves no speech context, as missing captions do.
+            except (RuntimeError, ValueError) as error:
+                transcript_warning = f"No timed transcript; {fallback}: {error}"
+        if document is not None:
             targets = prepare_targets(document, excluded_intervals)
             if not targets:
                 untimed = all(
@@ -124,13 +134,14 @@ def sample_vision(
                     for chunk in document.chunks
                 )
                 transcript_warning = (
-                    "Speech-to-text gave no timestamps; using visual sampling."
+                    f"Speech-to-text gave no timestamps; {fallback}."
                     if untimed
-                    else "No usable timed transcript passages; using visual sampling."
+                    else f"Too little timed speech to rank against; {fallback}."
                 )
     elif not local_only:
         embedding_warning = "Set DECISION_API_KEY or GEMINI_API_KEY, or install youtube-toolkit[embeddings], for relevance ranking; using local frame selection."
-    if not targets:
+    # Embedding routes match frames to timed speech, so without it they fall back to time slots; the decision model can judge a frame by its image alone.
+    if not targets and route != "decision":
         route = None
     selection_mode = {
         "decision": "decision",
@@ -173,25 +184,15 @@ def sample_vision(
                 excluded_intervals=excluded_intervals,
             )
             selected = []
-            if route == "decision" and document is not None and decision:
-                decisions, decision_usage = score_frames(candidates, document, decision)
-                if unscored := decisions.count(None):
-                    decision_warning = f"{unscored} of {len(candidates)} frames went unscored after repeated decision host errors and were left out of the ranking."
-                passing = {
-                    index: decision
-                    for index, decision in enumerate(decisions)
-                    if decision is not None and decision.score >= MIN_SCORE
-                }
-                order = sorted(
-                    passing,
-                    key=lambda index: (
-                        -passing[index].score,
-                        candidates[index].timestamp_seconds,
-                    ),
+            if route == "decision" and decision:
+                ranking = rank_frames(
+                    candidates, document if targets else None, decision
                 )
+                decision_usage, decision_warning = ranking.usage, ranking.warning
+                ranked = dict(ranking.frames)
                 picks = select_ranked_frames(
                     candidates,
-                    order,
+                    [index for index, _ in ranking.frames],
                     max_frames=max_frames,
                     min_gap_seconds=min_gap_seconds,
                 )
@@ -199,7 +200,7 @@ def sample_vision(
                     selected.append(frame)
                     relevance[frame.timestamp_seconds] = {
                         "selection_rank": rank,
-                        **asdict(passing[index]),
+                        **asdict(ranked[index]),
                     }
             elif route in ("gemini", "local"):
                 if candidates:
@@ -264,6 +265,7 @@ def sample_vision(
         "min_gap_seconds": min_gap_seconds,
         "frame_count": len(selected),
         "timestamps_seconds": [frame.timestamp_seconds for frame in selected],
+        "directory": str(destination),
         "collage_paths": [str(path) for path in collage_paths],
         "media_dir": None if auto_clean else str(work_dir),
         "frames": frame_results,

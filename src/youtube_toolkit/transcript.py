@@ -1,4 +1,4 @@
-"""Transcript retrieval policy: prefer captions, fall back to cloud and then local speech-to-text when allowed and set up, convert Chinese text to Taiwan Traditional, archive each fresh document, and export readable text with overwrite protection."""
+"""Transcript retrieval policy: prefer captions, fall back to cloud and then local speech-to-text when allowed and set up, convert Chinese text to Taiwan Traditional, archive each fresh document, and export readable text with overwrite protection, or as Markdown into a given directory."""
 
 from __future__ import annotations
 
@@ -44,18 +44,6 @@ SUBTITLE_LANGUAGES = (
     "zh-CN",
     "zh",
 )
-TRANSCRIPT_LANGUAGE_LABELS = {
-    "en-orig": "English",
-    "en": "English",
-    "zh-Hant": "Chinese (Traditional)",
-    "zh-HK": "Chinese (Hong Kong)",
-    "yue-HK": "Cantonese",
-    "yue": "Cantonese",
-    "zh-TW": "Chinese (Traditional)",
-    "zh-Hans": "Chinese (Simplified)",
-    "zh-CN": "Chinese (Simplified)",
-    "zh": "Chinese",
-}
 TRANSCRIPT_SOURCE_LABELS: dict[TranscriptSource, str] = {
     "subtitles": "manual captions",
     "automatic_captions": "automatic captions",
@@ -144,6 +132,14 @@ def write_transcript_export(
     }
 
 
+def write_markdown_export(
+    document: TranscriptDocument, directory: Path, *, timestamps: bool
+) -> TranscriptExportResult:
+    path = directory / Path(_export_filename(document.metadata)).with_suffix(".md")
+    path.write_text(_render_markdown(document, timestamps=timestamps), encoding="utf-8")
+    return {"video_id": document.metadata.video_id, "path": str(path)}
+
+
 def _stt_transcriber() -> Callable[[Path], SpeechTranscription] | None:
     if cloud_stt_configured():
         return transcribe_in_cloud
@@ -196,34 +192,44 @@ def _render_export(
     *,
     timestamps: bool,
 ) -> str:
-    metadata = document.metadata
-    lines = [f"Title: {metadata.title or metadata.video_id}"]
-    if metadata.channel:
-        lines.append(f"Author: {metadata.channel}")
-    channel = metadata.channel_handle or metadata.channel_id
-    if channel:
-        lines.append(f"Channel: {channel}")
-    if metadata.upload_date:
-        lines.append(f"Published: {metadata.upload_date}")
-    if metadata.duration_seconds is not None:
-        lines.append(f"Duration: {_format_timestamp(metadata.duration_seconds)}")
-    if metadata.view_count is not None:
-        lines.append(f"Views: {metadata.view_count:,}")
-    if metadata.like_count is not None:
-        lines.append(f"Likes: {metadata.like_count:,}")
-    lines.append(f"URL: {metadata.url}")
-    if document.language != "speech-to-text":
-        language = TRANSCRIPT_LANGUAGE_LABELS.get(document.language, document.language)
-        lines.append(f"Language: {language}")
-    lines.append(f"Transcript source: {TRANSCRIPT_SOURCE_LABELS[document.source]}")
-
+    lines = [f"{name}: {value}" for name, value in _header_fields(document)]
     transcript = document.text
     if timestamps:
-        transcript = "\n".join(
-            f"[{_format_timestamp(chunk.start_seconds)}] {chunk.text}"
-            for chunk in document.chunks
-        )
+        transcript = "\n".join(_timed_line(chunk) for chunk in document.chunks)
     return "\n".join([*lines, "", transcript]).rstrip() + "\n"
+
+
+def _render_markdown(document: TranscriptDocument, *, timestamps: bool) -> str:
+    (_, title), *fields = _header_fields(document)
+    header = "\n".join(f"- {name}: {value}" for name, value in fields)
+    # Timed lines are separate paragraphs, since Markdown joins adjacent lines into one.
+    body = (
+        [_timed_line(chunk) for chunk in document.chunks]
+        if timestamps
+        else [document.text]
+    )
+    return "\n\n".join([f"# {title}", header, *body]) + "\n"
+
+
+def _header_fields(document: TranscriptDocument) -> list[tuple[str, str]]:
+    metadata = document.metadata
+    fields = [("Title", metadata.title or metadata.video_id)]
+    if metadata.channel:
+        fields.append(("Author", metadata.channel))
+    channel = metadata.channel_handle or metadata.channel_id
+    if channel:
+        fields.append(("Channel", channel))
+    if metadata.upload_date:
+        fields.append(("Published", metadata.upload_date))
+    if metadata.duration_seconds is not None:
+        fields.append(("Duration", _format_timestamp(metadata.duration_seconds)))
+    fields.append(("URL", metadata.url))
+    fields.append(("Transcript source", TRANSCRIPT_SOURCE_LABELS[document.source]))
+    return fields
+
+
+def _timed_line(chunk: TranscriptChunk) -> str:
+    return f"[{_format_timestamp(chunk.start_seconds)}] {chunk.text}"
 
 
 def _format_timestamp(seconds: float) -> str:

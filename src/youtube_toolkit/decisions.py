@@ -9,7 +9,6 @@ import base64
 from dataclasses import dataclass
 import http.client
 import json
-from pathlib import Path
 from typing import Any
 import urllib.error
 import urllib.request
@@ -40,19 +39,22 @@ class DecisionInput:
 
 @dataclass(frozen=True, slots=True)
 class DecisionResult:
-    """Answers are keyed by question name in TypeSafe's shape; token counts and cost are None when the host does not report them."""
+    """Answers are keyed by question name in TypeSafe's shape; token counts, cost, and provider time are None when the host does not report them."""
 
     answers: dict[str, dict[str, Any]]
     input_tokens: int | None
+    output_tokens: int | None
     cost_usd: float | None
+    # The gateway's calls to model providers, summed over its attempts; the trip to the gateway and its own work are left out.
+    provider_seconds: float | None
 
 
-def image_asset(path: Path) -> dict[str, str]:
+def image_asset(jpeg: bytes) -> dict[str, str]:
     """A JPEG for the `assets` map; models read it where its key appears as a whole string in `state`."""
     return {
         "type": "image",
         "format": "jpg",
-        "data_base64": base64.b64encode(path.read_bytes()).decode("ascii"),
+        "data_base64": base64.b64encode(jpeg).decode("ascii"),
     }
 
 
@@ -152,11 +154,21 @@ def _parse(config: DecisionConfig, payload: object) -> DecisionResult:
     usage = payload.get("usage") or {}
     gateway = (payload.get("provider_metadata") or {}).get("gateway") or {}
     cost = gateway.get("cost", usage.get("cost"))
-    tokens = usage.get("input_tokens")
+    input_tokens = usage.get("input_tokens")
+    output_tokens = usage.get("output_tokens")
+    attempts = [
+        attempt
+        for model in (gateway.get("routing") or {}).get("modelAttempts") or []
+        for attempt in model["providerAttempts"]
+    ]
     return DecisionResult(
         answers,
-        tokens if isinstance(tokens, int) else None,
+        input_tokens if isinstance(input_tokens, int) else None,
+        output_tokens if isinstance(output_tokens, int) else None,
         None if cost is None else float(cost),
+        sum(attempt["endTime"] - attempt["startTime"] for attempt in attempts) / 1000
+        if attempts
+        else None,
     )
 
 

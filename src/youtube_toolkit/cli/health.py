@@ -58,7 +58,7 @@ def embedding_health() -> str:
 
 
 def vision_health() -> str:
-    """Name the route `youtube vision` would rank with, in its order of preference."""
+    """Name the route `youtube video --vision` would rank with, in its order of preference."""
     if not vision_available():
         return "not installed"
     if decision := config.decision_config():

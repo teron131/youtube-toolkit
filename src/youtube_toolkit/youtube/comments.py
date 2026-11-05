@@ -24,7 +24,7 @@ def search_comments(
     The archive retains the unfiltered sample in Top order using the same lean fields as the output.
     """
     if not 1 <= limit <= MAX_COMMENT_LIMIT:
-        raise ValueError(f"--limit must be between 1 and {MAX_COMMENT_LIMIT}")
+        raise ValueError(f"--comment-limit must be between 1 and {MAX_COMMENT_LIMIT}")
     payload = YtDlpClient().comments(video_ref, limit=limit)
     comments = payload.get("comments") or []
     document = {

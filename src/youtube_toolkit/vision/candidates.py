@@ -1,4 +1,4 @@
-"""Collect a video's keyframes as disk-backed candidates, then select from them best first for decision ranking or, without a ranking model, in equal time slots, dropping pixel repeats either way."""
+"""Collect a video's keyframes as disk-backed candidates, minus near-copies and cross-fades, then select from them best first for decision ranking or, without a ranking model, in equal time slots, dropping pixel repeats either way."""
 
 from __future__ import annotations
 
@@ -25,6 +25,10 @@ DECODE_CHUNK_SECONDS = 60
 DUPLICATE_LOOKBACK_SECONDS = 10
 # Stricter than REPEAT_SIMILARITY because a candidate dropped here reaches neither selection; both selections drop the remaining duplicates later.
 CANDIDATE_DUPLICATE_SIMILARITY = 0.98
+# A candidate that a mix of the candidates on either side fits with under this share of the nearer one's pixel error is a cross-fade or fade; on four test videos 0.4 flagged only transitions, a mid-zoom frame, and a repeated title card, while the closest clean photo fit at 0.56.
+CROSS_FADE_FIT_RATIO = 0.4
+# Outside this mix range the frame is mostly one neighbour, which the fit ratio already compares against.
+CROSS_FADE_MIX_RANGE = (0.2, 0.8)
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,10 +76,10 @@ def collect_candidates(
     """Collect the video's keyframes as candidates independently of the final frame budget.
 
     YouTube encodes place a keyframe every three to seven seconds, so keyframes give an even grid without decoding the frames between them.
-    Only nearby duplicates by pixel similarity are dropped; this appearance check does not guarantee semantic equivalence.
+    Nearby duplicates by pixel similarity are dropped, as are cross-fades between the candidates on either side; these appearance checks do not guarantee semantic equivalence.
     """
     directory.mkdir(parents=True, exist_ok=True)
-    candidates = []
+    candidates: list[tuple[StoredFrame, np.ndarray]] = []
     recent: list[tuple[float, _PixelStats]] = []
     for start in range(0, math.ceil(duration), DECODE_CHUNK_SECONDS):
         times, images = decode_keyframes(
@@ -104,13 +108,27 @@ def collect_candidates(
             if similarity >= CANDIDATE_DUPLICATE_SIMILARITY:
                 continue
             scores = VisualScores(
-                float(cv2.Laplacian(gray, cv2.CV_64F).var()), change, similarity
+                clarity=float(cv2.Laplacian(gray, cv2.CV_64F).var()),
+                neighbor_change=change,
+                similarity_to_previous=similarity,
             )
             path = directory / f"frame-{round(timestamp * 1000):09d}.jpg"
             Image.fromarray(images[index]).save(path, "JPEG", quality=95)
-            candidates.append(StoredFrame(timestamp, path, scores))
+            candidates.append((StoredFrame(timestamp, path, scores), _thumbnail(gray)))
             recent.append((timestamp, stats))
-    return sorted(candidates, key=lambda frame: frame.timestamp_seconds)
+    candidates.sort(key=lambda candidate: candidate[0].timestamp_seconds)
+    cross_fades = {
+        index
+        for index in range(1, len(candidates) - 1)
+        if _is_cross_fade(
+            candidates[index][1], candidates[index - 1][1], candidates[index + 1][1]
+        )
+    }
+    for index in cross_fades:
+        candidates[index][0].image_path.unlink()
+    return [
+        frame for index, (frame, _) in enumerate(candidates) if index not in cross_fades
+    ]
 
 
 def select_slot_frames(
@@ -188,6 +206,12 @@ def _gray(image: np.ndarray) -> np.ndarray:
     )
 
 
+def _thumbnail(gray: np.ndarray) -> np.ndarray:
+    return cv2.resize(
+        gray, (THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT), interpolation=cv2.INTER_AREA
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _PixelStats:
     """Prepare block moments and centered pixels once for repeated duplicate comparisons."""
@@ -198,9 +222,7 @@ class _PixelStats:
 
     @classmethod
     def from_gray(cls, gray: np.ndarray) -> _PixelStats:
-        image = cv2.resize(
-            gray, (THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT), interpolation=cv2.INTER_AREA
-        )
+        image = _thumbnail(gray)
         usable_height = THUMBNAIL_HEIGHT - THUMBNAIL_HEIGHT % 8
         usable_width = THUMBNAIL_WIDTH - THUMBNAIL_WIDTH % 8
         blocks = (
@@ -230,3 +252,23 @@ class _PixelStats:
             )
         )
         return float(similarity.mean())
+
+
+def _is_cross_fade(frame: np.ndarray, before: np.ndarray, after: np.ndarray) -> bool:
+    """Fit the frame's thumbnail as mix * before + (1 - mix) * after by least squares and compare the fit's error with the nearer neighbour's."""
+    frame, before, after = (
+        thumbnail.astype(np.float32).ravel() for thumbnail in (frame, before, after)
+    )
+    difference = before - after
+    spread = float(difference @ difference)
+    if spread == 0:
+        return False
+    mix = float((frame - after) @ difference) / spread
+    if not CROSS_FADE_MIX_RANGE[0] < mix < CROSS_FADE_MIX_RANGE[1]:
+        return False
+    residual = frame - (mix * before + (1 - mix) * after)
+    nearest = min(
+        float(np.square(frame - before).mean()),
+        float(np.square(frame - after).mean()),
+    )
+    return float(np.square(residual).mean()) < CROSS_FADE_FIT_RATIO**2 * nearest

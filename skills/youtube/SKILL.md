@@ -5,90 +5,74 @@ description: Use the YouTube toolkit to search videos, list channel uploads, sea
 
 # YouTube
 
-Run the installed `youtube` CLI from the task's directory: every retrieval fetches fresh data and archives a copy under `.cache/youtube-toolkit/` there. To test changes to the toolkit itself, run `uv run youtube` in its checkout. Commands print JSON to stdout, except `doctor`, and errors to stderr.
+Run the installed `youtube` CLI from the task's directory; it fetches fresh data and archives each response under `.cache/youtube-toolkit/` there. To test changes to the toolkit itself, run `uv run youtube` in its checkout. Commands print JSON to stdout, except `doctor`, and errors to stderr.
 
-Pass a video as its 11-character ID or any YouTube URL: watch, `youtu.be`, Shorts, embed, or live. Always quote URLs; zsh rejects an unquoted `?`, and any shell cuts the command at `&`.
+Pass a video as its 11-character ID or any YouTube URL, and always quote URLs: zsh rejects an unquoted `?`, and any shell cuts the command at `&`. An ID starting with `-` reads as an option, so pass it as a URL.
 
-## Retrieval
-
-```bash
-youtube metadata "https://www.youtube.com/watch?v=VIDEO_ID"
-youtube transcript VIDEO_ID
-youtube transcript VIDEO_ID --timestamps
-youtube transcript VIDEO_ID --export
-youtube vision VIDEO_ID --max-frames 24
-youtube channel @OpenAI --last 5
-youtube channel @OpenAI --days 7
-youtube doctor
-```
-
-`metadata` returns video facts, including the description, thumbnail URL, and `chapters`, each with `title`, `start_seconds`, and a nullable `end_seconds`; the list is empty when there are none.
-
-`transcript` prints the text as one JSON string, so `jq -r .` gives plain text; `--timestamps` prints chunks with `start_seconds`, `end_seconds`, and `text`. Manual English or Chinese subtitles come first, starting with the video's language, then original-language automatic captions. Machine translations are never used, Chinese becomes Taiwan Traditional, and SponsorBlock spans are removed. Without usable captions, speech-to-text runs if configured; a failed caption download stays an error.
-
-`--export` writes metadata and text to `<normalized-title>_<normalized-channel>.txt` in the working directory and prints its path; add `--timestamps` for timing or `--force` to overwrite. Stdout text stops at 400,000 characters without a marker, so read the export or archive when a long video's full text matters.
-
-`channel` lists recent uploads: `--last N`, 10 by default, or `--days N`, a UTC cutoff that fetches each video's metadata, adds `upload_date`, and drops videos it cannot date; `--last` then sizes the listing checked.
-
-## Comments
-
-Use `comments` to find a keyword or phrase in a video's comments, passing a query when the task asks about a topic, claim, or audience reaction.
+## Videos
 
 ```bash
-youtube comments VIDEO_ID "pricing"
-youtube comments VIDEO_ID "training data" --limit 250
-youtube comments VIDEO_ID "pricing" | jq '.comments[] | select((.like_count // 0) >= 10)'
+youtube video URL_OR_ID --transcript --vision --comments "QUERY" --metadata
+youtube video URL_OR_ID
 ```
 
-It samples top-level comments in YouTube's Top order, without replies: 100 by default, 1–1000 with `--limit`. The query is one case-insensitive literal substring, like `rg -i -F`, with no regex or OR. It never fetches more to find matches, so raise `--limit` for coverage; omit the query only when the whole sample is wanted. Matches alternate between Top order and most likes. Output holds only `title`, `url`, and `comments` with `text` and `like_count`, `null` when unavailable. An empty list means no match in the sample, not on the whole video. The unfiltered sample is archived under `.cache/youtube-toolkit/comments/`.
+`video` prints the parts its flags name, keyed as `transcript`, `vision`, `comments`, and `metadata`, or the metadata alone without flags; combine flags to get several parts from one call. Options for a part, such as `--timestamps`, require its flag.
 
-## Visual context
+### Transcript
 
-Use `vision` when pictures add context. It needs the vision extra and `ffmpeg`, accepts videos up to two hours, and deletes its download, capped at 500 MiB, afterwards. It prints frame timestamps and absolute paths to collages under `.cache/youtube-toolkit/vision/<datetime>-<video-id>/`, six 960×540 frames per page in time order. `--max-frames` takes 1–96, default 96, and never shrinks the candidate pool or embedding work.
+```bash
+youtube video URL_OR_ID --transcript
+youtube video URL_OR_ID --transcript --timestamps
+youtube video URL_OR_ID --transcript --export
+```
 
-With `DECISION_API_KEY` and a timed transcript, a decision model (`DECISION_MODEL`, default Perplexity Decider Flash) at `DECISION_URL` (default Vercel AI Gateway's TypeSafe endpoint; OpenRouter's `https://openrouter.ai/api/alpha/decisions` also works) ranks first: each candidate, shown with the transcript within 30 seconds, is scored on whether it shows information the narrator leaves unsaid, or the specific thing being described. Frames scoring under 0.30, mostly talking heads and transitions, are dropped, and the rest are taken best first, skipping frames within `--min-gap` of a pick or pixel repeats of any pick. An hour-long video's 690 candidates took about 30 seconds and cost about 1.8 cents in testing.
+`--transcript` gives the text as one string, so `jq -r .transcript` prints it; `--timestamps` gives chunks with `start_seconds`, `end_seconds`, and `text`. It prefers manual subtitles, then automatic captions, never machine translations, and falls back to speech-to-text, when configured, if there are none. Stdout stops at 400,000 characters, so for long videos use `--export`, which writes a text file to the working directory, and `transcript` holds its path.
 
-Without that key, with `GEMINI_API_KEY`, or an `EMBEDDING_API_KEY` whose settings point at `gemini-embedding-2` on `generativelanguage.googleapis.com`, and a timed transcript, Gemini Embedding 2 ranks the video's keyframes against its keywords, sentences, and paragraphs; without a key, the local embedding model does when the embeddings extra is installed. A frame matches only text spoken from five seconds before to two seconds after it, so silent stretches yield no ranked frames. Picks skip frames within `--min-gap`, default 10 seconds, or with image-embedding cosine at the model's duplicate cutoff (0.96 for Gemini and the local model) or more to an earlier pick, so the result can be shorter than `--max-frames`. `--min-similarity`, for embedding routes only and defaulting to the model's cutoff (0.30 Gemini, 0.059 local), is a raw-cosine floor that is never lowered to fill the count. The transcript is the one `transcript` returns, so a video without captions runs speech-to-text.
+### Vision
 
-`--local-only` skips the decision model, Gemini, and speech-to-text, so the local model ranks against captions only. Without a ranking model or a timed transcript, vision picks the keyframe nearest the middle of each time slot of at least 12 seconds, skipping picks within the gap of the previous one or repeating any earlier one. `selection_mode`, `decision`, `semantic`, or `visual`, and the warnings say which ran and why. A rejected Gemini key fails within seconds, before the download, with Google's reason code; a rejected decision key fails after the download, once every frame request is refused. Frames whose requests keep failing get a second round, then are left out of the ranking and counted in `decision_warning`; the command fails only when more than 10% go unscored.
+```bash
+youtube video URL_OR_ID --vision --max-frames 24
+youtube video URL_OR_ID --transcript --vision --export --timestamps
+```
 
-Each frame has its timestamp, raw `visual_scores`, and, for ranked picks, `relevance`: decision picks carry rank, score, and the probabilities for `has_information`, `unspoken`, and `illustrative`, and embedding picks carry rank, RRF score, and matched texts with raw and relative cosine. `decision_usage` reports input tokens and the host's reported cost. Embedding scores are measurements, not confidence, so read the collages alongside the transcript. Each embedding model has its own similarity scale: unrelated frames and speech score about 0.33 with Gemini but 0.13 locally, so compare scores only within one model and give `--min-similarity` on that model's scale. `--no-auto-clean` keeps the video and candidates and reports them as `media_dir`.
+Use `--vision` when pictures add context. It downloads the video, up to two hours, picks screenshots, and gives their timestamps and paths to collages of six frames; read the collages alongside the transcript. `--max-frames` takes 1–96, default 96, and the result can be shorter. A run usually takes a few minutes, mostly the download. With `--transcript`, vision ranks against that same transcript, and `--export` writes it as Markdown beside the collages.
 
-Expect about 20 seconds of CPU for a 30-minute video. Network time dominates: the 720p download, about 40–150 MB, and when ranking, the candidate upload, about 25–70 MB, which takes half a minute on a fast connection and several minutes on a slow one. The local model replaces that upload with about 0.3 seconds per candidate on an Apple M-series GPU, so 1–2 minutes for a 30-minute video's 250–330 candidates and about 3.5 minutes for an hour, plus about 20 seconds to load the model; the first run also downloads its 2.9 GB, and CPU-only machines are untested and slower.
+### Comments
+
+```bash
+youtube video URL_OR_ID --comments "QUERY"
+youtube video URL_OR_ID --comments "QUERY" --comment-limit 250
+```
+
+`--comments` samples top-level comments in YouTube's Top order, 100 by default and up to 1000 with `--comment-limit`, and keeps those containing the query as a case-insensitive literal substring, or all of them without a query. An empty list means no match in the sample, not on the whole video, so raise `--comment-limit` for coverage.
+
+### Metadata
+
+Metadata includes the description and `chapters`.
 
 ## Search
 
 ```bash
 youtube search "langgraph tutorial" --limit 5 --max-duration 20:00
 youtube search "reasoning models" --channels @OpenAI --channels @Anthropic --uploaded-within-days 30 --sort recency
-youtube search --channels @OpenAI --limit 5
 youtube search "agent memory" --mode semantic --limit 5
-youtube search "model evals" --channels @OpenAI --mode semantic --return video
-youtube search "open source agents" "LangGraph agents" --exclude-titles reaction
 ```
 
-`search` covers all of YouTube unless `--channels` names channels to search, repeated for several. Prefer handles, URLs, or IDs; a plain name costs a YouTube lookup.
+`search` covers all of YouTube, or the channels named with `--channels`. By default it keeps videos with at least 10,000 views and 3 minutes to 8 hours long, so override those when the task needs other videos; `youtube search --help` lists every filter. Date filters and recency sorting are slower because they fetch each video's metadata. `--mode semantic` ranks caption passages by meaning, and `--return video` returns videos instead of passages.
 
-YouTube-wide search needs a query and keeps YouTube's relevance order, interleaving several queries without duplicates; `--sort popularity` orders by views, and `--sort recency` is rejected. Channel search sorts by recency, and with queries a title must contain one of them. Defaults are 10 results, 30 for channels, at least 10,000 views, and a length from 3 minutes to 8 hours; override them when the task needs other limits.
+## Channels
 
-Durations take seconds, `MM:SS`, or `HH:MM:SS`. `--uploaded-after YYYY-MM-DD` and `--uploaded-within-days N` count in UTC, and the later cutoff wins. `--include-channels`, `--exclude-channels`, `--include-titles`, and `--exclude-titles` match case-insensitive substrings and repeat: every include must match, and any exclude rejects. Date filters and recency sorting fetch each video's metadata, so they are slower, and filters can leave fewer results than `--limit`.
+```bash
+youtube channel @OpenAI --last 5
+youtube channel @OpenAI --days 7
+```
 
-`--mode semantic` needs a query and `EMBEDDING_API_KEY`, or the embeddings extra for the local model named by `EMBEDDING_LOCAL_MODEL`; `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`, and `EMBEDDING_CONCURRENCY`, at most 50, are optional. It shortlists videos by title and ranks caption passages by their best similarity to any query, returning passages, or videos with `--return video`; `--return chunk` works only in semantic mode. `chunk_index` is not a timestamp. It never runs speech-to-text. The local model adds about 20 seconds to load before embedding starts, and a 2.9 GB download on first use. Partial failures appear in `warnings`; it fails only when no passage can be embedded, and an empty list means nothing passed the threshold.
+`channel` lists recent uploads: the last 10, `--last N`, or `--days N`.
 
-## Speech-to-text and setup
+## Setup
 
-`transcript` falls back to speech-to-text through the cloud provider when its key is set, otherwise the local Hugging Face model when its dependencies and `ffmpeg` are installed. A failed cloud request is an error, not a reason to try the local model. `STT_PROVIDER` defaults to `xai` (`XAI_API_KEY`); the others are `elevenlabs` (`ELEVENLABS_API_KEY`), `vercel` (`AI_GATEWAY_API_KEY`), `openai` (`OPENAI_API_KEY`), and `gemini` (`GEMINI_API_KEY`). xAI, ElevenLabs, and the local route return timed lines, the Vercel gateway passes its model's segments through when it has them, and OpenAI and Gemini return one untimed chunk at zero.
+Install from the toolkit's checkout with `uv run python scripts/install.py`, adding `--vision`, `--embeddings`, or `--stt` as needed; vision and speech-to-text also need `ffmpeg`.
 
-The local model is `nvidia/parakeet-tdt-0.6b-v3`, covering 25 European languages only, or any `transformers` speech-recognition model named by `STT_LOCAL_MODEL`, downloaded on first use. An unknown provider or unloadable model falls back to the default with a warning on stderr.
+`youtube setup` saves keys and model settings, or one group with `--embeddings`, `--decisions`, or `--stt`. Keys go through hidden prompts, so let the user type secrets themselves and never echo them into commands or chat. `youtube doctor` checks readiness without the network. `youtube stt-setup --cloud-test` sends a recording the provider bills, so run it only when asked to verify the key.
 
-Install from the toolkit's checkout with `uv run python scripts/install.py`, adding any of `--vision`, `--embeddings`, and `--stt`; `ffmpeg` is installed separately for vision and speech-to-text.
-
-`youtube setup` saves embedding, decision model, and speech-to-text settings for this tool, or one group with `--embeddings`, `--decisions` (`DECISION_API_KEY`, `DECISION_URL`, and `DECISION_MODEL`), or `--stt`. Any `*_API_KEY` setting can hold another variable's name, such as `AI_GATEWAY_API_KEY`, to use that variable's value instead of a copy. Keys go through hidden prompts, so let the user type secrets themselves and never echo them into commands or chat. Enter keeps a saved value, `-` removes it, and cancelling saves nothing; setup makes no API calls. Settings live in a user-only `.env` under `~/Library/Application Support/youtube-toolkit/` on macOS, `${XDG_CONFIG_HOME:-~/.config}/youtube-toolkit/` on Linux, or `%APPDATA%/youtube-toolkit/` on Windows. Environment variables override saved settings, which override defaults.
-
-`youtube doctor` checks readiness without creating files, loading a model, or using the network, and names the route vision would rank with. `youtube stt-setup` also downloads and runs the local model when it is installed. `--cloud-test` sends a two-second recording the provider bills, so run it only when asked to verify the key.
-
-## Artifacts
-
-Fresh yt-dlp responses and transcripts are saved as JSON named with a UTC datetime and the video ID, query slug, or channel, holding `request`, `fetched_at`, and `payload`; comment archives hold only the sample. Search archives hold listings, not rankings or embeddings. Archives are never reused or expired.
-
-Retrieval is directory-local: there is no database, watchlist, scheduled sync, or persistent embedding index. The calling agent owns synthesis; summarize when the user asks for analysis or a summary.
+The calling agent owns synthesis; summarize when the user asks for analysis or a summary.

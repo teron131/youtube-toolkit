@@ -1,20 +1,21 @@
 <!--
 Evidence (re-verify on update):
   Captions, 3 scopes (CHUNK): vision/text.py prepare_targets, SENTENCE_SECONDS, PARAGRAPH_SECONDS, KeywordExtractor top 5 per paragraph
-  Video, Keyframes (SAMPLE), Sponsors (FILTER), Near-copies (DEDUP, pixel SSIM 0.98 within 10 s): vision/candidates.py collect_candidates, ffmpeg_utils.py decode_keyframes
+  Video, Keyframes (SAMPLE), Sponsors (FILTER), Near-copies (DEDUP, pixel SSIM 0.98 within 10 s, and blends of neighbouring candidates, CROSS_FADE_FIT_RATIO): vision/candidates.py collect_candidates, ffmpeg_utils.py decode_keyframes
   Embed (EMBED): embeddings/gemini.py, or embeddings/local.py without a key, texts embedded before the download in vision/workflow.py
   Match (5 s before to 2 s after), Rank per scope, Fuse (RRF), 10 s gap, Near-copies by vectors (DEDUP, embedding cosine 0.96 for Gemini and local): vision/reranking.py rerank_frames
   Time slots (SELECT), local 10 s gap, Repeats (DEDUP, pixel SSIM 0.95 to any earlier pick): vision/candidates.py select_slot_frames
-  Collages, six per page: vision/collages.py
-  dashed lane 3: vision/workflow.py uses select_slot_frames when no route is set up, without a timed transcript from captions or speech-to-text, or with the local-only flag and no local model
-  Lane order (1 decision, 2 Gemini or local embeddings, 3 time slots; 1 and 2 need a timed transcript): vision/workflow.py sample_vision via config.py decision_config (DECISION_API_KEY) and vision_embedding_key, embeddings local_embedding_installed
-  Ask (DECIDE, speech within 30 s, three questions): vision/decisions.py QUESTIONS, CONTEXT_SECONDS, score_frames; decisions.py decide_each
-  Score (RANK, 0.30 and up, best first): vision/decisions.py MIN_SCORE, _decision; vision/workflow.py order
+  Collages, 2x3 per page: vision/collages.py COLLAGE_COLUMNS, COLLAGE_ROWS
+  dashed lane 3: vision/workflow.py uses select_slot_frames when no route is set up, when an embedding route has no timed speech (vision/text.py drops sound annotations and transcripts under MIN_SPEECH_WORDS_PER_MINUTE), or with the local-only flag and no local model
+  Lane order (1 decision, 2 embeddings: Gemini Embedding 2 with its key, else the local model, 3 time slots; 2 needs timed speech, 1 runs without it): vision/workflow.py sample_vision via config.py decision_config (DECISION_API_KEY) and vision_embedding_key, embeddings local_embedding_installed
+  Ask each frame (DECIDE, picture alone at 640x360 for information, visual, impressive; with speech within 30 s, a separate illustrative request): vision/decisions.py FRAME_QUESTIONS, REQUEST_SIZE, CONTEXT_QUESTIONS, CONTEXT_SECONDS, rank_frames steps 1-2; decisions.py decide_each
+  Same item (DEDUP, neighbours at 0.6 join one item, which keeps its best score plus impressive): vision/decisions.py SAME_ITEM_QUESTIONS, SAME_ITEM, rank_frames step 4
+  Score (RANK, better of information and visual plus 0.25 x illustrative, 0.30 and up, best first): vision/decisions.py CONTEXT_WEIGHT, MIN_SCORE, _decision, rank_frames step 3; vision/workflow.py
   Lane 1 10 s gap to any pick and Repeats (pixel SSIM 0.95 to any pick): vision/candidates.py select_ranked_frames
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="770" viewBox="0 0 1120 770" role="img" aria-labelledby="title desc">
   <title id="title">How vision picks frames</title>
-  <desc id="desc">How the vision command picks frames, drawn as stops on three numbered lanes, tried in order; the first that can run picks the frames. Each stop carries a chip naming its layer: chunk, sample, filter, dedup, embed, match, decide, rank, rerank or select. Shared inputs: captions, or timed speech-to-text when a video has none; and the 720p video, whose keyframes FFmpeg samples every 3 to 7 seconds, with frames in sponsor segments, dark frames and pixel SSIM near-copies removed. Lane 1 runs with a decision key: each frame is shown to a decision model with the speech within 30 seconds of it and asked whether it shows specific information, whether the narrator leaves that information unsaid, and whether it illustrates what is being described. Frames scoring 0.30 and up are taken best first, skipping frames within 10 seconds of any pick and pixel SSIM repeats of any pick, into collages six per page. Lane 2 runs otherwise with Gemini or local embeddings: captions are chunked into keywords, sentences and paragraphs and embedded, frames are embedded, each frame is matched to text spoken from 5 seconds before to 2 seconds after it, ranked by relative score per scope, fused with reciprocal rank fusion, and walked skipping frames within 10 seconds of any pick and embedding near-copies. Lane 3, dashed, runs when neither is set up or there is no timed transcript: one frame per time slot of 12 seconds or longer, skipping frames within 10 seconds of the last pick and pixel SSIM repeats of any earlier pick.</desc>
+  <desc id="desc">How the vision command picks frames, drawn as stops on three numbered lanes, tried in order; the first that can run picks the frames. Each stop carries a chip naming its layer: chunk, sample, filter, dedup, embed, match, decide, rank, rerank or select. Shared inputs: captions, or timed speech-to-text when a video has none; and the 720p video, whose keyframes FFmpeg samples every 3 to 7 seconds, with frames in sponsor segments, dark frames, pixel SSIM near-copies, and cross-fades that blend their neighbouring keyframes removed. Lane 1 runs with a decision key: a decision model judges each frame on its picture alone, sent at 640 by 360, for whether it shows specific information in full other than subtitles, whether it is a moment worth pausing on for what it shows, fully appeared, and how impressive its main content is, and in a separate request, where there is speech within 30 seconds, for whether it shows what is being described. A frame's score is the better of the first two plus a quarter of the last, and frames scoring 0.30 and up remain. Neighbouring frames the model calls the same item, such as one page scrolled or one scene from another angle, join one item, which keeps its frame with the best score plus impressiveness, and items are taken best first, skipping frames within 10 seconds of any pick and pixel SSIM repeats of any pick, into collages two across and three down per page. Lane 2 runs otherwise with an embedding model: captions are chunked into keywords, sentences and paragraphs and embedded, frames are embedded, each frame is matched to text spoken from 5 seconds before to 2 seconds after it, ranked by relative score per scope, fused with reciprocal rank fusion, and walked skipping frames within 10 seconds of any pick and embedding near-copies. Lane 3, dashed, runs when neither is set up, or in place of lane 2 when the video has no timed speech: one frame per time slot of 12 seconds or longer, skipping frames within 10 seconds of the last pick and pixel SSIM repeats of any earlier pick.</desc>
   <defs>
     <style>
       /* Barlow (c) 2017 The Barlow Project Authors, SIL Open Font License 1.1; Basic Latin subset. */
@@ -37,7 +38,7 @@ Evidence (re-verify on update):
   <rect x="0.5" y="0.5" width="1119" height="769" rx="16" fill="#FFFFFF" stroke="#D6DAE2"/>
   <g id="header">
     <text x="44" y="62" class="title">How vision picks frames</text>
-    <text x="44" y="92" class="lede">Chips name each stop's layer. The first numbered lane that can run picks the frames; lanes 1 and 2 need a timed transcript.</text>
+    <text x="44" y="92" class="lede">Chips name each stop's layer. The first numbered lane that can run picks the frames; lane 2 needs timed speech.</text>
   </g>
   <g id="tracks">
     <path d="M80 358 V230 Q80 210 100 210 H1050" class="track"/>
@@ -50,8 +51,8 @@ Evidence (re-verify on update):
     <path d="M414 530 V215" class="track"/>
   </g>
   <g id="stops">
-    <g id="ask"><rect x="465" y="172" width="140" height="76" rx="8" fill="#FFFFFF" stroke="#1B2238" stroke-width="1.5"/><text x="477" y="196.5" class="inline">information</text><rect x="561" y="188" width="32" height="8" rx="4" fill="#E4EAF6"/><rect x="561" y="188" width="28.8" height="8" rx="4" fill="#0E7490"/><text x="477" y="214.5" class="inline">unspoken</text><rect x="561" y="206" width="32" height="8" rx="4" fill="#E4EAF6"/><rect x="561" y="206" width="24" height="8" rx="4" fill="#0E7490"/><text x="477" y="232.5" class="inline">illustrative</text><rect x="561" y="224" width="32" height="8" rx="4" fill="#E4EAF6"/><rect x="561" y="224" width="8" height="8" rx="4" fill="#0E7490"/></g>
-    <g id="score"><rect x="650" y="188" width="80" height="44" rx="6" fill="#FFFFFF" stroke="#1B2238" stroke-width="1.3"/><rect x="660" y="196" width="8" height="30" rx="1" fill="#0F9D74"/><rect x="672" y="201" width="8" height="25" rx="1" fill="#0F9D74"/><rect x="684" y="207" width="8" height="19" rx="1" fill="#0F9D74"/><rect x="696" y="214" width="8" height="12" rx="1" fill="#B9C0CC"/><rect x="708" y="219" width="8" height="7" rx="1" fill="#B9C0CC"/><path d="M655 211 H725" stroke="#C44773" stroke-width="1.5" stroke-dasharray="3 2"/></g>
+    <g id="ask"><rect x="440" y="168" width="140" height="84" rx="8" fill="#FFFFFF" stroke="#1B2238" stroke-width="1.5"/><text x="458" y="187.5" class="inline">information</text><rect x="538" y="179" width="32" height="8" rx="4" fill="#E4EAF6"/><rect x="538" y="179" width="28.8" height="8" rx="4" fill="#0E7490"/><text x="458" y="204.5" class="inline">visual</text><rect x="538" y="196" width="32" height="8" rx="4" fill="#E4EAF6"/><rect x="538" y="196" width="19.2" height="8" rx="4" fill="#0E7490"/><text x="458" y="221.5" class="inline">impressive</text><rect x="538" y="213" width="32" height="8" rx="4" fill="#E4EAF6"/><rect x="538" y="213" width="11.2" height="8" rx="4" fill="#0E7490"/><text x="458" y="238.5" class="inline">illustrative</text><rect x="538" y="230" width="32" height="8" rx="4" fill="#E4EAF6"/><rect x="538" y="230" width="25.6" height="8" rx="4" fill="#0E7490"/><path d="M446 229 H454 Q455 229 455 230 V235 Q455 236 454 236 H449 L447 238 V236 H446 Q445 236 445 235 V230 Q445 229 446 229 Z" fill="#E4EAF6" stroke="#1B2238" stroke-width="1"/></g>
+    <g id="same-item" transform="translate(110 0)"><circle cx="650" cy="210" r="38" fill="#C77C00" fill-opacity="0.16"/><path d="M615 197 V192 H685 V197" fill="none" stroke="#1B2238" stroke-width="1.5"/><g opacity="0.45"><rect x="615" y="202" width="22" height="16" rx="2" fill="#E4EAF6" stroke="#1B2238" stroke-width="1.3"/><rect x="619" y="206" width="12.1" height="2.5" fill="#1B2238"/><rect x="619" y="211" width="7.7" height="2.5" fill="#9AA6BF"/></g><g opacity="1"><rect x="639" y="202" width="22" height="16" rx="2" fill="#E4EAF6" stroke="#1B2238" stroke-width="1.3"/><rect x="643" y="206" width="12.1" height="2.5" fill="#1B2238"/><rect x="643" y="211" width="7.7" height="2.5" fill="#9AA6BF"/></g><g opacity="0.45"><rect x="663" y="202" width="22" height="16" rx="2" fill="#E4EAF6" stroke="#1B2238" stroke-width="1.3"/><rect x="667" y="206" width="12.1" height="2.5" fill="#1B2238"/><rect x="667" y="211" width="7.7" height="2.5" fill="#9AA6BF"/></g><path d="M650 222 V229" stroke="#1B2238" stroke-width="1.5"/></g><g id="score" transform="translate(-110 0)"><rect x="720" y="188" width="80" height="44" rx="6" fill="#FFFFFF" stroke="#1B2238" stroke-width="1.3"/><rect x="730" y="196" width="8" height="30" rx="1" fill="#0F9D74"/><rect x="742" y="201" width="8" height="25" rx="1" fill="#0F9D74"/><rect x="754" y="207" width="8" height="19" rx="1" fill="#0F9D74"/><rect x="766" y="214" width="8" height="12" rx="1" fill="#B9C0CC"/><rect x="778" y="219" width="8" height="7" rx="1" fill="#B9C0CC"/><path d="M725 211 H795" stroke="#C44773" stroke-width="1.5" stroke-dasharray="3 2"/></g>
     <g id="decision-gap"><rect x="816" y="192" width="80" height="36" rx="6" fill="#FFFFFF" stroke="#1B2238" stroke-width="1.3"/><path d="M824 216 H888" stroke="#1B2238" stroke-width="1.5"/><path d="M830 202 V216" stroke="#1B2238" stroke-width="3" stroke-linecap="round"/><path d="M850 202 V216" stroke="#1B2238" stroke-width="3" stroke-linecap="round"/><path d="M878 202 V216" stroke="#1B2238" stroke-width="3" stroke-linecap="round"/><path d="M858 202 V216" stroke="#C44773" stroke-width="3" stroke-linecap="round" opacity="0.5"/><path d="M852 203 L864 215 M864 203 L852 215" stroke="#C44773" stroke-width="3" stroke-linecap="round"/></g>
     <g id="decision-repeats"><circle cx="950" cy="210" r="34" fill="#C77C00" fill-opacity="0.16"/><g opacity="1"><rect x="925" y="202" width="22" height="16" rx="2" fill="#E4EAF6" stroke="#1B2238" stroke-width="1.3"/><rect x="929" y="206" width="12.1" height="2.5" fill="#1B2238"/><rect x="929" y="211" width="7.7" height="2.5" fill="#9AA6BF"/></g><g opacity="0.45"><rect x="953" y="202" width="22" height="16" rx="2" fill="#E4EAF6" stroke="#1B2238" stroke-width="1.3"/><rect x="957" y="206" width="12.1" height="2.5" fill="#1B2238"/><rect x="957" y="211" width="7.7" height="2.5" fill="#9AA6BF"/></g><path d="M956 202 L972 218 M972 202 L956 218" stroke="#C77C00" stroke-width="3" stroke-linecap="round"/></g>
     <g id="decision-collage"><rect x="1020" y="180" width="60" height="60" rx="4" fill="#1B2238"/><rect x="1024" y="184" width="25" height="13" rx="1.5" fill="#E4EAF6"/><rect x="1027" y="187" width="13" height="2.5" fill="#1B2238"/><rect x="1051" y="184" width="25" height="13" rx="1.5" fill="#E4EAF6"/><rect x="1054" y="187" width="13" height="2.5" fill="#1B2238"/><rect x="1024" y="202.5" width="25" height="13" rx="1.5" fill="#E4EAF6"/><rect x="1027" y="205.5" width="13" height="2.5" fill="#1B2238"/><rect x="1051" y="202.5" width="25" height="13" rx="1.5" fill="#E4EAF6"/><rect x="1054" y="205.5" width="13" height="2.5" fill="#1B2238"/><rect x="1024" y="221" width="25" height="13" rx="1.5" fill="#E4EAF6"/><rect x="1027" y="224" width="13" height="2.5" fill="#1B2238"/><rect x="1051" y="221" width="25" height="13" rx="1.5" fill="#E4EAF6"/><rect x="1054" y="224" width="13" height="2.5" fill="#1B2238"/></g>
@@ -75,8 +76,9 @@ Evidence (re-verify on update):
     <g id="rank"><rect x="624" y="387" width="88" height="40" rx="6" fill="#FFFFFF" stroke="#1B2238" stroke-width="1.3"/><rect x="632" y="403" width="12" height="8" rx="4" fill="#7A8296"/><rect x="647" y="403" width="12" height="8" rx="4" fill="#7A8296"/><rect x="662" y="403" width="12" height="8" rx="4" fill="#7A8296"/><rect x="685.0" y="399" width="4.5" height="16" rx="1" fill="#0F9D74"/><rect x="691.5" y="403" width="4.5" height="12" rx="1" fill="#0F9D74"/><rect x="698.0" y="407" width="4.5" height="8" rx="1" fill="#0F9D74"/><rect x="704.5" y="411" width="4.5" height="4" rx="1" fill="#0F9D74"/><rect x="624" y="435" width="88" height="40" rx="6" fill="#FFFFFF" stroke="#1B2238" stroke-width="1.3"/><rect x="632" y="451" width="22" height="8" rx="4" fill="#7A8296"/><rect x="657" y="451" width="22" height="8" rx="4" fill="#7A8296"/><rect x="685.0" y="447" width="4.5" height="16" rx="1" fill="#0F9D74"/><rect x="691.5" y="451" width="4.5" height="12" rx="1" fill="#0F9D74"/><rect x="698.0" y="455" width="4.5" height="8" rx="1" fill="#0F9D74"/><rect x="704.5" y="459" width="4.5" height="4" rx="1" fill="#0F9D74"/><rect x="624" y="483" width="88" height="40" rx="6" fill="#FFFFFF" stroke="#1B2238" stroke-width="1.3"/><rect x="632" y="497" width="44" height="12" rx="3" fill="#7A8296"/><rect x="685.0" y="495" width="4.5" height="16" rx="1" fill="#0F9D74"/><rect x="691.5" y="499" width="4.5" height="12" rx="1" fill="#0F9D74"/><rect x="698.0" y="503" width="4.5" height="8" rx="1" fill="#0F9D74"/><rect x="704.5" y="507" width="4.5" height="4" rx="1" fill="#0F9D74"/></g>
   </g>
   <g id="layers">
-    <rect x="492.4" y="144" width="85.2" height="20" rx="10" fill="#0E7490"/><text x="535" y="158.5" class="chip" text-anchor="middle">DECIDE</text>
-    <rect x="657.6" y="144" width="64.8" height="20" rx="10" fill="#0F9D74"/><text x="690" y="158.5" class="chip" text-anchor="middle">RANK</text>
+    <rect x="467.4" y="144" width="85.2" height="20" rx="10" fill="#0E7490"/><text x="510" y="158.5" class="chip" text-anchor="middle">DECIDE</text>
+    <rect x="722.5" y="144" width="75.0" height="20" rx="10" fill="#C77C00"/><text x="760" y="158.5" class="chip" text-anchor="middle">DEDUP</text>
+    <rect x="617.6" y="144" width="64.8" height="20" rx="10" fill="#0F9D74"/><text x="650" y="158.5" class="chip" text-anchor="middle">RANK</text>
     <rect x="813.4" y="144" width="85.2" height="20" rx="10" fill="#C44773"/><text x="856" y="158.5" class="chip" text-anchor="middle">FILTER</text>
     <rect x="912.5" y="144" width="75.0" height="20" rx="10" fill="#C77C00"/><text x="950" y="158.5" class="chip" text-anchor="middle">DEDUP</text>
     <rect x="230.5" y="314" width="75.0" height="20" rx="10" fill="#8C93A3"/><text x="268" y="328.5" class="chip" text-anchor="middle">CHUNK</text>
@@ -95,20 +97,22 @@ Evidence (re-verify on update):
     <rect x="635.6" y="357" width="64.8" height="20" rx="10" fill="#0F9D74"/><text x="668" y="371.5" class="chip" text-anchor="middle">RANK</text>
   </g>
   <g id="labels">
-    <text x="535" y="268" class="name" text-anchor="middle">Ask</text>
-    <text x="535" y="286" class="count" text-anchor="middle">speech within 30 s</text>
-    <text x="690" y="268" class="name" text-anchor="middle">Score</text>
-    <text x="690" y="286" class="count" text-anchor="middle">0.30 and up, best first</text>
+    <text x="510" y="268" class="name" text-anchor="middle">Ask each frame</text>
+    <text x="510" y="286" class="count" text-anchor="middle">picture; speech in 30 s</text>
+    <text x="760" y="268" class="name" text-anchor="middle">Same item</text>
+    <text x="760" y="286" class="count" text-anchor="middle">Decision API</text>
+    <text x="650" y="268" class="name" text-anchor="middle">Score</text>
+    <text x="650" y="286" class="count" text-anchor="middle">0.30 and up</text>
     <text x="856" y="268" class="name" text-anchor="middle">10 s gap</text>
     <text x="856" y="286" class="count" text-anchor="middle">to any pick</text>
     <text x="950" y="268" class="name" text-anchor="middle">Repeats</text>
     <text x="950" y="286" class="count" text-anchor="middle">pixel SSIM</text>
     <text x="1050" y="268" class="name" text-anchor="middle">Collages</text>
-    <text x="1050" y="286" class="count" text-anchor="middle">6 per page</text>
+    <text x="1050" y="286" class="count" text-anchor="middle">2×3 per page</text>
     <circle cx="112" cy="186" r="11" fill="#1B2238"/><text x="112" y="190.5" class="badge" text-anchor="middle">1</text>
-    <text x="130" y="191" class="lane">With a decision key</text>
+    <text x="130" y="191" class="lane">Decision API</text>
     <circle cx="112" cy="295" r="11" fill="#1B2238"/><text x="112" y="299.5" class="badge" text-anchor="middle">2</text>
-    <text x="130" y="300" class="lane">Else Gemini or local embeddings</text>
+    <text x="130" y="300" class="lane">Else embeddings</text>
     <text x="80" y="438" class="name" text-anchor="middle">Captions</text>
     <text x="80" y="456" class="count" text-anchor="middle">or speech-to-text</text>
     <text x="268" y="438" class="name" text-anchor="middle">3 scopes</text>
@@ -121,7 +125,7 @@ Evidence (re-verify on update):
     <text x="268" y="580" class="name" text-anchor="middle">Sponsors</text>
     <text x="268" y="598" class="count" text-anchor="middle">and dark frames</text>
     <text x="362" y="580" class="name" text-anchor="middle">Near-copies</text>
-    <text x="362" y="598" class="count" text-anchor="middle">pixel SSIM</text>
+    <text x="362" y="598" class="count" text-anchor="middle">and blends</text>
     <text x="460" y="580" class="name" text-anchor="middle">Embed</text>
     <text x="460" y="598" class="count" text-anchor="middle">frames</text>
     <text x="574" y="505" class="name" text-anchor="middle">Match</text>
@@ -133,7 +137,7 @@ Evidence (re-verify on update):
     <text x="950" y="505" class="name" text-anchor="middle">Near-copies</text>
     <text x="950" y="523" class="count" text-anchor="middle">by vectors</text>
     <text x="1050" y="505" class="name" text-anchor="middle">Collages</text>
-    <text x="1050" y="523" class="count" text-anchor="middle">6 per page</text>
+    <text x="1050" y="523" class="count" text-anchor="middle">2×3 per page</text>
     <text x="690" y="720" class="name" text-anchor="middle">Time slots</text>
     <text x="690" y="738" class="count" text-anchor="middle">12 s or longer</text>
     <text x="856" y="720" class="name" text-anchor="middle">10 s gap</text>
@@ -141,11 +145,11 @@ Evidence (re-verify on update):
     <text x="950" y="720" class="name" text-anchor="middle">Repeats</text>
     <text x="950" y="738" class="count" text-anchor="middle">pixel SSIM</text>
     <text x="1050" y="720" class="name" text-anchor="middle">Collages</text>
-    <text x="1050" y="738" class="count" text-anchor="middle">6 per page</text>
+    <text x="1050" y="738" class="count" text-anchor="middle">2×3 per page</text>
     <text x="668" y="547" class="name" text-anchor="middle">Rank</text>
     <text x="668" y="565" class="count" text-anchor="middle">by relative score</text>
     <circle cx="440" cy="621" r="11" fill="#1B2238"/><text x="440" y="625.5" class="badge" text-anchor="middle">3</text>
     <text x="458" y="626" class="lane">Neither set up, or no</text>
-    <text x="458" y="644" class="lane">timed transcript</text>
+    <text x="458" y="644" class="lane">timed speech for lane 2</text>
   </g>
 </svg>

@@ -19,8 +19,10 @@ from youtube_toolkit.search.request import ChannelTarget, SearchRequest
 def test_parser_normalizes_string_arguments_before_handlers() -> None:
     video_args = build_parser().parse_args(
         [
-            "transcript",
+            "video",
             "'https://www.youtube.com/watch?v=JpSHyEIZ_bo'",
+            "--comments",
+            "' pricing '",
         ]
     )
     search_args = build_parser().parse_args(
@@ -45,6 +47,7 @@ def test_parser_normalizes_string_arguments_before_handlers() -> None:
     unmatched_quote_args = build_parser().parse_args(["search", "'earnings"])
 
     assert video_args.video_ref == "https://www.youtube.com/watch?v=JpSHyEIZ_bo"
+    assert video_args.comments == "pricing"
     assert search_args.queries == ["agent memory", "langgraph"]
     assert search_args.mode == "semantic"
     assert search_args.return_type == "video"
@@ -55,7 +58,9 @@ def test_parser_normalizes_string_arguments_before_handlers() -> None:
     assert unmatched_quote_args.queries == ["'earnings"]
 
 
-def test_video_metadata_command_returns_normalized_video_facts(monkeypatch) -> None:
+def test_video_command_returns_metadata_alone_without_part_flags(
+    monkeypatch, capsys
+) -> None:
     class FakeClient:
         def metadata(self, video_ref: str) -> dict[str, object]:
             assert video_ref == "JpSHyEIZ_bo"
@@ -80,7 +85,10 @@ def test_video_metadata_command_returns_normalized_video_facts(monkeypatch) -> N
 
     monkeypatch.setattr(commands, "YtDlpClient", FakeClient)
 
-    assert commands.metadata(argparse.Namespace(video_ref="JpSHyEIZ_bo")) == {
+    assert main(["video", "JpSHyEIZ_bo"]) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert list(output) == ["metadata"]
+    assert output["metadata"] == {
         "video_id": "JpSHyEIZ_bo",
         "url": "https://www.youtube.com/watch?v=JpSHyEIZ_bo",
         "title": "Example",
@@ -119,7 +127,7 @@ def comment_response(monkeypatch, tmp_path):
     ("arguments", "expected_ids", "limit"),
     [
         (["PRICING"], ["first", "second"], 100),
-        (["pricing details", "--limit", "1000"], ["first"], 1000),
+        (["pricing details", "--comment-limit", "1000"], ["first"], 1000),
         (["[pricing]"], ["second"], 100),
         (["STRASSE"], ["second"], 100),
         ([], ["first", "second", "third"], 100),
@@ -152,10 +160,10 @@ def test_comments_search_filters_text_and_archives_the_full_sample(
         formats=[{"format_id": "provider-internal"}],
     )
 
-    assert main(["comments", "JpSHyEIZ_bo", *arguments]) == 0
+    assert main(["video", "JpSHyEIZ_bo", "--comments", *arguments]) == 0
 
     captured = capsys.readouterr()
-    result = json.loads(captured.out)
+    result = json.loads(captured.out)["comments"]
     assert result == {
         "title": "Example",
         "url": "https://www.youtube.com/watch?v=JpSHyEIZ_bo",
@@ -194,8 +202,8 @@ def test_comments_search_returns_an_empty_array_when_none_are_available(
     payload, _calls = comment_response
     payload["comments"] = comments
 
-    assert main(["comments", "JpSHyEIZ_bo", "pricing"]) == 0
-    result = json.loads(capsys.readouterr().out)
+    assert main(["video", "JpSHyEIZ_bo", "--comments", "pricing"]) == 0
+    result = json.loads(capsys.readouterr().out)["comments"]
     assert result["comments"] == []
 
 
@@ -220,8 +228,8 @@ def test_comments_interleaves_next_unseen_ranked_matches(
     payload, _calls = comment_response
     payload["comments"] = [*comments, comments[0]]
 
-    assert main(["comments", "JpSHyEIZ_bo", query]) == 0
-    result = json.loads(capsys.readouterr().out)
+    assert main(["video", "JpSHyEIZ_bo", "--comments", query]) == 0
+    result = json.loads(capsys.readouterr().out)["comments"]
     assert [comment["text"] for comment in result["comments"]] == expected_texts
 
 
@@ -237,8 +245,8 @@ def test_comments_preserves_like_ties_and_unknown_counts(
         {"id": "d", "text": "D", "like_count": 0},
         {"id": "e", "text": "Same text", "like_count": 0},
     ]
-    assert main(["comments", "JpSHyEIZ_bo"]) == 0
-    result = json.loads(capsys.readouterr().out)
+    assert main(["video", "JpSHyEIZ_bo", "--comments"]) == 0
+    result = json.loads(capsys.readouterr().out)["comments"]
     assert result["comments"] == [
         {"text": "Same text", "like_count": 1},
         {"text": "C", "like_count": 0},
@@ -253,12 +261,12 @@ def test_comments_refetches_and_preserves_lean_archive_history(
 ) -> None:
     payload, calls = comment_response
     payload["comments"] = [{"id": "a", "text": "A", "like_count": 1}]
-    assert main(["comments", "JpSHyEIZ_bo"]) == 0
+    assert main(["video", "JpSHyEIZ_bo", "--comments"]) == 0
     directory = tmp_path / ".cache/youtube-toolkit/comments"
     first_path = next(directory.glob("*.json"))
     first_copy = first_path.read_bytes()
     payload["comments"][0]["like_count"] = 2
-    assert main(["comments", "JpSHyEIZ_bo"]) == 0
+    assert main(["video", "JpSHyEIZ_bo", "--comments"]) == 0
     assert len(calls) == 2
     assert first_path.read_bytes() == first_copy
     assert sorted(
@@ -273,15 +281,33 @@ def test_comments_rejects_out_of_range_fetch_limits_before_retrieval(
 ) -> None:
     _payload, calls = comment_response
 
-    assert main(["comments", "JpSHyEIZ_bo", "pricing", "--limit", limit]) == 1
+    assert (
+        main(
+            ["video", "JpSHyEIZ_bo", "--comments", "pricing", "--comment-limit", limit]
+        )
+        == 1
+    )
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert "--limit must be between 1 and 1000" in captured.err
+    assert "--comment-limit must be between 1 and 1000" in captured.err
     assert calls == []
 
 
-def test_video_transcript_command_selects_plain_or_timestamped_output(
-    monkeypatch,
+@pytest.fixture
+def metadata_calls(monkeypatch):
+    calls = []
+
+    class Client:
+        def metadata(self, video_ref):
+            calls.append(video_ref)
+            return {"id": "JpSHyEIZ_bo", "title": "Ray tracing"}
+
+    monkeypatch.setattr(commands, "YtDlpClient", Client)
+    return calls
+
+
+def test_video_transcript_prints_plain_or_timestamped_text(
+    capsys, monkeypatch, metadata_calls
 ) -> None:
     document = TranscriptDocument(
         metadata=VideoMetadata(
@@ -297,44 +323,25 @@ def test_video_transcript_command_selects_plain_or_timestamped_output(
             ),
         ],
     )
-    monkeypatch.setattr(commands, "fetch_transcript", lambda _video_ref: document)
-
-    assert (
-        commands.transcript(
-            argparse.Namespace(
-                video_ref="JpSHyEIZ_bo",
-                timestamps=False,
-                export=False,
-                force=False,
-            )
-        )
-        == "First sentence. Second sentence."
+    monkeypatch.setattr(
+        commands, "fetch_transcript", lambda _video_ref, **_options: document
     )
-    assert commands.transcript(
-        argparse.Namespace(
-            video_ref="JpSHyEIZ_bo",
-            timestamps=True,
-            export=False,
-            force=False,
-        )
-    ) == [
-        {
-            "start_seconds": 0.0,
-            "end_seconds": 2.5,
-            "text": "First sentence.",
-        },
-        {
-            "start_seconds": 2.5,
-            "end_seconds": 5.0,
-            "text": "Second sentence.",
-        },
-    ]
+
+    assert main(["video", "JpSHyEIZ_bo", "--transcript"]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "transcript": "First sentence. Second sentence."
+    }
+    assert main(["video", "JpSHyEIZ_bo", "--transcript", "--timestamps"]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "transcript": [
+            {"start_seconds": 0.0, "end_seconds": 2.5, "text": "First sentence."},
+            {"start_seconds": 2.5, "end_seconds": 5.0, "text": "Second sentence."},
+        ]
+    }
 
 
 def test_video_transcript_export_writes_metadata_and_plain_transcript(
-    capsys,
-    monkeypatch,
-    tmp_path,
+    capsys, monkeypatch, tmp_path, metadata_calls
 ) -> None:
     document = TranscriptDocument(
         metadata=VideoMetadata(
@@ -363,12 +370,11 @@ def test_video_transcript_export_writes_metadata_and_plain_transcript(
         commands, "fetch_transcript", lambda _video_ref, **_options: document
     )
 
-    assert main(["transcript", "JpSHyEIZ_bo", "--export"]) == 0
+    assert main(["video", "JpSHyEIZ_bo", "--transcript", "--export"]) == 0
 
     export_path = tmp_path / "What_is_DARKMATTER_Example_Channel.txt"
     assert json.loads(capsys.readouterr().out) == {
-        "video_id": "JpSHyEIZ_bo",
-        "path": str(export_path),
+        "transcript": {"video_id": "JpSHyEIZ_bo", "path": str(export_path)}
     }
     assert export_path.read_text(encoding="utf-8") == (
         "Title: What is DARKMATTER ?\n"
@@ -376,77 +382,123 @@ def test_video_transcript_export_writes_metadata_and_plain_transcript(
         "Channel: @example\n"
         "Published: 2026-07-16\n"
         "Duration: 01:23:45\n"
-        "Views: 120,000\n"
-        "Likes: 4,500\n"
         "URL: https://www.youtube.com/watch?v=JpSHyEIZ_bo\n"
-        "Language: English\n"
         "Transcript source: manual captions\n"
         "\n"
         "First sentence. Second sentence.\n"
     )
 
-    with pytest.raises(ValueError, match="use --force to replace it"):
-        commands.transcript(
-            argparse.Namespace(
-                video_ref="JpSHyEIZ_bo",
-                timestamps=True,
-                export=True,
-                force=False,
-            )
-        )
-
-    commands.transcript(
-        argparse.Namespace(
-            video_ref="JpSHyEIZ_bo",
-            timestamps=True,
-            export=True,
-            force=True,
-        )
-    )
+    timed = ["video", "JpSHyEIZ_bo", "--transcript", "--timestamps", "--export"]
+    assert main(timed) == 1
+    assert "use --force to replace it" in capsys.readouterr().err
+    assert main([*timed, "--force"]) == 0
     assert export_path.read_text(encoding="utf-8").endswith(
         "\n[00:00:00] First sentence.\n[00:01:02] Second sentence.\n"
     )
 
 
-def test_video_transcript_force_requires_export(monkeypatch) -> None:
-    monkeypatch.setattr(
-        commands,
-        "fetch_transcript",
-        lambda _video_ref: pytest.fail("transcript should not be fetched"),
-    )
+def test_video_parts_share_one_metadata_fetch_and_export_markdown_beside_collages(
+    capsys, monkeypatch, tmp_path, metadata_calls
+) -> None:
+    from youtube_toolkit import vision as vision_package
 
-    with pytest.raises(ValueError, match="--force requires --export"):
-        commands.transcript(
-            argparse.Namespace(
-                video_ref="JpSHyEIZ_bo",
-                timestamps=False,
-                export=False,
-                force=True,
-            )
+    document = TranscriptDocument(
+        metadata=VideoMetadata(
+            video_id="JpSHyEIZ_bo",
+            url="https://www.youtube.com/watch?v=JpSHyEIZ_bo",
+            title="Ray tracing",
+            channel="Example Channel",
+        ),
+        language="en",
+        source="subtitles",
+        chunks=[
+            TranscriptChunk(0.0, 10.0, "Intro."),
+            TranscriptChunk(10.0, 20.0, "The ray tracer."),
+        ],
+    )
+    vision = {
+        "directory": str(tmp_path),
+        "collage_paths": [str(tmp_path / "JpSHyEIZ_bo_vision_page1.jpg")],
+    }
+    received = []
+
+    def fetch_transcript(_video_ref, *, client, metadata):
+        received.append(metadata)
+        return document
+
+    def sample_vision(_video_ref, *, metadata, document):
+        received.extend([metadata, document])
+        return vision
+
+    monkeypatch.setattr(commands, "require_vision", lambda: None)
+    monkeypatch.setattr(commands, "fetch_transcript", fetch_transcript)
+    monkeypatch.setattr(vision_package, "sample_vision", sample_vision)
+
+    assert main(["video", "JpSHyEIZ_bo", "--vision", "--transcript", "--metadata"]) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert list(output) == ["transcript", "vision", "metadata"]
+    assert output["metadata"]["title"] == "Ray tracing"
+    assert output["transcript"] == "Intro. The ray tracer."
+    assert output["vision"] == vision
+    payload = {"id": "JpSHyEIZ_bo", "title": "Ray tracing"}
+    assert metadata_calls == ["JpSHyEIZ_bo"]
+    assert received == [payload, payload, document]
+
+    assert (
+        main(
+            [
+                "video",
+                "JpSHyEIZ_bo",
+                "--transcript",
+                "--vision",
+                "--export",
+                "--timestamps",
+            ]
         )
+        == 0
+    )
+    export_path = tmp_path / "Ray_tracing_Example_Channel.md"
+    assert json.loads(capsys.readouterr().out) == {
+        "transcript": {"video_id": "JpSHyEIZ_bo", "path": str(export_path)},
+        "vision": vision,
+    }
+    assert export_path.read_text(encoding="utf-8") == (
+        "# Ray tracing\n\n"
+        "- Author: Example Channel\n"
+        "- URL: https://www.youtube.com/watch?v=JpSHyEIZ_bo\n"
+        "- Transcript source: manual captions\n\n"
+        "[00:00:00] Intro.\n\n"
+        "[00:00:10] The ray tracer.\n"
+    )
 
 
 @pytest.mark.parametrize(
-    ("args", "usage"),
+    ("arguments", "message"),
     [
-        (
-            ["transcript", "--help"],
-            "usage: youtube transcript [-h] [--timestamps] [--export] [--force] url",
-        ),
-        (["metadata", "--help"], "usage: youtube metadata [-h] url"),
+        (["--timestamps"], "--timestamps requires --transcript"),
+        (["--vision", "--export"], "--export requires --transcript"),
+        (["--transcript", "--force"], "--force requires --export"),
+        (["--comment-limit", "5"], "--comment-limit requires --comments"),
+        (["--transcript", "--max-frames", "5"], "--max-frames requires --vision"),
+        (["--no-auto-clean"], "--auto-clean requires --vision"),
     ],
 )
-def test_reference_help_names_positionals_url(
-    args: list[str],
-    usage: str,
-    capsys,
+def test_video_part_options_require_their_part_before_any_fetch(
+    capsys, metadata_calls, arguments, message
 ) -> None:
+    assert main(["video", "JpSHyEIZ_bo", *arguments]) == 1
+    assert message in capsys.readouterr().err
+    assert metadata_calls == []
+
+
+def test_video_help_names_the_positional_url(capsys) -> None:
     with pytest.raises(SystemExit):
-        build_parser().parse_args(args)
+        build_parser().parse_args(["video", "--help"])
 
     output = capsys.readouterr().out
-    assert usage in " ".join(output.split())
-    assert "url" in output
+    assert "usage: youtube video [-h] [--transcript] [--timestamps]" in " ".join(
+        output.split()
+    )
     assert "YouTube video URL or ID" in output
     assert "video_ref" not in output
 
@@ -775,7 +827,7 @@ def test_vision_requires_dependencies_before_fetch(monkeypatch, capsys) -> None:
         raise RuntimeError("Vision dependencies missing")
 
     monkeypatch.setattr(commands, "require_vision", reject)
-    assert main(["vision", "JpSHyEIZ_bo"]) == 1
+    assert main(["video", "JpSHyEIZ_bo", "--vision"]) == 1
     assert "Vision dependencies missing" in capsys.readouterr().err
 
 

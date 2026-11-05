@@ -6,7 +6,7 @@ import json
 import sys
 
 MAX_STDOUT_TEXT_FIELD_CHARS = 400_000
-LONG_STDOUT_TEXT_FIELDS = frozenset({"description", "text"})
+LONG_STDOUT_TEXT_FIELDS = frozenset({"description", "text", "transcript"})
 
 
 def emit_json(payload: object) -> None:
