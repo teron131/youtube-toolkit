@@ -39,7 +39,7 @@ def test_decision_settings_need_only_a_key_and_default_to_vercel(monkeypatch) ->
     assert config.decision_config() is None
     monkeypatch.setenv("DECISION_API_KEY", "decision-key")
     assert config.decision_config() == config.DecisionConfig(
-        config.DEFAULT_DECISION_URL, "decision-key", config.DEFAULT_DECISION_MODEL
+        config.DEFAULT_DECISION_BASE_URL, "decision-key", config.DEFAULT_DECISION_MODEL
     )
 
 

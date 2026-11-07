@@ -36,8 +36,8 @@ DEFAULT_EMBEDDING_CONCURRENCY = 16
 MAX_EMBEDDING_CONCURRENCY = 50
 # A Hugging Face model ID; EMBEDDING_LOCAL_MODEL can name any other model that loads in sentence-transformers, and vision also needs it to embed images.
 DEFAULT_LOCAL_EMBEDDING_MODEL = "jinaai/jina-embeddings-v5-omni-small-retrieval"
-# TypeSafe's System One endpoint on Vercel AI Gateway; DECISION_URL can name any host that accepts the same request, such as OpenRouter's https://openrouter.ai/api/alpha/decisions.
-DEFAULT_DECISION_URL = "https://ai-gateway.vercel.sh/typesafe/v1/systemone"
+# TypeSafe's API root on Vercel AI Gateway, under which the SDK calls /v1/systemone; DECISION_BASE_URL can name any host that serves the same path, such as OpenRouter's https://openrouter.ai/api.
+DEFAULT_DECISION_BASE_URL = "https://ai-gateway.vercel.sh/typesafe"
 # DECISION_MODEL can name another model that reads images, though vision's score cutoff was measured on this one.
 DEFAULT_DECISION_MODEL = "perplexity/pplx-decider-flash-v1.2"
 # An API key setting holding a name of this shape, such as GEMINI_API_KEY, uses that variable's value; real keys never look like this.
@@ -120,17 +120,17 @@ def embedding_concurrency(job_count: int) -> int:
 
 @dataclass(frozen=True, slots=True)
 class DecisionConfig:
-    url: str
+    base_url: str
     api_key: str
     model: str
 
     def __post_init__(self) -> None:
-        if urlparse(self.url).scheme not in {"http", "https"}:
-            raise ValueError("DECISION_URL must use http or https")
+        if urlparse(self.base_url).scheme not in {"http", "https"}:
+            raise ValueError("DECISION_BASE_URL must use http or https")
 
     @property
     def host(self) -> str:
-        return urlparse(self.url).netloc
+        return urlparse(self.base_url).netloc
 
 
 def decision_config() -> DecisionConfig | None:
@@ -139,7 +139,7 @@ def decision_config() -> DecisionConfig | None:
     if api_key is None:
         return None
     return DecisionConfig(
-        url=config_value("DECISION_URL") or DEFAULT_DECISION_URL,
+        base_url=config_value("DECISION_BASE_URL") or DEFAULT_DECISION_BASE_URL,
         api_key=api_key,
         model=config_value("DECISION_MODEL") or DEFAULT_DECISION_MODEL,
     )

@@ -1,6 +1,6 @@
 [project]
 name = "youtube-toolkit"
-version = "0.29.0"
+version = "0.29.1"
 description = "Transcript-first YouTube research toolkit for agents and local workflows"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -19,7 +19,13 @@ dev = ["pytest>=9.0.2", "ruff>=0.15.1"]
 youtube = "youtube_toolkit.cli.__main__:main"
 
 [project.optional-dependencies]
-vision = ["numpy>=2.4.0", "opencv-python>=4.14.0,<5", "pillow>=11.0.0", "yake>=0.7.3"]
+vision = [
+  "numpy>=2.4.0",
+  "opencv-python>=4.14.0,<5",
+  "pillow>=11.0.0",
+  "typesafe-sdk>=0.7.5",
+  "yake>=0.7.3",
+]
 embeddings = [
   "sentence-transformers>=6.2.0",
   "torch>=2.14.1",

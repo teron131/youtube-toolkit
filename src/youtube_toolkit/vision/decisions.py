@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import io
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from PIL import Image
+from typesafe_sdk import Answer, Noul, NoulAnswer
 
 from ..config import DecisionConfig
 from ..decisions import (
@@ -44,32 +45,27 @@ MAX_FAILED_SHARE = 0.1
 # Each description lists by category what counts and what does not; against one-line questions this lifted key-frame AUC on the graded videos from 0.70 to 0.76 and spread the visual answers on a wordless short from a median of 0.93 to 0.63.
 FRAME_QUESTIONS = {
     # Excluding subtitles and name captions keeps talking heads with burned-in text from scoring as information, and asking for it in full ranks a finished slide above the frames that write it.
-    "has_information": {
-        "type": "noul",
-        "instructions": "Does the frame show specific information a viewer could read or study, shown in full rather than still being written, typed, or drawn? Counts: slides and title cards with readable text; code, terminals, and app, web, or document screens; charts, tables, and figures with numbers; equations and labeled diagrams; posts, articles, and on-screen lists. Does not count: subtitles or captions of the speech, a speaker's name or channel caption, logos and watermarks, decorative or background text, and text too small, blurred, or partial to read.",
-    },
-    "visual": {
-        "type": "noul",
-        "instructions": "Is the frame a moment worth pausing on for what it shows, where something new has fully appeared and the shot holds on it? Counts: a complete scene, illustration, or animation at its finished state; a reveal of a new place, object, or idea; a finished artwork, photograph, product shot, or generated result; a demo showing its outcome. Does not count: an earlier step still being drawn, written, built, or assembled; transitions such as cuts, fades, swirls, zooms, morphs, or motion blur; people as the main subject, such as talking heads, face close-ups, reactions, or someone walking or working; blank, dark, logo, end, or loading screens.",
-    },
+    "has_information": Noul(
+        instructions="Does the frame show specific information a viewer could read or study, shown in full rather than still being written, typed, or drawn? Counts: slides and title cards with readable text; code, terminals, and app, web, or document screens; charts, tables, and figures with numbers; equations and labeled diagrams; posts, articles, and on-screen lists. Does not count: subtitles or captions of the speech, a speaker's name or channel caption, logos and watermarks, decorative or background text, and text too small, blurred, or partial to read."
+    ),
+    "visual": Noul(
+        instructions="Is the frame a moment worth pausing on for what it shows, where something new has fully appeared and the shot holds on it? Counts: a complete scene, illustration, or animation at its finished state; a reveal of a new place, object, or idea; a finished artwork, photograph, product shot, or generated result; a demo showing its outcome. Does not count: an earlier step still being drawn, written, built, or assembled; transitions such as cuts, fades, swirls, zooms, morphs, or motion blur; people as the main subject, such as talking heads, face close-ups, reactions, or someone walking or working; blank, dark, logo, end, or loading screens."
+    ),
     # Judging the content rather than the frame keeps app windows and webcam insets from marking down every screen recording; it put clean views of a rendered scene at 0.61-0.73 and the same scene behind a settings panel at 0.43-0.56.
-    "impressive": {
-        "type": "noul",
-        "instructions": "Looking at the main content and ignoring the app window around it and any small webcam inset, is it a visually impressive view: a striking, detailed render, scene, artwork, or result, shown fully and clearly? Does not count: main content partly covered by an open settings panel, menu, dialog, or tooltip; plain text, posts, tables, or code; blurry, dark, or half-loaded views.",
-    },
+    "impressive": Noul(
+        instructions="Looking at the main content and ignoring the app window around it and any small webcam inset, is it a visually impressive view: a striking, detailed render, scene, artwork, or result, shown fully and clearly? Does not count: main content partly covered by an open settings panel, menu, dialog, or tooltip; plain text, posts, tables, or code; blurry, dark, or half-loaded views."
+    ),
 }
 # Any view of one item counts as the same, since a scrolled page, a rotated 3D scene, and a webcam toggled on change most pixels while showing nothing new.
 SAME_ITEM_QUESTIONS = {
-    "same_item": {
-        "type": "noul",
-        "instructions": "Do the FIRST and SECOND frames show the same item, so one screenshot of it would do? The item is the thing being shown: one post, article, page, chart, table, prompt and its result, comparison, product, or scene. Counts as the same item: any other view of it, such as scrolled, zoomed, panned, rotated, seen from another camera angle, highlighted, or with a panel, menu, stats bar, cursor, or webcam added or removed. Does not count: a different post, page, chart, prompt, result, or scene, even in the same app or layout.",
-    }
+    "same_item": Noul(
+        instructions="Do the FIRST and SECOND frames show the same item, so one screenshot of it would do? The item is the thing being shown: one post, article, page, chart, table, prompt and its result, comparison, product, or scene. Counts as the same item: any other view of it, such as scrolled, zoomed, panned, rotated, seen from another camera angle, highlighted, or with a panel, menu, stats bar, cursor, or webcam added or removed. Does not count: a different post, page, chart, prompt, result, or scene, even in the same app or layout."
+    )
 }
 CONTEXT_QUESTIONS = {
-    "illustrative": {
-        "type": "noul",
-        "instructions": f"Does the frame show the specific thing the narrator describes around {MARKER}? Counts: the actual object, product, device, place, experiment, demo, or process being talked about, or a close view of it. Does not count: generic or stock footage that only sets a mood, a person talking to the camera, or a shot unrelated to the words.",
-    }
+    "illustrative": Noul(
+        instructions=f"Does the frame show the specific thing the narrator describes around {MARKER}? Counts: the actual object, product, device, place, experiment, demo, or process being talked about, or a close view of it. Does not count: generic or stock footage that only sets a mood, a person talking to the camera, or a shot unrelated to the words."
+    )
 }
 
 
@@ -127,7 +123,7 @@ def rank_frames(
     warnings: list[str] = []
 
     def ask(
-        questions: dict[str, dict[str, Any]],
+        questions: dict[str, Noul],
         inputs: list[DecisionInput],
         noun: str,
         consequence: str,
@@ -250,11 +246,14 @@ def _decision(
 
 
 def _probabilities(
-    answers: dict[str, dict[str, Any]], questions: dict[str, dict[str, Any]]
+    answers: dict[str, Answer], questions: dict[str, Noul]
 ) -> dict[str, float]:
-    # A refused or missing answer carries no probability and counts as no.
+    # A missing answer counts as no.
     return {
-        name: float((answers.get(name) or {}).get("noul") or 0.0) for name in questions
+        name: answer.noul
+        if isinstance(answer := answers.get(name), NoulAnswer)
+        else 0.0
+        for name in questions
     }
 
 

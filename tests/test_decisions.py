@@ -1,21 +1,36 @@
-"""Decision requests take TypeSafe's shape at whatever DECISION_URL names, always opt in to images, and read each host's usage and error shapes."""
+"""Decision requests go through TypeSafe's SDK to whatever DECISION_BASE_URL names, always opt in to images, send them as base64 JSON, and read each host's usage and error shapes."""
 
-from email.message import Message
-import io
 import json
-import urllib.error
 
+import httpx2
 import pytest
+from typesafe_sdk import Noul, NoulAnswer
 
 from youtube_toolkit import decisions
 from youtube_toolkit.config import DecisionConfig
 
-VERCEL = DecisionConfig(
-    "https://ai-gateway.vercel.sh/typesafe/v1/systemone", "secret", "decider"
-)
-OPENROUTER = DecisionConfig(
-    "https://openrouter.ai/api/alpha/decisions", "secret", "decider"
-)
+VERCEL = DecisionConfig("https://ai-gateway.vercel.sh/typesafe", "secret", "decider")
+OPENROUTER = DecisionConfig("https://openrouter.ai/api", "secret", "decider")
+QUESTIONS = {"shown": Noul(instructions="Is it shown?")}
+ANSWERS = {"shown": {"type": "noul", "noul": 0.9}}
+
+
+def serve(monkeypatch, reply):
+    """`reply` maps each request's JSON body to the status and JSON body the host answers with; the requests sent are returned."""
+    sent = []
+
+    def handle(request):
+        sent.append(request)
+        status, body = reply(json.loads(request.content))
+        return httpx2.Response(status, json=body)
+
+    client = decisions.TypeSafeClient
+    monkeypatch.setattr(
+        decisions,
+        "TypeSafeClient",
+        lambda **kwargs: client(**kwargs, transport=httpx2.MockTransport(handle)),
+    )
+    return sent
 
 
 @pytest.mark.parametrize(
@@ -53,42 +68,45 @@ OPENROUTER = DecisionConfig(
             0.0000009,
             None,
         ),
-        (OPENROUTER, {}, (None, None), None, None),
     ],
 )
 def test_request_carries_typesafe_shape_and_reads_each_hosts_usage(
     monkeypatch, config, payload, tokens, cost, seconds
 ) -> None:
-    sent = []
-
-    def urlopen(request, timeout):
-        sent.append(request)
-        answers = {"shown": {"type": "noul", "noul": 0.9}}
-        return io.BytesIO(json.dumps({"answers": answers, **payload}).encode())
-
-    monkeypatch.setattr(decisions.urllib.request, "urlopen", urlopen)
-    result = decisions.decide(
+    sent = serve(
+        monkeypatch,
+        lambda _body: (200, {"model": "decider", "answers": ANSWERS, **payload}),
+    )
+    [result] = decisions.decide_each(
         config,
-        state=["Transcript", "frame"],
-        questions={"shown": {"type": "noul", "instructions": "Is it shown?"}},
-        assets={"frame": decisions.image_asset(b"jpeg bytes")},
+        questions=QUESTIONS,
+        inputs=[
+            decisions.DecisionInput(
+                ["Transcript", "frame"], {"frame": decisions.image_asset(b"jpeg bytes")}
+            )
+        ],
     )
 
     assert result == decisions.DecisionResult(
-        {"shown": {"type": "noul", "noul": 0.9}}, *tokens, cost, seconds
+        {"shown": NoulAnswer(noul=0.9)}, *tokens, cost, seconds
     )
-    request = sent[0]
-    assert request.full_url == config.url
-    assert request.get_header("Authorization") == "Bearer secret"
-    assert request.get_header("Typesafe-danger-zone-images") == "true"
-    body = json.loads(request.data)
-    assert body["model"] == "decider"
-    assert body["assets"]["frame"] == {
-        "type": "image",
-        "format": "jpg",
-        "data_base64": "anBlZyBieXRlcw==",
+    [request] = sent
+    assert str(request.url) == f"{config.base_url}/v1/systemone"
+    assert request.headers["Authorization"] == "Bearer secret"
+    assert request.headers["TypeSafe-Danger-Zone-Images"] == "true"
+    assert request.headers["Content-Type"] == "application/json"
+    assert json.loads(request.content) == {
+        "state": ["Transcript", "frame"],
+        "model": "decider",
+        "questions": {"shown": {"type": "noul", "instructions": "Is it shown?"}},
+        "assets": {
+            "frame": {
+                "type": "image",
+                "format": "jpg",
+                "data_base64": "anBlZyBieXRlcw==",
+            }
+        },
     }
-    assert body["state"] == ["Transcript", "frame"]
 
 
 @pytest.mark.parametrize(
@@ -102,61 +120,56 @@ def test_request_carries_typesafe_shape_and_reads_each_hosts_usage(
     ],
 )
 def test_errors_carry_the_hosts_reason(monkeypatch, body, message) -> None:
-    def urlopen(request, timeout):
-        raise urllib.error.HTTPError(
-            request.full_url,
-            400,
-            "Bad Request",
-            Message(),
-            io.BytesIO(json.dumps(body).encode()),
-        )
+    serve(monkeypatch, lambda _body: (400, body))
+    [row] = decisions.decide_each(
+        VERCEL, questions=QUESTIONS, inputs=[decisions.DecisionInput("s", {})]
+    )
 
-    monkeypatch.setattr(decisions.urllib.request, "urlopen", urlopen)
-    with pytest.raises(decisions.DecisionError, match=f"HTTP 400\\): {message}"):
-        decisions.decide(VERCEL, state="s", questions={}, assets={})
+    assert isinstance(row, decisions.DecisionError)
+    assert "ai-gateway.vercel.sh decision request failed" in str(row)
+    assert f"400 {message}" in str(row)
 
 
 def test_decide_each_retries_failures_once_after_the_burst_and_keeps_order(
     monkeypatch,
 ) -> None:
-    calls = []
+    states = []
 
-    def decide(config, *, state, questions, assets):
-        calls.append(state)
+    def reply(body):
+        state = body["state"]
+        states.append(state)
         # "flaky" fails only its first request; "bad" fails every one.
-        if state == "bad" or (state == "flaky" and calls.count("flaky") == 1):
-            raise decisions.DecisionError("HTTP 503")
-        return decisions.DecisionResult({"q": {"noul": state}}, 1, 1, None, None)
+        if state == "bad" or (state == "flaky" and states.count("flaky") == 1):
+            return 400, {"message": "Rejected"}
+        answers = {"shown": {"type": "noul", "noul": len(state) / 10}}
+        return 200, {"model": "decider", "answers": answers, "usage": {}}
 
-    monkeypatch.setattr(decisions, "decide", decide)
+    serve(monkeypatch, reply)
     rows = decisions.decide_each(
         VERCEL,
-        questions={},
+        questions=QUESTIONS,
         inputs=[decisions.DecisionInput(s, {}) for s in ("ok", "flaky", "bad")],
     )
 
     assert rows[:2] == [
-        decisions.DecisionResult({"q": {"noul": state}}, 1, 1, None, None)
+        decisions.DecisionResult(
+            {"shown": NoulAnswer(noul=len(state) / 10)}, None, None, None, None
+        )
         for state in ("ok", "flaky")
     ]
     assert isinstance(rows[2], decisions.DecisionError)
-    assert sorted(calls) == ["bad", "bad", "flaky", "flaky", "ok"]
+    assert sorted(states) == ["bad", "bad", "flaky", "flaky", "ok"]
 
 
 def test_decide_each_skips_the_second_round_when_every_request_fails(
     monkeypatch,
 ) -> None:
-    calls = []
-
-    def decide(config, *, state, questions, assets):
-        calls.append(state)
-        raise decisions.DecisionError("HTTP 401")
-
-    monkeypatch.setattr(decisions, "decide", decide)
+    sent = serve(monkeypatch, lambda _body: (401, {"message": "Invalid key"}))
     rows = decisions.decide_each(
         VERCEL,
-        questions={},
+        questions=QUESTIONS,
         inputs=[decisions.DecisionInput(s, {}) for s in ("a", "b")],
     )
-    assert len(calls) == 2
+
+    assert len(sent) == 2
     assert all(isinstance(row, decisions.DecisionError) for row in rows)

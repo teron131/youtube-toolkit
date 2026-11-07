@@ -13,8 +13,8 @@ from youtube_toolkit import ffmpeg_utils, vision
 from youtube_toolkit.cli import commands
 from youtube_toolkit.cli.parser import build_parser
 from youtube_toolkit.config import (
+    DEFAULT_DECISION_BASE_URL,
     DEFAULT_DECISION_MODEL,
-    DEFAULT_DECISION_URL,
     LOCAL_EMBEDDING_CUTOFFS,
     DecisionConfig,
 )
@@ -40,7 +40,9 @@ from youtube_toolkit.youtube.caption import CaptionTranscriptUnavailable
 from youtube_toolkit.youtube.client import VISION_VIDEO_FORMAT_SELECTOR, YtDlpClient
 
 VIDEO_ID = "JpSHyEIZ_bo"
-DECISION = DecisionConfig(DEFAULT_DECISION_URL, "decision-key", DEFAULT_DECISION_MODEL)
+DECISION = DecisionConfig(
+    DEFAULT_DECISION_BASE_URL, "decision-key", DEFAULT_DECISION_MODEL
+)
 
 
 SCORES = frame_selection.VisualScores(20.0, 0.01, 0.0)

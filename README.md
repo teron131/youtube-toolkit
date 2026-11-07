@@ -25,7 +25,7 @@ youtube doctor
 | Variable | Used for | Default |
 | --- | --- | --- |
 | `DECISION_API_KEY` | Picking screenshots with a decision model | |
-| `DECISION_URL` | Any TypeSafe System One endpoint | Vercel AI Gateway |
+| `DECISION_BASE_URL` | Any host serving TypeSafe's System One API | Vercel AI Gateway |
 | `DECISION_MODEL` | The decision model; it must read images | `perplexity/pplx-decider-flash-v1.2` |
 | `GEMINI_API_KEY` | Picking screenshots with Gemini Embedding 2 | |
 | `EMBEDDING_API_KEY` | Semantic search | |

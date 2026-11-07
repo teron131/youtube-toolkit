@@ -1,4 +1,4 @@
-"""Ask a decision model typed questions in TypeSafe's System One format, which Vercel AI Gateway and OpenRouter both accept with images, so DECISION_URL alone picks the host.
+"""Ask a decision model typed questions through TypeSafe's SDK in its System One format, which Vercel AI Gateway and OpenRouter both accept with images, so DECISION_BASE_URL alone picks the host.
 
 Vercel's native /v1/evaluate endpoint is not used because it accepts image assets but silently ignores them.
 """
@@ -6,24 +6,31 @@ Vercel's native /v1/evaluate endpoint is not used because it accepts image asset
 from __future__ import annotations
 
 import base64
+from collections.abc import Mapping
 from dataclasses import dataclass
-import http.client
-import json
-from typing import Any
-import urllib.error
-import urllib.request
+
+from pydantic import AliasPath, BaseModel, Field
+from typesafe_sdk import (
+    Answer,
+    Question,
+    RetryPolicy,
+    SystemOneResponse,
+    TypeSafeClient,
+    TypeSafeError,
+    Usage,
+)
 
 from .config import DecisionConfig
-from .execution import collect_concurrently, retry_transient
+from .execution import collect_concurrently
 
 REQUEST_TIMEOUT_SECONDS = 60
 # For 690 vision frames on Decider Flash, 8 in flight took 102 s, 16 took 50 s, and 32 took 27 s at the same 1.2 s per request; 64 and 128 drew 503 overload errors under that sustained load.
 MAX_WORKERS = 32
 # Overloaded hosts answer 503 "try again shortly".
-ATTEMPTS = 5
+MAX_RETRIES = 4
 # Overload comes in spells, partly from the fan-out itself, so requests still failing get one more round once the first has ended, a few at a time.
 RETRY_WORKERS = 4
-# TypeSafe's opt-in for image assets; Vercel AI Gateway rejects image requests without it.
+# TypeSafe's opt-in for image assets; Vercel AI Gateway rejects image requests without it, and the SDK never sends it.
 IMAGES_HEADER = {"TypeSafe-Danger-Zone-Images": "true"}
 
 
@@ -33,15 +40,15 @@ class DecisionError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class DecisionInput:
-    state: str | list[Any] | dict[str, Any]
+    state: str | list[str]
     assets: dict[str, dict[str, str]]
 
 
 @dataclass(frozen=True, slots=True)
 class DecisionResult:
-    """Answers are keyed by question name in TypeSafe's shape; token counts, cost, and provider time are None when the host does not report them."""
+    """Token counts, cost, and provider time are None when the host does not report them."""
 
-    answers: dict[str, dict[str, Any]]
+    answers: dict[str, Answer]
     input_tokens: int | None
     output_tokens: int | None
     cost_usd: float | None
@@ -61,29 +68,49 @@ def image_asset(jpeg: bytes) -> dict[str, str]:
 def decide_each(
     config: DecisionConfig,
     *,
-    questions: dict[str, dict[str, Any]],
+    questions: Mapping[str, Question],
     inputs: list[DecisionInput],
 ) -> list[DecisionResult | DecisionError]:
     """Ask the same questions about each input, MAX_WORKERS requests at a time; rows align with inputs and hold the error of a request that failed both rounds.
 
     When every request fails, there is no second round: a bad key, a bad model, or a host that is down will not recover in seconds.
     """
+    with TypeSafeClient(
+        api_key=config.api_key,
+        model=config.model,
+        base_url=config.base_url,
+        timeout=REQUEST_TIMEOUT_SECONDS,
+        headers=IMAGES_HEADER,
+        # The SDK's default 30-second retry budget would never retry a request that timed out.
+        retry=RetryPolicy(max_retries=MAX_RETRIES, timeout=None),
+        # The SDK compresses bodies with zstd on Python 3.14+, which OpenRouter does not document accepting.
+        compression=False,
+    ) as client:
 
-    def ask(item: DecisionInput) -> DecisionResult:
-        return decide(
-            config,
-            state=item.state,
-            questions=questions,
-            assets=item.assets,
-        )
+        def ask(item: DecisionInput) -> DecisionResult:
+            try:
+                reply = client.system_one(
+                    item.state,
+                    questions,
+                    # Base64 assets in the JSON body replace the SDK's multipart image upload, which OpenRouter rejects.
+                    extra_body={"assets": item.assets} if item.assets else None,
+                    response_model=_Reply,
+                )
+            except TypeSafeError as error:
+                raise DecisionError(
+                    f"{config.host} decision request failed: {error}"
+                ) from error
+            return reply.result()
 
-    jobs = dict(enumerate(inputs))
-    completed, failures = collect_concurrently(jobs, ask, max_workers=MAX_WORKERS)
-    if completed and failures:
-        retried, failures = collect_concurrently(
-            {index: jobs[index] for index in failures}, ask, max_workers=RETRY_WORKERS
-        )
-        completed |= retried
+        jobs = dict(enumerate(inputs))
+        completed, failures = collect_concurrently(jobs, ask, max_workers=MAX_WORKERS)
+        if completed and failures:
+            retried, failures = collect_concurrently(
+                {index: jobs[index] for index in failures},
+                ask,
+                max_workers=RETRY_WORKERS,
+            )
+            completed |= retried
     rows: list[DecisionResult | DecisionError] = []
     for index in range(len(inputs)):
         if index in completed:
@@ -96,92 +123,55 @@ def decide_each(
     return rows
 
 
-def decide(
-    config: DecisionConfig,
-    *,
-    state: str | list[Any] | dict[str, Any],
-    questions: dict[str, dict[str, Any]],
-    assets: dict[str, dict[str, str]],
-) -> DecisionResult:
-    body = {"model": config.model, "state": state, "questions": questions}
-    if assets:
-        body["assets"] = assets
-    request = urllib.request.Request(  # noqa: S310 -- DecisionConfig allows only http and https URLs.
-        config.url,
-        data=json.dumps(body).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {config.api_key}",
-            "Content-Type": "application/json",
-            **IMAGES_HEADER,
-        },
-        method="POST",
-    )
+class _VercelProviderAttempt(BaseModel):
+    startTime: float
+    endTime: float
 
-    def send() -> object:
-        with urllib.request.urlopen(  # noqa: S310 -- DecisionConfig allows only http and https URLs.
-            request, timeout=REQUEST_TIMEOUT_SECONDS
-        ) as response:
-            return json.load(response)
 
-    try:
-        payload = retry_transient(
-            send,
-            attempts=ATTEMPTS,
-            backoff_seconds=1,
-            retryable_errors=(
-                urllib.error.URLError,
-                TimeoutError,
-                http.client.IncompleteRead,
-            ),
+class _VercelModelAttempt(BaseModel):
+    providerAttempts: list[_VercelProviderAttempt]
+
+
+class _VercelRouting(BaseModel):
+    modelAttempts: list[_VercelModelAttempt]
+
+
+class _VercelGateway(BaseModel):
+    """Billing and routing for one reply; unlike the SDK's strict models, this one accepts the decimal string Vercel sends as cost."""
+
+    cost: float
+    routing: _VercelRouting
+
+    @property
+    def provider_seconds(self) -> float:
+        return (
+            sum(
+                attempt.endTime - attempt.startTime
+                for model in self.routing.modelAttempts
+                for attempt in model.providerAttempts
+            )
+            / 1000
         )
-    except urllib.error.HTTPError as error:
-        raise DecisionError(
-            f"{config.host} decision request failed (HTTP {error.code}): {_error_message(error)}"
-        ) from error
-    except (OSError, http.client.IncompleteRead) as error:
-        raise DecisionError(f"{config.host} decision connection failed") from error
-    except ValueError as error:
-        raise DecisionError(
-            f"{config.host} decision response is not valid JSON"
-        ) from error
-    return _parse(config, payload)
 
 
-def _parse(config: DecisionConfig, payload: object) -> DecisionResult:
-    answers = payload.get("answers") if isinstance(payload, dict) else None
-    if not isinstance(payload, dict) or not isinstance(answers, dict):
-        raise DecisionError(f"{config.host} decision response has no answers")
-    usage = payload.get("usage") or {}
-    gateway = (payload.get("provider_metadata") or {}).get("gateway") or {}
-    cost = gateway.get("cost", usage.get("cost"))
-    input_tokens = usage.get("input_tokens")
-    output_tokens = usage.get("output_tokens")
-    attempts = [
-        attempt
-        for model in (gateway.get("routing") or {}).get("modelAttempts") or []
-        for attempt in model["providerAttempts"]
-    ]
-    return DecisionResult(
-        answers,
-        input_tokens if isinstance(input_tokens, int) else None,
-        output_tokens if isinstance(output_tokens, int) else None,
-        None if cost is None else float(cost),
-        sum(attempt["endTime"] - attempt["startTime"] for attempt in attempts) / 1000
-        if attempts
-        else None,
+class _Usage(Usage):
+    cost: float | None = None
+
+
+class _Reply(SystemOneResponse):
+    """The SDK's reply carries answers and token counts only, so cost and provider time come from what each host adds: Vercel's gateway block, or OpenRouter's cost in usage."""
+
+    usage: _Usage
+    vercel: _VercelGateway | None = Field(
+        None, validation_alias=AliasPath("provider_metadata", "gateway")
     )
 
-
-def _error_message(error: urllib.error.HTTPError) -> str:
-    """TypeSafe-style hosts put the reason in `message`, OpenRouter in `error.message`."""
-    try:
-        payload = json.loads(error.read())
-    except (OSError, ValueError):
-        return "no readable error body"
-    if not isinstance(payload, dict):
-        return "no readable error body"
-    nested = payload.get("error")
-    message = payload.get("message") or (
-        nested.get("message") if isinstance(nested, dict) else None
-    )
-    return str(message) if message else "no error message"
+    def result(self) -> DecisionResult:
+        vercel = self.vercel
+        return DecisionResult(
+            self.answers,
+            self.usage.input_tokens,
+            self.usage.output_tokens,
+            self.usage.cost if vercel is None else vercel.cost,
+            None if vercel is None else vercel.provider_seconds,
+        )

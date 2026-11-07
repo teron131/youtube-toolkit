@@ -778,7 +778,7 @@ def test_doctor_names_the_speech_to_text_route_or_the_next_step(
         (
             {
                 "DECISION_API_KEY": "key",
-                "DECISION_URL": "https://openrouter.ai/api/alpha/decisions",
+                "DECISION_BASE_URL": "https://openrouter.ai/api",
                 "GEMINI_API_KEY": "key",
             },
             True,
@@ -889,9 +889,9 @@ def test_setup_saves_keys_without_echoing_or_exporting_them(
     assert "Configured (Vercel AI Gateway API)" in health.stt_health()
 
 
-def test_setup_decisions_saves_the_key_url_and_model(monkeypatch) -> None:
+def test_setup_decisions_saves_the_key_base_url_and_model(monkeypatch) -> None:
     config.save_config({"DECISION_API_KEY": "keep-key"})
-    answers = iter(["https://openrouter.ai/api/alpha/decisions", "example/decider"])
+    answers = iter(["https://openrouter.ai/api", "example/decider"])
     monkeypatch.setattr(setup.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda: next(answers))
     monkeypatch.setattr(setup.getpass, "getpass", lambda *_args, **_kwargs: "")
@@ -899,7 +899,7 @@ def test_setup_decisions_saves_the_key_url_and_model(monkeypatch) -> None:
     assert main(["setup", "--decisions"]) == 0
     assert config.read_config() == {
         "DECISION_API_KEY": "keep-key",
-        "DECISION_URL": "https://openrouter.ai/api/alpha/decisions",
+        "DECISION_BASE_URL": "https://openrouter.ai/api",
         "DECISION_MODEL": "example/decider",
     }
 

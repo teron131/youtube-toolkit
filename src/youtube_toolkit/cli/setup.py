@@ -11,8 +11,8 @@ import warnings
 
 from .. import config
 from ..config import (
+    DEFAULT_DECISION_BASE_URL,
     DEFAULT_DECISION_MODEL,
-    DEFAULT_DECISION_URL,
     DEFAULT_EMBEDDING_BASE_URL,
     DEFAULT_EMBEDDING_CONCURRENCY,
     DEFAULT_EMBEDDING_DIMENSIONALITY,
@@ -90,15 +90,17 @@ def _setup_embeddings(settings: dict[str, str]) -> None:
 
 def _setup_decisions(settings: dict[str, str]) -> None:
     print(
-        "\nDecision models rank vision frames ahead of embeddings, through any host that takes TypeSafe's System One requests: Vercel AI Gateway by default, or OpenRouter at https://openrouter.ai/api/alpha/decisions.",
+        "\nDecision models rank vision frames ahead of embeddings, through any host that takes TypeSafe's System One requests: Vercel AI Gateway by default, or OpenRouter at https://openrouter.ai/api.",
         file=sys.stderr,
     )
     _prompt(settings, "DECISION_API_KEY", secret=True)
-    _prompt(settings, "DECISION_URL", DEFAULT_DECISION_URL)
+    _prompt(settings, "DECISION_BASE_URL", DEFAULT_DECISION_BASE_URL)
     _prompt(settings, "DECISION_MODEL", DEFAULT_DECISION_MODEL)
-    url = settings.get("DECISION_URL", DEFAULT_DECISION_URL)
-    if urlparse(url).scheme not in {"http", "https"}:
-        raise ValueError("DECISION_URL must use http or https; no settings were saved")
+    base_url = settings.get("DECISION_BASE_URL", DEFAULT_DECISION_BASE_URL)
+    if urlparse(base_url).scheme not in {"http", "https"}:
+        raise ValueError(
+            "DECISION_BASE_URL must use http or https; no settings were saved"
+        )
 
 
 def _setup_stt(settings: dict[str, str]) -> None:

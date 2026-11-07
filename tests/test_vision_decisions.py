@@ -2,6 +2,7 @@
 
 from PIL import Image
 import pytest
+from typesafe_sdk import NoulAnswer
 
 from youtube_toolkit.config import DecisionConfig
 from youtube_toolkit.decisions import DecisionError, DecisionResult
@@ -14,7 +15,7 @@ from youtube_toolkit.schemas import (
 from youtube_toolkit.vision import decisions
 from youtube_toolkit.vision.candidates import StoredFrame, VisualScores
 
-CONFIG = DecisionConfig("https://decisions.example/v1", "key", "model-id")
+CONFIG = DecisionConfig("https://decisions.example", "key", "model-id")
 DOCUMENT = TranscriptDocument(
     VideoMetadata(
         "JpSHyEIZ_bo",
@@ -42,7 +43,7 @@ def frame(tmp_path, timestamp: float, shade: int) -> StoredFrame:
 
 def result(cost=0.00001, **answers):
     return DecisionResult(
-        {name: {"type": "noul", "noul": value} for name, value in answers.items()},
+        {name: NoulAnswer(noul=value) for name, value in answers.items()},
         100,
         2,
         cost,
