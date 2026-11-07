@@ -38,6 +38,7 @@ def run_doctor(args: argparse.Namespace) -> str:
             f"  embedding  {_checked(embedding_health)}",
             f"  decision   {_checked(decision_health)}",
             f"  stt        {_checked(stt_health)}",
+            f"  llm        {_checked(llm_health)}",
         ]
     )
 
@@ -86,6 +87,12 @@ def stt_health() -> str:
     if not local_model_downloaded(model):
         return f"Local {model} downloads on first use, or now with `youtube stt-setup`"
     return f"Configured (local {model}); `youtube stt-setup` checks that it runs"
+
+
+def llm_health() -> str:
+    if llm := config.llm_config():
+        return f"Configured ({llm.model} at {llm.host})"
+    return "Set LLM_API_KEY with `youtube setup --llm`"
 
 
 def _checked(check: Callable[[], str]) -> str:

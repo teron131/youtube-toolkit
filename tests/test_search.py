@@ -53,10 +53,10 @@ def search_transcript_side_effects(monkeypatch) -> dict[str, Any]:
     def fake_fetch_live_transcript(
         video_id: str,
         *,
-        allow_stt: bool,
+        stt: str,
         metadata: dict | None = None,
     ) -> TranscriptDocument:
-        assert not allow_stt
+        assert stt == "never"
         fetched_video_ids.append(video_id)
         supplied_metadata[video_id] = metadata
         return TranscriptDocument(
@@ -1223,7 +1223,7 @@ def test_semantic_video_results_include_partial_transcript_warnings(
     def fake_fetch_transcript(
         video_id: str,
         *,
-        allow_stt: bool,
+        stt: str,
         metadata: dict | None = None,
     ) -> TranscriptDocument:
         return fake_fetch_live_transcript(video_id)
@@ -1298,7 +1298,7 @@ def test_semantic_search_defaults_to_chunk_results(
     def fake_fetch_transcript(
         video_id: str,
         *,
-        allow_stt: bool,
+        stt: str,
         metadata: dict | None = None,
     ) -> TranscriptDocument:
         return fake_fetch_live_transcript(video_id)
@@ -1361,7 +1361,7 @@ def test_live_semantic_search_fetches_transcripts_concurrently(
         }
 
     def fake_fetch_live_transcript(
-        video_id: str, *, allow_stt: bool, metadata: dict | None = None
+        video_id: str, *, stt: str, metadata: dict | None = None
     ) -> TranscriptDocument:
         all_fetches_started.wait(timeout=1)
         return TranscriptDocument(
@@ -1656,7 +1656,7 @@ def test_semantic_search_reports_when_no_transcripts_can_be_prepared(
     def fail_fetch_transcript(
         video_id: str,
         *,
-        allow_stt: bool,
+        stt: str,
         metadata: dict | None = None,
     ) -> TranscriptDocument:
         raise RuntimeError("captions unavailable")
@@ -1774,7 +1774,7 @@ def test_search_result_keeps_raw_metadata_when_transcript_fetch_fails(
     def fail_fetch_transcript(
         video_id: str,
         *,
-        allow_stt: bool,
+        stt: str,
         metadata: dict | None = None,
     ) -> TranscriptDocument:
         raise RuntimeError("captions unavailable")

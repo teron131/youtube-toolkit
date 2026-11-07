@@ -171,7 +171,7 @@ def fetch_semantic_transcripts(
 
     def fetch(candidate: dict[str, Any]) -> TranscriptDocument:
         return fetch_transcript(
-            candidate["id"], allow_stt=False, metadata=candidate.get("metadata")
+            candidate["id"], stt="never", metadata=candidate.get("metadata")
         )
 
     documents, failures = collect_concurrently(

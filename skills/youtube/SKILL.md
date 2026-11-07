@@ -26,7 +26,7 @@ youtube video URL_OR_ID --transcript --timestamps
 youtube video URL_OR_ID --transcript --export
 ```
 
-`--transcript` gives the text as one string, so `jq -r .transcript` prints it; `--timestamps` gives chunks with `start_seconds`, `end_seconds`, and `text`. It prefers manual subtitles, then automatic captions, never machine translations, and falls back to speech-to-text, when configured, if there are none. Stdout stops at 400,000 characters, so for long videos use `--export`, which writes a text file to the working directory, and `transcript` holds its path.
+`--transcript` gives the text as one string, so `jq -r .transcript` prints it; `--timestamps` gives chunks with `start_seconds`, `end_seconds`, and `text`. It prefers manual subtitles, then automatic captions, never machine translations, and falls back to speech-to-text, when configured, if there are none. `--stt` transcribes the audio even when captions exist, for when the captions are poor; it takes longer and fails if speech-to-text is not set up. `--translate` returns the transcript in English as timestamped sentences, and `--translate LANGUAGE` in another language written any way the model understands, such as `zh-TW` or `Japanese`; a transcript whose language code matches comes back unchanged. Use it when the user wants the full text in another language, since reading a transcript to answer in another language needs no translation. Stdout stops at 400,000 characters, so for long videos use `--export`, which writes a text file to the working directory, and `transcript` holds its path.
 
 ### Vision
 
@@ -73,6 +73,6 @@ youtube channel @OpenAI --days 7
 
 Install from the toolkit's checkout with `uv run python scripts/install.py`, adding `--vision`, `--embeddings`, or `--stt` as needed; vision and speech-to-text also need `ffmpeg`.
 
-`youtube setup` saves keys and model settings, or one group with `--embeddings`, `--decisions`, or `--stt`. Keys go through hidden prompts, so let the user type secrets themselves and never echo them into commands or chat. `youtube doctor` checks readiness without the network. `youtube stt-setup --cloud-test` sends a recording the provider bills, so run it only when asked to verify the key.
+`youtube setup` saves keys and model settings, or one group with `--embeddings`, `--decisions`, `--stt`, or `--llm`. Keys go through hidden prompts, so let the user type secrets themselves and never echo them into commands or chat. `youtube doctor` checks readiness without the network. `youtube stt-setup --cloud-test` sends a recording the provider bills, so run it only when asked to verify the key.
 
 The calling agent owns synthesis; summarize when the user asks for analysis or a summary.

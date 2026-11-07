@@ -1,4 +1,4 @@
-"""App settings: the per-user settings file and nonblank environment overrides, plus the embedding, decision, and speech-to-text model IDs, setting defaults, and the similarity cutoffs measured for each embedding route.
+"""App settings: the per-user settings file and nonblank environment overrides, plus the embedding, decision, speech-to-text, and LLM model IDs, setting defaults, and the similarity cutoffs measured for each embedding route.
 
 The vision command's limits also live here because the vision package needs its optional extra to import, while the CLI parser needs them on every run.
 """
@@ -40,6 +40,9 @@ DEFAULT_LOCAL_EMBEDDING_MODEL = "jinaai/jina-embeddings-v5-omni-small-retrieval"
 DEFAULT_DECISION_BASE_URL = "https://ai-gateway.vercel.sh/typesafe"
 # DECISION_MODEL can name another model that reads images, though vision's score cutoff was measured on this one.
 DEFAULT_DECISION_MODEL = "perplexity/pplx-decider-flash-v1.2"
+# Any OpenAI-compatible chat API works; the gateway reaches every provider's models under one key.
+DEFAULT_LLM_BASE_URL = "https://ai-gateway.vercel.sh/v1"
+DEFAULT_LLM_MODEL = "openai/gpt-6-luna"
 # An API key setting holding a name of this shape, such as GEMINI_API_KEY, uses that variable's value; real keys never look like this.
 KEY_REFERENCE = re.compile(r"[A-Z_][A-Z0-9_]*_KEY")
 
@@ -142,6 +145,33 @@ def decision_config() -> DecisionConfig | None:
         base_url=config_value("DECISION_BASE_URL") or DEFAULT_DECISION_BASE_URL,
         api_key=api_key,
         model=config_value("DECISION_MODEL") or DEFAULT_DECISION_MODEL,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class LLMConfig:
+    base_url: str
+    api_key: str
+    model: str
+
+    def __post_init__(self) -> None:
+        if urlparse(self.base_url).scheme not in {"http", "https"}:
+            raise ValueError("LLM_BASE_URL must use http or https")
+
+    @property
+    def host(self) -> str:
+        return urlparse(self.base_url).netloc
+
+
+def llm_config() -> LLMConfig | None:
+    """None when LLM_API_KEY is unset, which leaves transcripts untranslatable."""
+    api_key = config_value("LLM_API_KEY")
+    if api_key is None:
+        return None
+    return LLMConfig(
+        base_url=config_value("LLM_BASE_URL") or DEFAULT_LLM_BASE_URL,
+        api_key=api_key,
+        model=config_value("LLM_MODEL") or DEFAULT_LLM_MODEL,
     )
 
 

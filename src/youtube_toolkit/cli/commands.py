@@ -8,6 +8,7 @@ from functools import cache, partial
 from pathlib import Path
 from typing import Any
 
+from ..config import llm_config
 from ..schemas import TranscriptDocument, VideoMetadata
 from ..search import (
     ChannelTarget,
@@ -28,6 +29,7 @@ from ..transcript import (
     write_markdown_export,
     write_transcript_export,
 )
+from ..translation import translate_transcript
 from ..youtube import (
     DEFAULT_COMMENT_LIMIT,
     ChannelOptions,
@@ -46,7 +48,7 @@ VISION_OPTIONS = {
     "auto_clean": "auto_clean",
 }
 PART_OPTIONS = {
-    "transcript": ("timestamps", "export"),
+    "transcript": ("timestamps", "stt", "translate", "export"),
     "vision": tuple(VISION_OPTIONS),
     "comments": ("comment_limit",),
 }
@@ -65,6 +67,13 @@ def video(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("--force requires --export")
     if args.vision:
         require_vision()
+    llm = None
+    if args.translate is not None:
+        llm = llm_config()
+        if llm is None:
+            raise ValueError(
+                "--translate needs LLM_API_KEY; save one with `youtube setup --llm`"
+            )
     client = YtDlpClient()
     payload = cache(partial(client.metadata, args.video_ref))
     shown_alone = not (args.transcript or args.comments is not None or args.vision)
@@ -74,7 +83,12 @@ def video(args: argparse.Namespace) -> dict[str, Any]:
         else None
     )
     document = (
-        fetch_transcript(args.video_ref, client=client, metadata=payload())
+        fetch_transcript(
+            args.video_ref,
+            stt="always" if args.stt else "fallback",
+            client=client,
+            metadata=payload(),
+        )
         if args.transcript
         else None
     )
@@ -103,6 +117,9 @@ def video(args: argparse.Namespace) -> dict[str, Any]:
                 if getattr(args, option) is not None
             },
         )
+    # Translation waits for vision, which matches frames to the original caption lines, timed more finely than translated sentences.
+    if document is not None and llm is not None:
+        document = translate_transcript(document, args.translate, llm)
     parts = {
         "transcript": None if document is None else _transcript(document, args, vision),
         "vision": vision,

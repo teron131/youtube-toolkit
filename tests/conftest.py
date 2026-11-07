@@ -13,7 +13,7 @@ def isolate_saved_config(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(config, "user_config_path", lambda *_args, **_kwargs: tmp_path)
     for name in list(os.environ):
         if name.endswith("_API_KEY") or name.startswith(
-            ("EMBEDDING_", "STT_", "DECISION_")
+            ("EMBEDDING_", "STT_", "DECISION_", "LLM_")
         ):
             monkeypatch.delenv(name)
 

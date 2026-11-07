@@ -90,16 +90,24 @@ class SpeechTranscription:
 
 @dataclass(frozen=True, slots=True)
 class TranscriptDocument:
-    """A speech-to-text document holds the route's timed segments, or one untimed chunk at 0 seconds when the route reports no timing; its `language` is `speech-to-text` when no language was detected or reported."""
+    """A speech-to-text document holds the route's timed segments, or one untimed chunk at 0 seconds when the route reports no timing; its `language` is `speech-to-text` when no language was detected or reported.
+
+    A machine translation names its model in `translated_by`, and `language` is then the requested target language as the caller wrote it.
+    """
 
     metadata: VideoMetadata
     language: str
     source: TranscriptSource
     chunks: list[TranscriptChunk]
+    translated_by: str | None = None
 
     @property
     def text(self) -> str:
         return " ".join(chunk.text for chunk in self.chunks)
+
+    @property
+    def timed(self) -> bool:
+        return any(chunk.end_seconds > chunk.start_seconds for chunk in self.chunks)
 
 
 def parse_upload_date(value: Any) -> date | None:

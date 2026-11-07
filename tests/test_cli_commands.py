@@ -1,6 +1,7 @@
 """CLI contracts for retrieval archives, exports, and native or semantic search."""
 
 import argparse
+from dataclasses import replace
 import json
 import os
 from types import SimpleNamespace
@@ -396,6 +397,26 @@ def test_video_transcript_export_writes_metadata_and_plain_transcript(
         "\n[00:00:00] First sentence.\n[00:01:02] Second sentence.\n"
     )
 
+    capsys.readouterr()
+    monkeypatch.setenv("LLM_API_KEY", "key")
+    monkeypatch.setattr(
+        commands,
+        "translate_transcript",
+        lambda original, language, _llm: replace(
+            original, language=language, translated_by="example/model"
+        ),
+    )
+    translated = ["video", "JpSHyEIZ_bo", "--transcript", "--translate", "zh-TW"]
+    assert main([*translated, "--export"]) == 0
+    translated_path = tmp_path / "What_is_DARKMATTER_Example_Channel_zh-TW.txt"
+    assert json.loads(capsys.readouterr().out)["transcript"]["path"] == str(
+        translated_path
+    )
+    assert "Translation: zh-TW by example/model\n" in translated_path.read_text(
+        encoding="utf-8"
+    )
+    assert export_path.exists()
+
 
 def test_video_parts_share_one_metadata_fetch_and_export_markdown_beside_collages(
     capsys, monkeypatch, tmp_path, metadata_calls
@@ -421,8 +442,10 @@ def test_video_parts_share_one_metadata_fetch_and_export_markdown_beside_collage
         "collage_paths": [str(tmp_path / "JpSHyEIZ_bo_vision_page1.jpg")],
     }
     received = []
+    policies = []
 
-    def fetch_transcript(_video_ref, *, client, metadata):
+    def fetch_transcript(_video_ref, *, stt, client, metadata):
+        policies.append(stt)
         received.append(metadata)
         return document
 
@@ -433,12 +456,25 @@ def test_video_parts_share_one_metadata_fetch_and_export_markdown_beside_collage
     monkeypatch.setattr(commands, "require_vision", lambda: None)
     monkeypatch.setattr(commands, "fetch_transcript", fetch_transcript)
     monkeypatch.setattr(vision_package, "sample_vision", sample_vision)
+    monkeypatch.setenv("LLM_API_KEY", "key")
+    monkeypatch.setattr(
+        commands,
+        "translate_transcript",
+        lambda original, language, _llm: replace(
+            original,
+            language=language,
+            chunks=[TranscriptChunk(0.0, 20.0, "Translated.")],
+            translated_by="example/model",
+        ),
+    )
 
-    assert main(["video", "JpSHyEIZ_bo", "--vision", "--transcript", "--metadata"]) == 0
+    parts = ["--vision", "--transcript", "--stt", "--translate", "ja", "--metadata"]
+    assert main(["video", "JpSHyEIZ_bo", *parts]) == 0
+    assert policies == ["always"]
     output = json.loads(capsys.readouterr().out)
     assert list(output) == ["transcript", "vision", "metadata"]
     assert output["metadata"]["title"] == "Ray tracing"
-    assert output["transcript"] == "Intro. The ray tracer."
+    assert output["transcript"] == "Translated."
     assert output["vision"] == vision
     payload = {"id": "JpSHyEIZ_bo", "title": "Ray tracing"}
     assert metadata_calls == ["JpSHyEIZ_bo"]
@@ -476,6 +512,12 @@ def test_video_parts_share_one_metadata_fetch_and_export_markdown_beside_collage
     ("arguments", "message"),
     [
         (["--timestamps"], "--timestamps requires --transcript"),
+        (["--stt"], "--stt requires --transcript"),
+        (["--translate"], "--translate requires --transcript"),
+        (
+            ["--transcript", "--translate"],
+            "--translate needs LLM_API_KEY",
+        ),
         (["--vision", "--export"], "--export requires --transcript"),
         (["--transcript", "--force"], "--force requires --export"),
         (["--comment-limit", "5"], "--comment-limit requires --comments"),
@@ -489,6 +531,12 @@ def test_video_part_options_require_their_part_before_any_fetch(
     assert main(["video", "JpSHyEIZ_bo", *arguments]) == 1
     assert message in capsys.readouterr().err
     assert metadata_calls == []
+
+
+@pytest.mark.parametrize(("flags", "language"), [([], "en"), (["ja"], "ja")])
+def test_video_translate_defaults_to_english(flags, language) -> None:
+    arguments = ["video", "JpSHyEIZ_bo", "--transcript", "--translate", *flags]
+    assert build_parser().parse_args(arguments).translate == language
 
 
 def test_video_help_names_the_positional_url(capsys) -> None:
@@ -852,10 +900,19 @@ def test_setup_saves_keys_without_echoing_or_exporting_them(
             "",
             "vercel",
             "",
+            "",
+            "",
         ]
     )
-    # The decision key names the variable that speech-to-text then saves, so one key serves both.
-    keys = iter(["secret-embedding-key", "AI_GATEWAY_API_KEY", "secret-gateway-key"])
+    # The decision and LLM keys name the variable that speech-to-text saves, so one key serves all three.
+    keys = iter(
+        [
+            "secret-embedding-key",
+            "AI_GATEWAY_API_KEY",
+            "secret-gateway-key",
+            "AI_GATEWAY_API_KEY",
+        ]
+    )
     monkeypatch.setattr(setup.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda: next(answers))
     monkeypatch.setattr(setup.getpass, "getpass", lambda *_args, **_kwargs: next(keys))
@@ -873,6 +930,7 @@ def test_setup_saves_keys_without_echoing_or_exporting_them(
         "DECISION_API_KEY": "AI_GATEWAY_API_KEY",
         "STT_PROVIDER": "vercel",
         "AI_GATEWAY_API_KEY": "secret-gateway-key",
+        "LLM_API_KEY": "AI_GATEWAY_API_KEY",
     }
     assert json.loads(captured.out) == {
         "config_path": str(config.config_path()),
@@ -883,6 +941,9 @@ def test_setup_saves_keys_without_echoing_or_exporting_them(
     assert dict(os.environ) == before
     assert health.embedding_health() == "Configured (example-model)"
     assert config.config_value("DECISION_API_KEY") == "secret-gateway-key"
+    assert health.llm_health() == (
+        "Configured (openai/gpt-6-luna at ai-gateway.vercel.sh)"
+    )
     assert health.decision_health() == (
         "Configured (perplexity/pplx-decider-flash-v1.2 at ai-gateway.vercel.sh)"
     )

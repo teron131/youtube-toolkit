@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import asdict, replace
 from pathlib import Path
 import re
-from typing import Any, Protocol, TypedDict
+from typing import Any, Literal, Protocol, TypedDict
 import unicodedata
 
 from .artifacts import write_artifact
@@ -70,11 +70,11 @@ class TranscriptExportResult(TypedDict):
 def fetch_transcript(
     video_ref: VideoRef,
     *,
-    allow_stt: bool = True,
+    stt: Literal["never", "fallback", "always"] = "fallback",
     client: TranscriptClient | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> TranscriptDocument:
-    """With neither a cloud key nor the local libraries installed the caption failure stands, so retrieval behaves as captions-only and downloads no audio.
+    """With "fallback", speech-to-text runs only when captions are missing, and when it is not set up the caption failure stands without any audio download. "always" skips captions and fails when speech-to-text is not set up.
 
     Supplied metadata must be a response the current operation fetched for this video; otherwise metadata is fetched fresh.
     """
@@ -84,13 +84,23 @@ def fetch_transcript(
     client = client or YtDlpClient()
     if metadata is None:
         metadata = client.metadata(video_ref)
-    try:
-        document = fetch_caption_transcript(metadata, languages=SUBTITLE_LANGUAGES)
-    except CaptionTranscriptUnavailable:
-        transcribe = _stt_transcriber() if allow_stt else None
+    if stt == "always":
+        transcribe = _stt_transcriber()
         if transcribe is None:
-            raise
+            raise RuntimeError(
+                "Speech-to-text is not set up; `youtube doctor` names the next step"
+            )
         document = _fetch_stt_transcript(metadata, client=client, transcribe=transcribe)
+    else:
+        try:
+            document = fetch_caption_transcript(metadata, languages=SUBTITLE_LANGUAGES)
+        except CaptionTranscriptUnavailable:
+            transcribe = None if stt == "never" else _stt_transcriber()
+            if transcribe is None:
+                raise
+            document = _fetch_stt_transcript(
+                metadata, client=client, transcribe=transcribe
+            )
     document = replace(
         document,
         chunks=[
@@ -100,7 +110,7 @@ def fetch_transcript(
     request = {
         "video_id": video_id,
         "languages": list(SUBTITLE_LANGUAGES),
-        "allow_stt": allow_stt,
+        "stt": stt,
     }
     write_artifact("transcripts", video_id, request, asdict(document))
     return document
@@ -112,7 +122,7 @@ def write_transcript_export(
     timestamps: bool,
     force: bool,
 ) -> TranscriptExportResult:
-    path = Path.cwd() / _export_filename(document.metadata)
+    path = Path.cwd() / _export_filename(document)
     try:
         with path.open(
             "w" if force else "x", encoding="utf-8", newline="\n"
@@ -135,7 +145,7 @@ def write_transcript_export(
 def write_markdown_export(
     document: TranscriptDocument, directory: Path, *, timestamps: bool
 ) -> TranscriptExportResult:
-    path = directory / Path(_export_filename(document.metadata)).with_suffix(".md")
+    path = directory / Path(_export_filename(document)).with_suffix(".md")
     path.write_text(_render_markdown(document, timestamps=timestamps), encoding="utf-8")
     return {"video_id": document.metadata.video_id, "path": str(path)}
 
@@ -171,11 +181,17 @@ def _fetch_stt_transcript(
     )
 
 
-def _export_filename(metadata: VideoMetadata) -> str:
-    """`What is "AI"?  Part 1/2` by `Open AI` exports as `What_is_AI_Part_12_Open_AI.txt`; the video ID never appears."""
+def _export_filename(document: TranscriptDocument) -> str:
+    """`TITLE_CHANNEL.txt`, or `TITLE_CHANNEL_LANGUAGE.txt` for a translation."""
+    metadata = document.metadata
     title = _normalize_filename_component(metadata.title or "") or "transcript"
     channel = _normalize_filename_component(metadata.channel or "")
-    stem = "_".join(part for part in (title, channel) if part)
+    language = (
+        _normalize_filename_component(document.language)
+        if document.translated_by
+        else ""
+    )
+    stem = "_".join(part for part in (title, channel, language) if part)
     return f"{stem}.txt"
 
 
@@ -225,6 +241,10 @@ def _header_fields(document: TranscriptDocument) -> list[tuple[str, str]]:
         fields.append(("Duration", _format_timestamp(metadata.duration_seconds)))
     fields.append(("URL", metadata.url))
     fields.append(("Transcript source", TRANSCRIPT_SOURCE_LABELS[document.source]))
+    if document.translated_by:
+        fields.append(
+            ("Translation", f"{document.language} by {document.translated_by}")
+        )
     return fields
 
 

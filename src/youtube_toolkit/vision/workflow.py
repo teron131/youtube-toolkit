@@ -119,7 +119,7 @@ def sample_vision(
             try:
                 document = fetch_transcript(
                     video_ref,
-                    allow_stt=not local_only,
+                    stt="never" if local_only else "fallback",
                     client=client,
                     metadata=metadata,
                 )
@@ -129,14 +129,10 @@ def sample_vision(
         if document is not None:
             targets = prepare_targets(document, excluded_intervals)
             if not targets:
-                untimed = all(
-                    chunk.end_seconds <= chunk.start_seconds
-                    for chunk in document.chunks
-                )
                 transcript_warning = (
-                    f"Speech-to-text gave no timestamps; {fallback}."
-                    if untimed
-                    else f"Too little timed speech to rank against; {fallback}."
+                    f"Too little timed speech to rank against; {fallback}."
+                    if document.timed
+                    else f"Speech-to-text gave no timestamps; {fallback}."
                 )
     elif not local_only:
         embedding_warning = "Set DECISION_API_KEY or GEMINI_API_KEY, or install youtube-toolkit[embeddings], for relevance ranking; using local frame selection."

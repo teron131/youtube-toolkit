@@ -498,7 +498,7 @@ def test_transcript_archives_preserve_timing_and_retrieval_policy(
     assert fetch_transcript("JpSHyEIZ_bo") == expected
     assert fetch_transcript("https://youtu.be/JpSHyEIZ_bo") == expected
     assert len(calls) == 2
-    assert fetch_transcript("JpSHyEIZ_bo", allow_stt=False) == expected
+    assert fetch_transcript("JpSHyEIZ_bo", stt="never") == expected
     assert len(calls) == 3
     import json
 
@@ -510,7 +510,7 @@ def test_transcript_archives_preserve_timing_and_retrieval_policy(
     assert {
         "video_id": "JpSHyEIZ_bo",
         "languages": list(SUBTITLE_LANGUAGES),
-        "allow_stt": False,
+        "stt": "never",
     } in [entry["request"] for entry in entries]
     previous = {path: path.read_bytes() for path in paths}
     old_artifact = paths[0].parent / "old-copy.json"
@@ -547,7 +547,7 @@ def test_caption_only_policy_never_uses_stt(
             {
                 "video_id": video_id,
                 "languages": list(SUBTITLE_LANGUAGES),
-                "allow_stt": True,
+                "stt": "fallback",
             },
             asdict(document),
         )
@@ -560,7 +560,7 @@ def test_caption_only_policy_never_uses_stt(
             pytest.fail("caption-only policy must not download STT audio")
 
     with pytest.raises(CaptionTranscriptUnavailable):
-        fetch_transcript(video_id, allow_stt=False, client=FakeClient())
+        fetch_transcript(video_id, stt="never", client=FakeClient())
 
 
 def test_stt_without_any_route_keeps_caption_failure_without_audio_work(
@@ -579,6 +579,39 @@ def test_stt_without_any_route_keeps_caption_failure_without_audio_work(
 
     with pytest.raises(CaptionTranscriptUnavailable):
         fetch_transcript("JpSHyEIZ_bo", client=FakeClient())
+    with pytest.raises(RuntimeError, match="Speech-to-text is not set up"):
+        fetch_transcript("JpSHyEIZ_bo", stt="always", client=FakeClient())
+
+
+def test_always_policy_transcribes_even_when_captions_exist(
+    monkeypatch, tmp_path
+) -> None:
+    audio_path = tmp_path / "JpSHyEIZ_bo.m4a"
+    audio_path.write_bytes(b"audio")
+
+    class FakeClient:
+        def metadata(self, _ref):
+            return {"id": "JpSHyEIZ_bo", "subtitles": {"en": [{"ext": "json3"}]}}
+
+        def download_transcription_audio(self, _ref):
+            return audio_path
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("XAI_API_KEY", "test-key")
+    monkeypatch.setattr(
+        "youtube_toolkit.transcript.fetch_caption_transcript",
+        lambda *_args, **_kwargs: pytest.fail("always must skip captions"),
+    )
+    monkeypatch.setattr(
+        "youtube_toolkit.transcript.transcribe_in_cloud",
+        lambda _path: SpeechTranscription(text="spoken", segments=[], language="en"),
+    )
+
+    document = fetch_transcript("JpSHyEIZ_bo", stt="always", client=FakeClient())
+
+    assert document.source == "speech-to-text"
+    assert document.text == "spoken"
+    assert not audio_path.exists()
 
 
 @pytest.mark.parametrize(

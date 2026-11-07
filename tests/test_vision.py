@@ -624,10 +624,10 @@ def test_local_model_ranks_without_a_key_on_its_own_cutoffs(
             )
 
     transcript = workflow.fetch_transcript
-    allowed: list[bool] = []
+    policies: list[str] = []
 
-    def fetch(*args, allow_stt: bool, **kwargs):
-        allowed.append(allow_stt)
+    def fetch(*args, stt: str, **kwargs):
+        policies.append(stt)
         return transcript(*args, **kwargs)
 
     monkeypatch.setattr(workflow, "fetch_transcript", fetch)
@@ -639,7 +639,7 @@ def test_local_model_ranks_without_a_key_on_its_own_cutoffs(
     assert result["embedding_model"] == "example/local-model"
     assert result["min_similarity"] == LOCAL_EMBEDDING_CUTOFFS.vision_match
     assert "not example/local-model" in result["embedding_warning"]
-    assert allowed == [not local_only]
+    assert policies == ["never" if local_only else "fallback"]
 
 
 @pytest.mark.parametrize("timed", [True, False])

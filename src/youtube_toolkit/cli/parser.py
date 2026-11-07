@@ -75,6 +75,19 @@ def _add_video_command(subparsers: argparse._SubParsersAction) -> None:
         help="Timed transcript chunks instead of one text string",
     )
     transcript.add_argument(
+        "--stt",
+        action="store_true",
+        default=None,
+        help="Transcribe the audio with speech-to-text even when captions exist",
+    )
+    transcript.add_argument(
+        "--translate",
+        nargs="?",
+        const="en",
+        metavar="LANGUAGE",
+        help="Translate the transcript into English, or into LANGUAGE in any wording the model understands, such as zh-TW or Japanese, with the model saved by `youtube setup --llm`; a transcript whose language code matches comes back as it is",
+    )
+    transcript.add_argument(
         "--export",
         action="store_true",
         default=None,
@@ -248,6 +261,11 @@ def _add_setup_command(subparsers: argparse._SubParsersAction) -> None:
     )
     setup_parser.add_argument(
         "--stt", action="store_true", help="Configure speech-to-text settings only"
+    )
+    setup_parser.add_argument(
+        "--llm",
+        action="store_true",
+        help="Configure LLM settings only",
     )
     setup_parser.set_defaults(handler=run_setup)
 

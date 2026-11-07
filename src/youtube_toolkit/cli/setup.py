@@ -17,6 +17,8 @@ from ..config import (
     DEFAULT_EMBEDDING_CONCURRENCY,
     DEFAULT_EMBEDDING_DIMENSIONALITY,
     DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_LLM_BASE_URL,
+    DEFAULT_LLM_MODEL,
     DEFAULT_LOCAL_EMBEDDING_MODEL,
     DEFAULT_LOCAL_STT_MODEL,
     DEFAULT_STT_PROVIDER,
@@ -31,7 +33,7 @@ def run_setup(args: argparse.Namespace) -> dict[str, object]:
             "Run `youtube setup` in an interactive terminal to enter keys securely"
         )
     settings = config.read_config()
-    configure_all = not (args.embeddings or args.decisions or args.stt)
+    configure_all = not (args.embeddings or args.decisions or args.stt or args.llm)
     print(
         f"YouTube Toolkit settings: {config.config_path()}\n"
         "Enter keeps saved values; '-' removes a saved value.\n"
@@ -46,6 +48,8 @@ def run_setup(args: argparse.Namespace) -> dict[str, object]:
             _setup_decisions(settings)
         if configure_all or args.stt:
             _setup_stt(settings)
+        if configure_all or args.llm:
+            _setup_llm(settings)
     except (EOFError, KeyboardInterrupt) as error:
         raise ValueError("Setup cancelled; no settings were saved") from error
     except getpass.GetPassWarning as error:
@@ -116,6 +120,19 @@ def _setup_stt(settings: dict[str, str]) -> None:
         )
     _prompt(settings, PROVIDERS[name].api_key_env, secret=True)
     _prompt(settings, "STT_LOCAL_MODEL", DEFAULT_LOCAL_STT_MODEL)
+
+
+def _setup_llm(settings: dict[str, str]) -> None:
+    print(
+        "\nLLM for `youtube video --transcript --translate`: any OpenAI-compatible chat API, Vercel AI Gateway by default.",
+        file=sys.stderr,
+    )
+    _prompt(settings, "LLM_API_KEY", secret=True)
+    _prompt(settings, "LLM_BASE_URL", DEFAULT_LLM_BASE_URL)
+    _prompt(settings, "LLM_MODEL", DEFAULT_LLM_MODEL)
+    base_url = settings.get("LLM_BASE_URL", DEFAULT_LLM_BASE_URL)
+    if urlparse(base_url).scheme not in {"http", "https"}:
+        raise ValueError("LLM_BASE_URL must use http or https; no settings were saved")
 
 
 def _prompt(
