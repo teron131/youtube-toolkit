@@ -81,11 +81,17 @@ def _add_video_command(subparsers: argparse._SubParsersAction) -> None:
         help="Transcribe the audio with speech-to-text even when captions exist",
     )
     transcript.add_argument(
+        "--refine",
+        action="store_true",
+        default=None,
+        help="Clean up the transcript with the model saved by `youtube setup --llm`: each caption line corrected on its own timestamps with --timestamps, otherwise paragraphs of complete sentences under the video's chapter titles",
+    )
+    transcript.add_argument(
         "--translate",
         nargs="?",
         const="en",
         metavar="LANGUAGE",
-        help="Translate the transcript into English, or into LANGUAGE in any wording the model understands, such as zh-TW or Japanese, with the model saved by `youtube setup --llm`; a transcript whose language code matches comes back as it is",
+        help="Translate the transcript into English, or into LANGUAGE in any wording the model understands, such as zh-TW or Japanese, with the model saved by `youtube setup --llm`: each caption line translated on its own timestamps with --timestamps, otherwise paragraphs of complete sentences; a transcript whose language code matches comes back as it is unless --refine is given",
     )
     transcript.add_argument(
         "--export",

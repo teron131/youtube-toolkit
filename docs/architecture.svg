@@ -7,13 +7,13 @@ Evidence (re-verify on update):
   Speech-to-text: transcript.py _stt_transcriber, stt/cloud.py and stt/local.py, when captions are missing, or always when the video stt flag makes cli/commands.py pass stt="always"; vision reaches it through fetch_transcript whenever it ranks frames and is not local-only
   Embeddings: embeddings/openai.py for semantic search; embeddings/gemini.py, or embeddings/local.py without a key, for vision when no decision key is set
   Decision API: decisions.py decide_each through typesafe_sdk TypeSafeClient, called by vision/decisions.py rank_frames when config.py decision_config() is set, ahead of embeddings in vision/workflow.py sample_vision
-  LLM: translation.py translate_transcript through the openai SDK at LLM_BASE_URL (config.py llm_config), called by cli/commands.py video for the translate flag, after vision
+  LLM: rewrite/workflow.py rewrite_transcript through llm.py and the openai SDK at LLM_BASE_URL (config.py llm_config), called by cli/commands.py video for the refine and translate flags, after vision
   "ranking frames": vision/workflow.py fetches the transcript only when a decision, Gemini, or local embedding route is set
   local stops: search/candidates.py filters and native sort, vision/candidates.py and vision/reranking.py frame picks, youtube/comments.py filter and interleave, cli/health.py checks
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1326" height="754" viewBox="0 0 1326 754" role="img" aria-labelledby="title desc">
   <title id="title">How the commands fit together</title>
-  <desc id="desc">A transit map of the youtube commands. Each command, and each part flag of the video command, is a colored line, and the parts several commands share are interchanges with an icon header; a line passes only through the interchanges its command uses, and dashed segments run only in some cases. Every retrieval line meets at YouTube through yt-dlp, whose responses are archived. video --transcript uses YouTube and captions, uses cloud or local speech-to-text when captions are missing or with --stt, and with --translate passes the transcript to an LLM. video --vision picks frames locally from keyframes that FFmpeg decodes, downloads the video through YouTube, and when it ranks frames also uses captions, or speech-to-text when captions are missing, with the decision API or else embeddings. video --comments filters a Top sample by keyword and interleaves Top and like order. video --metadata only reaches YouTube. search filters and ranks results by views, length and date, and with --mode semantic also uses captions and embeddings. channel only reaches YouTube. doctor runs local readiness checks without the network.</desc>
+  <desc id="desc">A transit map of the youtube commands. Each command, and each part flag of the video command, is a colored line, and the parts several commands share are interchanges with an icon header; a line passes only through the interchanges its command uses, and dashed segments run only in some cases. Every retrieval line meets at YouTube through yt-dlp, whose responses are archived. video --transcript uses YouTube and captions, uses cloud or local speech-to-text when captions are missing or with --stt, and with --refine or --translate passes the transcript to an LLM that cleans it up or translates it. video --vision picks frames locally from keyframes that FFmpeg decodes, downloads the video through YouTube, and when it ranks frames also uses captions, or speech-to-text when captions are missing, with the decision API or else embeddings. video --comments filters a Top sample by keyword and interleaves Top and like order. video --metadata only reaches YouTube. search filters and ranks results by views, length and date, and with --mode semantic also uses captions and embeddings. channel only reaches YouTube. doctor runs local readiness checks without the network.</desc>
   <defs>
     <style>
       /* Barlow (c) 2017 The Barlow Project Authors, SIL Open Font License 1.1; Basic Latin subset. */
@@ -64,7 +64,7 @@ Evidence (re-verify on update):
     <text x="1230" y="222" class="note" text-anchor="middle">via TypeSafe SDK</text></g>
     <g id="llm"><rect x="906" y="140.0" width="48" height="32" rx="9" fill="#FFFFFF" stroke="#1B2238" stroke-width="1.4"/><path d="M917 171.3 L915 181 L926 171.3" fill="#FFFFFF" stroke="#1B2238" stroke-width="1.4" stroke-linejoin="round"/><rect x="914" y="148" width="24" height="3.5" rx="1.5" fill="#1B2238"/><rect x="914" y="155" width="32" height="3.5" rx="1.5" fill="#9AA6BF"/><rect x="914" y="162" width="18" height="3.5" rx="1.5" fill="#9AA6BF"/>
     <text x="930" y="204" class="station" text-anchor="middle">LLM</text>
-    <text x="930" y="222" class="note" text-anchor="middle">translation</text></g>
+    <text x="930" y="222" class="note" text-anchor="middle">rewriting</text></g>
     <path d="M1080 234 V298" class="guide"/>
     <path d="M1230 234 V298" class="guide"/>
   </g>
@@ -114,7 +114,7 @@ Evidence (re-verify on update):
     <text x="250" y="598" class="name" text-anchor="middle">Filter and rank</text>
     <text x="250" y="616" class="note" text-anchor="middle">views, length, date</text>
     <text x="650" y="250" class="mode" style="fill: #2E63E6">no captions, --stt</text>
-    <text x="800" y="250" class="mode" style="fill: #2E63E6">--translate</text>
+    <text x="800" y="250" class="mode" style="fill: #2E63E6">refine, translate</text>
     <text x="152" y="269" class="command" text-anchor="end">--transcript</text>
     <text x="152" y="417" class="command" text-anchor="end">--comments</text>
     <text x="250" y="450" class="name" text-anchor="middle">Filter and interleave</text>

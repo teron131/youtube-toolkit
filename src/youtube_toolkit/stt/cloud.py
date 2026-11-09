@@ -1,7 +1,7 @@
-"""Cloud speech-to-text for audio files, with each provider described by a row of settings and sent in one of three request styles.
+"""Cloud speech-to-text for audio files, with each provider described by a row of settings and sent in one of three ways.
 
-ElevenLabs, OpenAI, and xAI take a multipart file upload.
-Gemini reads audio from its own file store, and Vercel AI Gateway takes base64 audio inside JSON, so each has its own sender.
+ElevenLabs, OpenAI, and xAI take a multipart file upload, and Vercel AI Gateway takes base64 audio inside JSON.
+Gemini goes through Google's SDK, which uploads the audio to Gemini's file store.
 
 Provider documentation:
 
@@ -22,7 +22,7 @@ import logging
 import math
 from pathlib import Path
 import re
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 import urllib.error
 import urllib.request
 from uuid import uuid4
@@ -41,12 +41,15 @@ from ..execution import retry_transient
 from ..schemas import SpeechTranscription, TranscriptChunk, normalize_text
 from .synthetic_audio import tone_recording
 
+if TYPE_CHECKING:
+    from google import genai
+
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
-class CloudProvider:
-    """No language is sent, so the provider detects it; a fixed language would bias the transcription toward it."""
+class HttpProvider:
+    """`vocabulary_field` is the multipart field repeated once per vocabulary term; Vercel AI Gateway documents no way to send one."""
 
     label: str
     url: str
@@ -56,12 +59,23 @@ class CloudProvider:
     model_field: str = "model"
     auth_prefix: str = ""
     extra_fields: dict[str, str] = field(default_factory=dict)
+    vocabulary_field: str | None = None
     language_key: str = "language"
-    request_style: Literal["gemini", "multipart", "vercel"] = "multipart"
+    request_style: Literal["multipart", "vercel"] = "multipart"
 
 
-PROVIDERS = {
-    "elevenlabs": CloudProvider(
+@dataclass(frozen=True, slots=True)
+class GeminiProvider:
+    label: str
+    api_key_env: str
+    model: str
+
+
+# No provider is sent a language, so each detects it; a fixed language would bias the transcription toward it.
+type CloudProvider = HttpProvider | GeminiProvider
+
+PROVIDERS: dict[str, CloudProvider] = {
+    "elevenlabs": HttpProvider(
         label="ElevenLabs",
         url="https://api.elevenlabs.io/v1/speech-to-text",
         api_key_env="ELEVENLABS_API_KEY",
@@ -69,26 +83,25 @@ PROVIDERS = {
         model=DEFAULT_ELEVENLABS_STT_MODEL,
         model_field="model_id",
         extra_fields={"tag_audio_events": "false", "timestamps_granularity": "word"},
+        # ElevenLabs bills transcription with keyterms at a 20% premium.
+        vocabulary_field="keyterms",
         language_key="language_code",
     ),
-    "gemini": CloudProvider(
-        label="Gemini",
-        url="https://generativelanguage.googleapis.com",
-        api_key_env="GEMINI_API_KEY",
-        auth_header="x-goog-api-key",
-        model=DEFAULT_GEMINI_STT_MODEL,
-        request_style="gemini",
+    "gemini": GeminiProvider(
+        label="Gemini", api_key_env="GEMINI_API_KEY", model=DEFAULT_GEMINI_STT_MODEL
     ),
-    "openai": CloudProvider(
+    "openai": HttpProvider(
         label="OpenAI",
         url="https://api.openai.com/v1/audio/transcriptions",
         api_key_env="OPENAI_API_KEY",
         auth_header="Authorization",
         model=DEFAULT_OPENAI_STT_MODEL,
         auth_prefix="Bearer ",
+        # Only gpt-transcribe takes keywords; other OpenAI models reject the field.
+        vocabulary_field="keywords[]",
         language_key="languages",
     ),
-    "vercel": CloudProvider(
+    "vercel": HttpProvider(
         label="Vercel AI Gateway",
         url="https://ai-gateway.vercel.sh/v4/ai/transcription-model",
         api_key_env="AI_GATEWAY_API_KEY",
@@ -97,15 +110,21 @@ PROVIDERS = {
         auth_prefix="Bearer ",
         request_style="vercel",
     ),
-    "xai": CloudProvider(
+    "xai": HttpProvider(
         label="xAI",
         url="https://api.x.ai/v1/stt",
         api_key_env="XAI_API_KEY",
         auth_header="Authorization",
         model=DEFAULT_XAI_STT_MODEL,
         auth_prefix="Bearer ",
+        vocabulary_field="keyterm",
     ),
 }
+# The strictest of the providers' vocabulary limits: xAI takes at most 100 terms of up to 50 characters, ElevenLabs bills a request with more than 100 as at least 20 seconds and rejects terms of 50 characters, of more than five words, or with brackets or a backslash, and OpenAI rejects angle brackets and line breaks.
+MAX_VOCABULARY_TERMS = 100
+MAX_TERM_CHARACTERS = 49
+MAX_TERM_WORDS = 5
+UNSAFE_TERM = re.compile(r"[<>{}\[\]\\\r\n]")
 # The gateway's transcription route is versioned through these two headers.
 VERCEL_PROTOCOL_HEADERS = {
     "ai-gateway-protocol-version": "0.0.1",
@@ -155,11 +174,12 @@ def cloud_stt_configured() -> bool:
     return config_value(cloud_provider().api_key_env) is not None
 
 
-def transcribe_in_cloud(audio_path: Path) -> SpeechTranscription:
+def transcribe_in_cloud(audio_path: Path, vocabulary: list[str]) -> SpeechTranscription:
+    """`vocabulary` lists names to listen for, most important first; terms past the providers' limits are left out."""
     if not audio_path.is_file():
         raise ValueError(f"audio file does not exist: {audio_path}")
     provider = cloud_provider()
-    transcription = _send(audio_path, provider)
+    transcription = _send(audio_path, provider, _usable_terms(vocabulary))
     if transcription is None:
         raise ValueError(
             f"{provider.label} STT response did not include transcript text"
@@ -183,71 +203,112 @@ def check_cloud_stt() -> dict[str, Any]:
     """
     provider = cloud_provider()
     with tone_recording() as tone_path:
-        _send(tone_path, provider)
+        _send(tone_path, provider, [])
     return {**cloud_stt_status(), "working": True}
 
 
-def _send(audio_path: Path, provider: CloudProvider) -> SpeechTranscription | None:
+def _usable_terms(vocabulary: list[str]) -> list[str]:
+    terms = [
+        term
+        for term in dict.fromkeys(term.strip() for term in vocabulary)
+        if term
+        and len(term) <= MAX_TERM_CHARACTERS
+        and len(term.split()) <= MAX_TERM_WORDS
+        and not UNSAFE_TERM.search(term)
+    ]
+    return terms[:MAX_VOCABULARY_TERMS]
+
+
+def _send(
+    audio_path: Path, provider: CloudProvider, vocabulary: list[str]
+) -> SpeechTranscription | None:
     """None means the provider heard no speech."""
     api_key = config_value(provider.api_key_env)
     if api_key is None:
         raise ValueError(
             f"{provider.api_key_env} is required for {provider.label} speech-to-text"
         )
+    if isinstance(provider, GeminiProvider):
+        return _send_to_gemini(audio_path, provider, api_key, vocabulary)
     auth = {provider.auth_header: f"{provider.auth_prefix}{api_key}"}
-    if provider.request_style == "gemini":
-        return _send_to_gemini(audio_path, provider, auth)
     if provider.request_style == "vercel":
         return _send_to_vercel(audio_path, provider, auth)
-    return _send_multipart(audio_path, provider, auth)
+    return _send_multipart(audio_path, provider, auth, vocabulary)
 
 
 def _send_to_gemini(
-    audio_path: Path, provider: CloudProvider, auth: dict[str, str]
+    audio_path: Path, provider: GeminiProvider, api_key: str, vocabulary: list[str]
 ) -> SpeechTranscription | None:
     """The file store takes recordings of any size; sending audio inside the request is capped at about 20 MB.
 
     Gemini reports no detected language, so the result carries none.
     Its word timestamps would cap audio at 30 minutes and can lower accuracy, so the result stays untimed.
     """
-    uploaded = _request(
-        provider,
-        f"{provider.url}/upload/v1beta/files?uploadType=media",
-        audio_path.read_bytes(),
-        {**auth, "Content-Type": audio_content_type(audio_path)},
-    )["file"]
-    try:
-        reference = {"fileUri": uploaded["uri"], "mimeType": uploaded["mimeType"]}
-        response = _request(
-            provider,
-            f"{provider.url}/v1beta/models/{provider.model}:generateContent",
-            json.dumps({"contents": [{"parts": [{"fileData": reference}]}]}).encode(),
-            {**auth, "Content-Type": "application/json"},
+    from google import genai
+    from google.genai import errors, types
+    import httpx2
+
+    client = genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(
+            # The SDK defaults to v1, which has neither the transcription config nor the transcript it returns.
+            api_version="v1beta",
+            timeout=REQUEST_TIMEOUT_SECONDS * 1000,
+            retry_options=types.HttpRetryOptions(
+                attempts=REQUEST_ATTEMPTS, initial_delay=RETRY_BACKOFF_SECONDS
+            ),
+        ),
+    )
+    config = (
+        types.GenerateContentConfig(
+            audio_transcription_config=types.AudioTranscriptionConfig(
+                custom_vocabulary=vocabulary
+            )
         )
-    finally:
-        _delete_gemini_file(uploaded["name"], provider, auth)
-    candidates = response.get("candidates") or [{}]
-    parts = candidates[0].get("content", {}).get("parts", [])
+        if vocabulary
+        else None
+    )
+    try:
+        uploaded = client.files.upload(
+            file=audio_path,
+            config=types.UploadFileConfig(mime_type=audio_content_type(audio_path)),
+        )
+        try:
+            response = client.models.generate_content(
+                model=provider.model, contents=[uploaded], config=config
+            )
+        finally:
+            _delete_gemini_file(client, uploaded.name)
+    except errors.APIError as error:
+        raise RuntimeError(
+            f"{provider.label} STT request failed ({error.code}): {error.message}"
+        ) from error
+    except httpx2.TransportError as error:
+        raise RuntimeError(f"{provider.label} STT request failed: {error}") from error
     text = " ".join(
         part_text
-        for part in parts
-        if (part_text := normalize_text(part.get("audioTranscription", {}).get("text")))
+        for part in response.parts or []
+        if part.audio_transcription
+        and (part_text := normalize_text(part.audio_transcription.text))
     )
     return SpeechTranscription(text=text, segments=[]) if text else None
 
 
-def _delete_gemini_file(
-    name: str, provider: CloudProvider, auth: dict[str, str]
-) -> None:
-    """Stored files expire by themselves after two days, so a failed delete must not cost the transcript."""
+def _delete_gemini_file(client: genai.Client, name: str | None) -> None:
+    """Stored files expire by themselves after two days, so a delete that fails, or a file the API left unnamed, must not cost the transcript."""
+    from google.genai import errors
+    import httpx2
+
+    if name is None:
+        return
     try:
-        _request(provider, f"{provider.url}/v1beta/{name}", None, auth, method="DELETE")
-    except RuntimeError as error:
+        client.files.delete(name=name)
+    except (errors.APIError, httpx2.TransportError) as error:
         logger.warning("Could not delete the uploaded Gemini file: %s", error)
 
 
 def _send_to_vercel(
-    audio_path: Path, provider: CloudProvider, auth: dict[str, str]
+    audio_path: Path, provider: HttpProvider, auth: dict[str, str]
 ) -> SpeechTranscription | None:
     body = json.dumps(
         {
@@ -267,12 +328,16 @@ def _send_to_vercel(
 
 
 def _send_multipart(
-    audio_path: Path, provider: CloudProvider, auth: dict[str, str]
+    audio_path: Path,
+    provider: HttpProvider,
+    auth: dict[str, str],
+    vocabulary: list[str],
 ) -> SpeechTranscription | None:
-    body, content_type = encode_multipart_form(
-        fields={provider.model_field: provider.model, **provider.extra_fields},
-        file_path=audio_path,
-    )
+    fields = [(provider.model_field, provider.model), *provider.extra_fields.items()]
+    vocabulary_field = provider.vocabulary_field
+    if vocabulary_field is not None:
+        fields += [(vocabulary_field, term) for term in vocabulary]
+    body, content_type = encode_multipart_form(fields=fields, file_path=audio_path)
     response = _request(
         provider, provider.url, body, {**auth, "Content-Type": content_type}
     )
@@ -280,7 +345,7 @@ def _send_multipart(
 
 
 def parse_transcription(
-    response: dict[str, Any], provider: CloudProvider
+    response: dict[str, Any], provider: HttpProvider
 ) -> SpeechTranscription | None:
     """Per-channel transcripts are joined when there is no single text, and stay untimed.
 
@@ -380,15 +445,13 @@ def audio_content_type(audio_path: Path) -> str:
 
 
 def _request(
-    provider: CloudProvider,
+    provider: HttpProvider,
     url: str,
-    data: bytes | None,
+    data: bytes,
     headers: dict[str, str],
-    *,
-    method: str = "POST",
 ) -> dict[str, Any]:
     request = urllib.request.Request(  # noqa: S310 - fixed HTTPS API endpoints from the provider table.
-        url, data=data, headers=headers, method=method
+        url, data=data, headers=headers, method="POST"
     )
     return run_json_request(request, provider_name=provider.label)
 
@@ -430,13 +493,13 @@ def run_json_request(
 
 def encode_multipart_form(
     *,
-    fields: dict[str, str],
+    fields: list[tuple[str, str]],
     file_path: Path,
 ) -> tuple[bytes, str]:
-    """Every multipart provider expects the audio under the `file` field."""
+    """A field name may repeat, as vocabulary fields do; every multipart provider expects the audio under the `file` field."""
     boundary = f"----youtube-toolkit-{uuid4().hex}"
     chunks: list[bytes] = []
-    for name, value in fields.items():
+    for name, value in fields:
         chunks.extend(
             [
                 f"--{boundary}\r\n".encode(),

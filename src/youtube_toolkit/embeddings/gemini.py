@@ -12,15 +12,15 @@ from typing import TYPE_CHECKING
 import urllib.error
 import urllib.request
 
+from ..config import GEMINI_EMBEDDING_MODEL
 from ..execution import collect_concurrently, retry_transient
 from .results import EmbeddingError, EmbeddingResult, EmbeddingUsage, sum_reported
 
 if TYPE_CHECKING:
     import numpy as np
 
-MODEL = "gemini-embedding-2"
 DIMENSIONS = 768
-ENDPOINT = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:batchEmbedContents"
+ENDPOINT = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_EMBEDDING_MODEL}:batchEmbedContents"
 # On 384 frames at 960x540, 64 per request x 4 concurrent uploaded about twice as fast as 32 x 2 with no retries; 100 per request (the API maximum) risks Gemini's inline request size limit with dense frames.
 BATCH_SIZE = 64
 MAX_WORKERS = 4
@@ -39,7 +39,7 @@ class GeminiEmbeddingClient:
         if not api_key.strip():
             raise ValueError("Gemini embedding API key must not be empty")
         self._api_key = api_key.strip()
-        self.model = MODEL
+        self.model = GEMINI_EMBEDDING_MODEL
 
     def embed(self, image_paths: list[Path], texts: list[str]) -> EmbeddingResult:
         """Duplicate inputs share requests within this call, but output rows preserve every supplied input in order.
@@ -103,7 +103,7 @@ class GeminiEmbeddingClient:
             )
             requests.append(
                 {
-                    "model": f"models/{MODEL}",
+                    "model": f"models/{GEMINI_EMBEDDING_MODEL}",
                     "content": {"parts": [part]},
                     "outputDimensionality": DIMENSIONS,
                 }

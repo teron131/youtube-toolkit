@@ -4,9 +4,12 @@ import base64
 from email.message import Message
 import io
 import json
+import re
 import urllib.error
 import urllib.request
 
+from google import genai
+from google.genai import errors, types
 import numpy as np
 import pytest
 
@@ -15,11 +18,18 @@ from youtube_toolkit.schemas import SpeechTranscription, TranscriptChunk
 from youtube_toolkit.stt import cloud, local
 from youtube_toolkit.stt.cloud import (
     PROVIDERS,
+    HttpProvider,
     encode_multipart_form,
     parse_transcription,
     run_json_request,
     transcribe_in_cloud,
 )
+
+
+def http_provider(name: str) -> HttpProvider:
+    provider = PROVIDERS[name]
+    assert isinstance(provider, HttpProvider)
+    return provider
 
 
 def test_xai_word_timings_become_caption_like_lines() -> None:
@@ -41,7 +51,7 @@ def test_xai_word_timings_become_caption_like_lines() -> None:
                 {"text": text, "start": start, "end": end} for text, start, end in words
             ],
         },
-        PROVIDERS["xai"],
+        http_provider("xai"),
     )
 
     assert result == SpeechTranscription(
@@ -63,7 +73,7 @@ def test_long_unpunctuated_speech_breaks_into_ten_second_lines_and_cjk_joins_wit
         for second in range(12)
     ]
     result = parse_transcription(
-        {"text": "數據" * 12, "language": "zh", "words": words}, PROVIDERS["xai"]
+        {"text": "數據" * 12, "language": "zh", "words": words}, http_provider("xai")
     )
 
     assert result is not None
@@ -88,11 +98,11 @@ def test_elevenlabs_keeps_only_timed_words_and_multichannel_stays_untimed() -> N
                 {"text": "lost", "type": "word", "start": None, "end": None},
             ],
         },
-        PROVIDERS["elevenlabs"],
+        http_provider("elevenlabs"),
     )
     multichannel = parse_transcription(
         {"transcripts": [{"text": "left"}, {"text": "right"}], "language_code": "en"},
-        PROVIDERS["elevenlabs"],
+        http_provider("elevenlabs"),
     )
 
     assert single == SpeechTranscription(
@@ -159,12 +169,18 @@ def test_cloud_transcription_follows_the_configured_provider(
     monkeypatch.setenv(key_env, "test-key")
     monkeypatch.setattr(cloud, "run_json_request", fake_run_json_request)
 
-    assert transcribe_in_cloud(audio_path) == SpeechTranscription(
+    assert transcribe_in_cloud(audio_path, ["GPT-6", "Fable"]) == SpeechTranscription(
         text="数据库", segments=[], language="zh"
     )
-    assert requests[0].full_url == PROVIDERS[provider or "xai"].url
+    sent = http_provider(provider or "xai")
+    assert requests[0].full_url == sent.url
     assert requests[0].get_header(auth_header) == auth_value
     assert sent_model in requests[0].data
+    vocabulary_field = sent.vocabulary_field
+    for term in ("GPT-6", "Fable"):
+        assert (
+            f'name="{vocabulary_field}"\r\n\r\n{term}\r\n'.encode() in requests[0].data
+        )
 
 
 def test_vercel_gateway_takes_base64_audio_and_the_model_in_a_header(
@@ -186,11 +202,11 @@ def test_vercel_gateway_takes_base64_audio_and_the_model_in_a_header(
     monkeypatch.setenv("AI_GATEWAY_API_KEY", "test-key")
     monkeypatch.setattr(cloud, "run_json_request", fake_run_json_request)
 
-    assert transcribe_in_cloud(audio_path) == SpeechTranscription(
+    assert transcribe_in_cloud(audio_path, ["GPT-6"]) == SpeechTranscription(
         text="hello", segments=[TranscriptChunk(0.5, 1.25, "hello")], language="en"
     )
     (request,) = requests
-    assert request.full_url == PROVIDERS["vercel"].url
+    assert request.full_url == http_provider("vercel").url
     assert request.get_header("Authorization") == "Bearer test-key"
     assert request.get_header("Ai-model-id") == "spacexai/grok-stt"
     assert request.get_header("Ai-gateway-protocol-version") == "0.0.1"
@@ -200,61 +216,99 @@ def test_vercel_gateway_takes_base64_audio_and_the_model_in_a_header(
     }
 
 
+def fake_gemini(monkeypatch, answer):
+    """Records each SDK call as (method, keyword arguments); `answer` is what generate_content returns or raises."""
+    calls = []
+
+    class Files:
+        def upload(self, **kwargs):
+            calls.append(("upload", kwargs))
+            return types.File(
+                name="files/abc",
+                uri="https://files.example/abc",
+                mime_type="audio/x-m4a",
+            )
+
+        def delete(self, **kwargs):
+            calls.append(("delete", kwargs))
+            raise errors.APIError(404, {"error": {"message": "already gone"}})
+
+    class Models:
+        def generate_content(self, **kwargs):
+            calls.append(("generate_content", kwargs))
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+    class Client:
+        def __init__(self, **kwargs):
+            calls.append(("client", kwargs))
+            self.files = Files()
+            self.models = Models()
+
+    monkeypatch.setenv("STT_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(genai, "Client", Client)
+    return calls
+
+
 def test_gemini_uploads_transcribes_by_reference_and_deletes_the_upload(
     tmp_path, monkeypatch
 ) -> None:
     audio_path = tmp_path / "audio.m4a"
     audio_path.write_bytes(b"audio")
-    requests = []
-    answer = {
-        "candidates": [
-            {
-                "content": {
-                    "parts": [
-                        {"audioTranscription": {"text": "first part"}},
-                        {"audioTranscription": {"text": "second part"}},
+    answer = types.GenerateContentResponse(
+        candidates=[
+            types.Candidate(
+                content=types.Content(
+                    parts=[
+                        types.Part(audio_transcription=types.Transcription(text=text))
+                        for text in ("first part", "second part")
                     ]
-                }
-            }
+                )
+            )
         ]
-    }
+    )
+    calls = fake_gemini(monkeypatch, answer)
 
-    def fake_run_json_request(request, *, provider_name):
-        requests.append(request)
-        if request.get_method() == "DELETE":
-            return {}
-        if "upload" in request.full_url:
-            return {
-                "file": {
-                    "name": "files/abc",
-                    "uri": "https://files.example/abc",
-                    "mimeType": "audio/x-m4a",
-                }
-            }
-        return answer
-
-    monkeypatch.setenv("STT_PROVIDER", "gemini")
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(cloud, "run_json_request", fake_run_json_request)
-
-    assert transcribe_in_cloud(audio_path) == SpeechTranscription(
+    # The delete fails, which leaves the transcript intact.
+    assert transcribe_in_cloud(audio_path, ["GPT-6"]) == SpeechTranscription(
         text="first part second part", segments=[]
     )
-    upload, generate, delete = requests
-    assert upload.data == b"audio"
-    assert upload.get_header("X-goog-api-key") == "test-key"
-    assert "gemini-3.5-transcribe:generateContent" in generate.full_url
-    assert json.loads(generate.data)["contents"][0]["parts"][0]["fileData"] == {
-        "fileUri": "https://files.example/abc",
-        "mimeType": "audio/x-m4a",
-    }
-    assert delete.full_url.endswith("/v1beta/files/abc")
+    client, upload, generate, delete = calls
+    assert client[1]["api_key"] == "test-key"
+    assert client[1]["http_options"].api_version == "v1beta"
+    assert upload[1]["file"] == audio_path
+    assert upload[1]["config"].mime_type == "audio/x-m4a"
+    assert generate[1]["model"] == "gemini-3.5-transcribe"
+    assert generate[1]["contents"][0].uri == "https://files.example/abc"
+    assert generate[1]["config"].audio_transcription_config.custom_vocabulary == [
+        "GPT-6"
+    ]
+    assert delete == ("delete", {"name": "files/abc"})
 
-    requests.clear()
-    answer["candidates"] = [{"finishReason": "STOP"}]
+    calls.clear()
+    answer.candidates = [types.Candidate(finish_reason=types.FinishReason.STOP)]
     with pytest.raises(ValueError, match="did not include transcript text"):
-        transcribe_in_cloud(audio_path)
-    assert [request.get_method() for request in requests] == ["POST", "POST", "DELETE"]
+        transcribe_in_cloud(audio_path, [])
+    assert calls[2][1]["config"] is None
+
+
+def test_a_rejected_gemini_request_reports_its_reason_and_still_deletes_the_upload(
+    tmp_path, monkeypatch
+) -> None:
+    audio_path = tmp_path / "audio.m4a"
+    audio_path.write_bytes(b"audio")
+    rejection = errors.APIError(
+        400, {"error": {"message": "model not found", "status": "NOT_FOUND"}}
+    )
+    calls = fake_gemini(monkeypatch, rejection)
+
+    with pytest.raises(
+        RuntimeError, match=r"Gemini STT request failed \(400\): model not found"
+    ):
+        transcribe_in_cloud(audio_path, [])
+    assert calls[-1] == ("delete", {"name": "files/abc"})
 
 
 def test_cloud_check_uploads_a_test_tone_and_status_sends_nothing(monkeypatch) -> None:
@@ -283,6 +337,32 @@ def test_cloud_check_uploads_a_test_tone_and_status_sends_nothing(monkeypatch) -
         cloud.check_cloud_stt()
 
 
+def test_vocabulary_keeps_terms_every_provider_accepts_up_to_the_limit(
+    tmp_path, monkeypatch
+) -> None:
+    audio_path = tmp_path / "audio.mp3"
+    audio_path.write_bytes(b"audio")
+    requests = []
+
+    def fake_run_json_request(request, *, provider_name):
+        requests.append(request)
+        return {"text": "hello"}
+
+    monkeypatch.delenv("STT_PROVIDER", raising=False)
+    monkeypatch.setenv("XAI_API_KEY", "test-key")
+    monkeypatch.setattr(cloud, "run_json_request", fake_run_json_request)
+    rejected = ["<b>", "x" * 50, "one two three four five six", " "]
+    numbered = [f"Term{index}" for index in range(cloud.MAX_VOCABULARY_TERMS + 5)]
+
+    transcribe_in_cloud(audio_path, ["GPT-6", "GPT-6 ", *rejected, *numbered])
+
+    sent = re.findall(rb'name="keyterm"\r\n\r\n(.*?)\r\n', requests[0].data)
+    assert sent == [
+        b"GPT-6",
+        *(term.encode() for term in numbered[: cloud.MAX_VOCABULARY_TERMS - 1]),
+    ]
+
+
 def test_unknown_provider_falls_back_to_the_default_with_a_warning(
     monkeypatch, caplog
 ) -> None:
@@ -302,7 +382,7 @@ def test_cloud_transcription_requires_the_provider_key(tmp_path, monkeypatch) ->
     monkeypatch.delenv("XAI_API_KEY", raising=False)
 
     with pytest.raises(ValueError, match="XAI_API_KEY is required"):
-        transcribe_in_cloud(audio_path)
+        transcribe_in_cloud(audio_path, [])
 
 
 def test_encode_multipart_form_handles_ytdlp_default_containers(tmp_path) -> None:
@@ -312,11 +392,11 @@ def test_encode_multipart_form_handles_ytdlp_default_containers(tmp_path) -> Non
     m4a_path.write_bytes(b"m4a-audio")
 
     webm_body, _webm_content_type = encode_multipart_form(
-        fields={},
+        fields=[],
         file_path=webm_path,
     )
     m4a_body, _m4a_content_type = encode_multipart_form(
-        fields={},
+        fields=[],
         file_path=m4a_path,
     )
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import getpass
-import os
 import sys
 from urllib.parse import urlparse
 import warnings
@@ -57,7 +56,7 @@ def run_setup(args: argparse.Namespace) -> dict[str, object]:
             "Hidden key entry is unavailable; no settings were saved"
         ) from error
     path = config.save_config(settings)
-    overridden = [name for name in settings if os.environ.get(name, "").strip()]
+    overridden = config.environment_overrides(settings)
     if overridden:
         print(
             f"Environment variables currently override: {', '.join(overridden)}",
@@ -124,7 +123,7 @@ def _setup_stt(settings: dict[str, str]) -> None:
 
 def _setup_llm(settings: dict[str, str]) -> None:
     print(
-        "\nLLM for `youtube video --transcript --translate`: any OpenAI-compatible chat API, Vercel AI Gateway by default.",
+        "\nLLM for `youtube video --transcript --refine` and `--translate`: any OpenAI-compatible chat API, Vercel AI Gateway by default.",
         file=sys.stderr,
     )
     _prompt(settings, "LLM_API_KEY", secret=True)

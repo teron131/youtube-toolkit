@@ -52,6 +52,7 @@ def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
             return {
                 "id": "JpSHyEIZ_bo",
                 "title": "No captions",
+                "description": "Comparing Fable with GPT-6, and Fable again: https://youtu.be/VRFfAeW30qE",
                 "automatic_captions": {},
                 "subtitles": {},
             }
@@ -60,8 +61,11 @@ def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
             assert video_id == "JpSHyEIZ_bo"
             return audio_path
 
-    def fake_transcribe_in_cloud(path: Path) -> SpeechTranscription:
+    def fake_transcribe_in_cloud(
+        path: Path, vocabulary: list[str]
+    ) -> SpeechTranscription:
         assert path == audio_path
+        assert vocabulary == ["Fable", "GPT-6"]
         return SpeechTranscription(text="数据库", segments=[], language="zh")
 
     monkeypatch.chdir(tmp_path)
@@ -106,7 +110,7 @@ def test_timed_speech_to_text_segments_become_transcript_chunks(
     monkeypatch.setenv("XAI_API_KEY", "test-key")
     monkeypatch.setattr(
         "youtube_toolkit.transcript.transcribe_in_cloud",
-        lambda _path: SpeechTranscription(
+        lambda _path, _vocabulary: SpeechTranscription(
             text="Hello world. Next line", segments=segments, language="en"
         ),
     )
@@ -158,18 +162,24 @@ def test_fetch_transcript_fetches_and_archives_captions(monkeypatch, tmp_path) -
 
 
 @pytest.mark.parametrize(
-    ("language", "caption", "expected"),
-    [("zh-Hans", "数据库里", "數據庫裡"), ("en", "Database", "Database")],
+    ("language", "captions", "expected"),
+    [
+        ("zh-Hans", ["数据库里"], "數據庫裡"),
+        ("en", ["Database"], "Database"),
+        # Japanese shares kanji with Simplified Chinese, and its lines without kana are still Japanese.
+        ("ja", ["動画編集", "の争いです"], "動画編集 の争いです"),
+    ],
 )
-def test_caption_text_is_converted_to_taiwan_traditional(
-    monkeypatch, tmp_path, language, caption, expected
+def test_chinese_caption_text_is_converted_to_taiwan_traditional(
+    monkeypatch, tmp_path, language, captions, expected
 ) -> None:
     class FakeClient:
         def metadata(self, video_ref: str) -> dict:
-            return {
-                "id": video_ref,
-                "subtitles": {language: [caption_track(language)]},
-            }
+            # Japanese is taken from automatic captions, as only English and Chinese subtitles are preferred.
+            tracks = {language: [caption_track(language)]}
+            if language == "ja":
+                return {"id": video_ref, "language": "ja", "automatic_captions": tracks}
+            return {"id": video_ref, "subtitles": tracks}
 
         def download_transcription_audio(self, _video_id: str) -> Path:
             pytest.fail("caption retrieval should not download STT audio")
@@ -178,7 +188,12 @@ def test_caption_text_is_converted_to_taiwan_traditional(
         "youtube_toolkit.youtube.caption.fetch_caption_payload",
         lambda _url: {
             "events": [
-                {"tStartMs": 0, "dDurationMs": 1000, "segs": [{"utf8": caption}]}
+                {
+                    "tStartMs": index * 1000,
+                    "dDurationMs": 1000,
+                    "segs": [{"utf8": text}],
+                }
+                for index, text in enumerate(captions)
             ]
         },
     )
@@ -208,7 +223,7 @@ def test_stt_fallback_removes_downloaded_audio_after_failure(
         def download_transcription_audio(self, _video_id: str) -> Path:
             return audio_path
 
-    def fail_transcription(_path: Path) -> SpeechTranscription:
+    def fail_transcription(_path: Path, _vocabulary: list[str]) -> SpeechTranscription:
         raise RuntimeError("STT unavailable")
 
     monkeypatch.setenv("XAI_API_KEY", "test-key")
@@ -604,7 +619,9 @@ def test_always_policy_transcribes_even_when_captions_exist(
     )
     monkeypatch.setattr(
         "youtube_toolkit.transcript.transcribe_in_cloud",
-        lambda _path: SpeechTranscription(text="spoken", segments=[], language="en"),
+        lambda _path, _vocabulary: SpeechTranscription(
+            text="spoken", segments=[], language="en"
+        ),
     )
 
     document = fetch_transcript("JpSHyEIZ_bo", stt="always", client=FakeClient())
@@ -635,7 +652,7 @@ def test_stt_prefers_cloud_and_falls_back_to_the_local_model(
     )
     monkeypatch.setattr(
         "youtube_toolkit.transcript.transcribe_in_cloud",
-        lambda _path: SpeechTranscription(
+        lambda _path, _vocabulary: SpeechTranscription(
             text="cloud text", segments=[], language="en"
         ),
     )

@@ -695,7 +695,7 @@ def test_missing_captions_fall_back_to_speech_to_text_for_ranking(
     monkeypatch.setattr(
         "youtube_toolkit.transcript._stt_transcriber",
         lambda: (
-            lambda _path: SpeechTranscription(
+            lambda _path, _vocabulary: SpeechTranscription(
                 text=text, segments=segments if timed else [], language="en"
             )
         ),

@@ -5,6 +5,7 @@ The vision command's limits also live here because the vision package needs its 
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 import os
 from pathlib import Path
@@ -30,7 +31,9 @@ DEFAULT_XAI_STT_MODEL = "grok-voice-transcribe-2.0"
 DEFAULT_LOCAL_STT_MODEL = "nvidia/parakeet-tdt-0.6b-v3"
 
 DEFAULT_EMBEDDING_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
-DEFAULT_EMBEDDING_MODEL = "gemini-embedding-2"
+# Gemini's multimodal embedding model, which vision calls through Gemini's own API and the OpenAI-compatible embedding route uses by default.
+GEMINI_EMBEDDING_MODEL = "gemini-embedding-2"
+DEFAULT_EMBEDDING_MODEL = GEMINI_EMBEDDING_MODEL
 DEFAULT_EMBEDDING_DIMENSIONALITY = 768
 DEFAULT_EMBEDDING_CONCURRENCY = 16
 MAX_EMBEDDING_CONCURRENCY = 50
@@ -57,7 +60,7 @@ class EmbeddingCutoffs:
     search_result: float
 
 
-# Measured on gemini-embedding-2, the default for both API routes; other API models reuse them.
+# Measured on GEMINI_EMBEDDING_MODEL; other API models reuse them.
 # A 0.95 duplicate cutoff already merged distinct slides that share a template too often.
 API_EMBEDDING_CUTOFFS = EmbeddingCutoffs(
     vision_match=0.3, vision_duplicate=0.96, search_title=0.3, search_result=0.5
@@ -188,7 +191,7 @@ def vision_embedding_key() -> str | None:
     model = config_value("EMBEDDING_MODEL") or DEFAULT_EMBEDDING_MODEL
     base_url = config_value("EMBEDDING_BASE_URL") or DEFAULT_EMBEDDING_BASE_URL
     if (
-        model == "gemini-embedding-2"
+        model == GEMINI_EMBEDDING_MODEL
         and urlparse(base_url).hostname == "generativelanguage.googleapis.com"
     ):
         return config_value("EMBEDDING_API_KEY")
@@ -233,9 +236,17 @@ def config_value(name: str) -> str | None:
     return referenced
 
 
+def environment_overrides(names: Iterable[str]) -> list[str]:
+    """The settings among `names` that a nonblank environment variable overrides."""
+    return [name for name in names if _environment(name)]
+
+
 def _setting(name: str) -> str | None:
-    value = os.environ.get(name, "").strip()
-    return value or read_config().get(name, "").strip() or None
+    return _environment(name) or read_config().get(name, "").strip() or None
+
+
+def _environment(name: str) -> str:
+    return os.environ.get(name, "").strip()
 
 
 def config_int_value(

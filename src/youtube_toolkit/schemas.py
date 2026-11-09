@@ -89,17 +89,24 @@ class SpeechTranscription:
 
 
 @dataclass(frozen=True, slots=True)
+class TranscriptRewrite:
+    model: str
+    # False for a cleaned-up copy in the transcript's own language.
+    translated: bool
+
+
+@dataclass(frozen=True, slots=True)
 class TranscriptDocument:
     """A speech-to-text document holds the route's timed segments, or one untimed chunk at 0 seconds when the route reports no timing; its `language` is `speech-to-text` when no language was detected or reported.
 
-    A machine translation names its model in `translated_by`, and `language` is then the requested target language as the caller wrote it.
+    After a translation, `language` is the requested target language as the caller wrote it.
     """
 
     metadata: VideoMetadata
     language: str
     source: TranscriptSource
     chunks: list[TranscriptChunk]
-    translated_by: str | None = None
+    rewrite: TranscriptRewrite | None = None
 
     @property
     def text(self) -> str:

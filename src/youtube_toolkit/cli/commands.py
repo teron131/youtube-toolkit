@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import llm_config
+from ..rewrite import rewrite_transcript
 from ..schemas import TranscriptDocument, VideoMetadata
 from ..search import (
     ChannelTarget,
@@ -29,7 +30,6 @@ from ..transcript import (
     write_markdown_export,
     write_transcript_export,
 )
-from ..translation import translate_transcript
 from ..youtube import (
     DEFAULT_COMMENT_LIMIT,
     ChannelOptions,
@@ -48,7 +48,7 @@ VISION_OPTIONS = {
     "auto_clean": "auto_clean",
 }
 PART_OPTIONS = {
-    "transcript": ("timestamps", "stt", "translate", "export"),
+    "transcript": ("timestamps", "stt", "refine", "translate", "export"),
     "vision": tuple(VISION_OPTIONS),
     "comments": ("comment_limit",),
 }
@@ -68,11 +68,11 @@ def video(args: argparse.Namespace) -> dict[str, Any]:
     if args.vision:
         require_vision()
     llm = None
-    if args.translate is not None:
+    if args.refine or args.translate is not None:
         llm = llm_config()
         if llm is None:
             raise ValueError(
-                "--translate needs LLM_API_KEY; save one with `youtube setup --llm`"
+                "--refine and --translate need LLM_API_KEY; save one with `youtube setup --llm`"
             )
     client = YtDlpClient()
     payload = cache(partial(client.metadata, args.video_ref))
@@ -117,9 +117,15 @@ def video(args: argparse.Namespace) -> dict[str, Any]:
                 if getattr(args, option) is not None
             },
         )
-    # Translation waits for vision, which matches frames to the original caption lines, timed more finely than translated sentences.
+    # Rewriting waits for vision, which matches frames to timed caption lines that an article replaces with one block of paragraphs.
     if document is not None and llm is not None:
-        document = translate_transcript(document, args.translate, llm)
+        document = rewrite_transcript(
+            document,
+            llm,
+            language=args.translate,
+            refine=bool(args.refine),
+            article=not args.timestamps,
+        )
     parts = {
         "transcript": None if document is None else _transcript(document, args, vision),
         "vision": vision,

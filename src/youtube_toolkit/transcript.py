@@ -1,7 +1,8 @@
-"""Transcript retrieval policy: prefer captions, fall back to cloud and then local speech-to-text when allowed and set up, convert Chinese text to Taiwan Traditional, archive each fresh document, and export readable text with overwrite protection, or as Markdown into a given directory."""
+"""Transcript retrieval policy: prefer captions, fall back to cloud and then local speech-to-text when allowed and set up, which listens for the names typed in the title and description, convert Chinese text to Taiwan Traditional, archive each fresh document, and export readable text with overwrite protection, or as Markdown into a given directory."""
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -10,7 +11,7 @@ from typing import Any, Literal, Protocol, TypedDict
 import unicodedata
 
 from .artifacts import write_artifact
-from .convert_zh import convert_zh
+from .convert_zh import convert_zh, is_japanese
 from .identity import VideoRef, require_video_id
 from .schemas import (
     SpeechTranscription,
@@ -49,6 +50,17 @@ TRANSCRIPT_SOURCE_LABELS: dict[TranscriptSource, str] = {
     "automatic_captions": "automatic captions",
     "speech-to-text": "speech-to-text",
 }
+# Name-shaped words, for the names each rewrite request lists and the vocabulary sent to speech-to-text; NAME judges only a word's shape, so it also takes ordinary words the text capitalizes or writes in katakana, such as a sentence start the captions left unpunctuated or a Japanese loanword.
+# Katakana runs of three or more, words with a capital or digit after their first letter such as GPT-5.5 or OpenAI, capitalized words in mid-sentence, and capitalized words right after Chinese or Japanese text or punctuation, which capitalizes nothing but names.
+# Latin words end at the first non-ASCII letter, since Chinese and Japanese put no space between a name and the next word, as in GPTは.
+NAME = re.compile(
+    r"[\u30a0-\u30ff]{3,}"
+    r"|(?<![A-Za-z0-9])[A-Z][A-Za-z0-9.-]*[A-Z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?![A-Za-z0-9])"
+    r"|(?<=[^\s.!?] )[A-Z][a-z]+(?![A-Za-z0-9])"
+    r"|(?<=[\u3000-\u30ff\u4e00-\u9fff\uff00-\uffef])[A-Z][a-z]+(?![A-Za-z0-9])"
+)
+# Links in a description carry video and channel IDs shaped like names, such as VRFfAeW30qE.
+LINK = re.compile(r"https?://\S+")
 UNSAFE_FILENAME_CHARACTERS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 FILENAME_WHITESPACE = re.compile(r"\s+")
 REPEATED_UNDERSCORES = re.compile(r"_+")
@@ -101,12 +113,13 @@ def fetch_transcript(
             document = _fetch_stt_transcript(
                 metadata, client=client, transcribe=transcribe
             )
-    document = replace(
-        document,
-        chunks=[
-            replace(chunk, text=convert_zh(chunk.text)) for chunk in document.chunks
-        ],
-    )
+    if not is_japanese(document.text):
+        document = replace(
+            document,
+            chunks=[
+                replace(chunk, text=convert_zh(chunk.text)) for chunk in document.chunks
+            ],
+        )
     request = {
         "video_id": video_id,
         "languages": list(SUBTITLE_LANGUAGES),
@@ -150,11 +163,12 @@ def write_markdown_export(
     return {"video_id": document.metadata.video_id, "path": str(path)}
 
 
-def _stt_transcriber() -> Callable[[Path], SpeechTranscription] | None:
+def _stt_transcriber() -> Callable[[Path, list[str]], SpeechTranscription] | None:
+    """The transcriber takes the audio and a vocabulary of names to listen for, which local models ignore."""
     if cloud_stt_configured():
         return transcribe_in_cloud
     if local_stt_installed():
-        return transcribe_locally
+        return lambda audio_path, _: transcribe_locally(audio_path)
     return None
 
 
@@ -162,12 +176,12 @@ def _fetch_stt_transcript(
     metadata_payload: dict[str, Any],
     *,
     client: TranscriptClient,
-    transcribe: Callable[[Path], SpeechTranscription],
+    transcribe: Callable[[Path, list[str]], SpeechTranscription],
 ) -> TranscriptDocument:
     metadata = VideoMetadata.from_yt_dlp(metadata_payload)
     audio_path = client.download_transcription_audio(metadata.video_id)
     try:
-        transcription = transcribe(audio_path)
+        transcription = transcribe(audio_path, _vocabulary(metadata))
     finally:
         audio_path.unlink(missing_ok=True)
     return TranscriptDocument(
@@ -181,17 +195,33 @@ def _fetch_stt_transcript(
     )
 
 
+def _vocabulary(metadata: VideoMetadata) -> list[str]:
+    """Names typed in the title, description, and chapter titles, most frequent first: typed text spells them right, though NAME also takes the ordinary words of a title in title case."""
+    typed = "\n".join(
+        [
+            metadata.title or "",
+            metadata.description or "",
+            *(chapter.title for chapter in metadata.chapters),
+        ]
+    )
+    counts = Counter(NAME.findall(LINK.sub(" ", typed)))
+    return [name for name, _ in counts.most_common()]
+
+
 def _export_filename(document: TranscriptDocument) -> str:
-    """`TITLE_CHANNEL.txt`, or `TITLE_CHANNEL_LANGUAGE.txt` for a translation."""
+    """`TITLE_CHANNEL.txt`, `TITLE_CHANNEL_LANGUAGE.txt` for a translation, or `TITLE_CHANNEL_refined.txt` for a cleaned-up copy."""
     metadata = document.metadata
     title = _normalize_filename_component(metadata.title or "") or "transcript"
     channel = _normalize_filename_component(metadata.channel or "")
-    language = (
-        _normalize_filename_component(document.language)
-        if document.translated_by
-        else ""
-    )
-    stem = "_".join(part for part in (title, channel, language) if part)
+    rewrite = document.rewrite
+    suffix = ""
+    if rewrite is not None:
+        suffix = (
+            _normalize_filename_component(document.language)
+            if rewrite.translated
+            else "refined"
+        )
+    stem = "_".join(part for part in (title, channel, suffix) if part)
     return f"{stem}.txt"
 
 
@@ -241,9 +271,11 @@ def _header_fields(document: TranscriptDocument) -> list[tuple[str, str]]:
         fields.append(("Duration", _format_timestamp(metadata.duration_seconds)))
     fields.append(("URL", metadata.url))
     fields.append(("Transcript source", TRANSCRIPT_SOURCE_LABELS[document.source]))
-    if document.translated_by:
+    if (rewrite := document.rewrite) is not None:
         fields.append(
-            ("Translation", f"{document.language} by {document.translated_by}")
+            ("Translation", f"{document.language} by {rewrite.model}")
+            if rewrite.translated
+            else ("Refined by", rewrite.model)
         )
     return fields
 

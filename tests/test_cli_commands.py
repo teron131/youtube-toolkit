@@ -13,7 +13,12 @@ from youtube_toolkit import config
 from youtube_toolkit.cli import commands, health, output, setup
 from youtube_toolkit.cli.__main__ import main
 from youtube_toolkit.cli.parser import build_parser
-from youtube_toolkit.schemas import TranscriptChunk, TranscriptDocument, VideoMetadata
+from youtube_toolkit.schemas import (
+    TranscriptChunk,
+    TranscriptDocument,
+    TranscriptRewrite,
+    VideoMetadata,
+)
 from youtube_toolkit.search.request import ChannelTarget, SearchRequest
 
 
@@ -399,22 +404,27 @@ def test_video_transcript_export_writes_metadata_and_plain_transcript(
 
     capsys.readouterr()
     monkeypatch.setenv("LLM_API_KEY", "key")
-    monkeypatch.setattr(
-        commands,
-        "translate_transcript",
-        lambda original, language, _llm: replace(
-            original, language=language, translated_by="example/model"
-        ),
-    )
-    translated = ["video", "JpSHyEIZ_bo", "--transcript", "--translate", "zh-TW"]
-    assert main([*translated, "--export"]) == 0
-    translated_path = tmp_path / "What_is_DARKMATTER_Example_Channel_zh-TW.txt"
-    assert json.loads(capsys.readouterr().out)["transcript"]["path"] == str(
-        translated_path
-    )
-    assert "Translation: zh-TW by example/model\n" in translated_path.read_text(
-        encoding="utf-8"
-    )
+    rewrites = []
+
+    def rewrite_transcript(original, _llm, *, language, refine, article):
+        rewrites.append((language, refine, article))
+        return replace(
+            original,
+            language=language or original.language,
+            rewrite=TranscriptRewrite("example/model", translated=bool(language)),
+        )
+
+    monkeypatch.setattr(commands, "rewrite_transcript", rewrite_transcript)
+    video = ["video", "JpSHyEIZ_bo", "--transcript", "--export"]
+    for flags, name, header in [
+        (["--translate", "zh-TW"], "zh-TW", "Translation: zh-TW by example/model"),
+        (["--refine"], "refined", "Refined by: example/model"),
+    ]:
+        assert main([*video, *flags]) == 0
+        path = tmp_path / f"What_is_DARKMATTER_Example_Channel_{name}.txt"
+        assert json.loads(capsys.readouterr().out)["transcript"]["path"] == str(path)
+        assert f"{header}\n" in path.read_text(encoding="utf-8")
+    assert rewrites == [("zh-TW", False, True), (None, True, True)]
     assert export_path.exists()
 
 
@@ -459,12 +469,12 @@ def test_video_parts_share_one_metadata_fetch_and_export_markdown_beside_collage
     monkeypatch.setenv("LLM_API_KEY", "key")
     monkeypatch.setattr(
         commands,
-        "translate_transcript",
-        lambda original, language, _llm: replace(
+        "rewrite_transcript",
+        lambda original, _llm, *, language, refine, article: replace(
             original,
             language=language,
             chunks=[TranscriptChunk(0.0, 20.0, "Translated.")],
-            translated_by="example/model",
+            rewrite=TranscriptRewrite("example/model", translated=True),
         ),
     )
 
@@ -513,11 +523,10 @@ def test_video_parts_share_one_metadata_fetch_and_export_markdown_beside_collage
     [
         (["--timestamps"], "--timestamps requires --transcript"),
         (["--stt"], "--stt requires --transcript"),
+        (["--refine"], "--refine requires --transcript"),
         (["--translate"], "--translate requires --transcript"),
-        (
-            ["--transcript", "--translate"],
-            "--translate needs LLM_API_KEY",
-        ),
+        (["--transcript", "--refine"], "--refine and --translate need LLM_API_KEY"),
+        (["--transcript", "--translate"], "--refine and --translate need LLM_API_KEY"),
         (["--vision", "--export"], "--export requires --transcript"),
         (["--transcript", "--force"], "--force requires --export"),
         (["--comment-limit", "5"], "--comment-limit requires --comments"),

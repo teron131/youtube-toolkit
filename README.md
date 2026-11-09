@@ -1,6 +1,6 @@
 # YouTube Toolkit
 
-A YouTube CLI for agents: simple search and fetching of videos, metadata, transcripts, and comments, plus curated screenshots for visual context.
+A YouTube CLI for agents: simple search and fetching of videos, metadata, transcripts, and comments, plus curated screenshots for visual context. It is modular: the core needs no keys, and screenshots, speech-to-text, embeddings, a decision model, and an LLM each turn on only once you install or set them up, with a provider you choose or, for embeddings and speech-to-text, a local model.
 
 ![How the commands fit together: each command is a line through the shared parts it uses.](docs/architecture.svg)
 
@@ -31,9 +31,9 @@ youtube doctor
 | `EMBEDDING_API_KEY` | Semantic search | |
 | `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL` | Any OpenAI-compatible embedding API | Gemini, `gemini-embedding-2` |
 | `EMBEDDING_LOCAL_MODEL` | Embeddings without a key | `jinaai/jina-embeddings-v5-omni-small-retrieval` (non-commercial) |
-| `STT_PROVIDER` | Speech-to-text when captions are missing | `xai` |
+| `STT_PROVIDER` | Cloud speech-to-text | `xai` |
 | `STT_LOCAL_MODEL` | Speech-to-text without a key | `nvidia/parakeet-tdt-0.6b-v3` (European languages) |
-| `LLM_API_KEY` | Translating transcripts | |
+| `LLM_API_KEY` | Refining and translating transcripts | |
 | `LLM_BASE_URL`, `LLM_MODEL` | Any OpenAI-compatible chat API | Vercel AI Gateway, `openai/gpt-6-luna` |
 
 Speech-to-text providers are `xai` (`XAI_API_KEY`), `elevenlabs` (`ELEVENLABS_API_KEY`), `vercel` (`AI_GATEWAY_API_KEY`), `openai` (`OPENAI_API_KEY`), and `gemini` (`GEMINI_API_KEY`).
@@ -42,6 +42,7 @@ Speech-to-text providers are `xai` (`XAI_API_KEY`), `elevenlabs` (`ELEVENLABS_AP
 
 ```bash
 youtube video URL_OR_ID --transcript --timestamps
+youtube video URL_OR_ID --transcript --translate zh-TW --export
 youtube video URL_OR_ID --transcript --vision --export
 youtube video URL_OR_ID --comments "QUERY"
 youtube video URL_OR_ID
@@ -53,11 +54,17 @@ youtube channel @OpenAI --last 5
 
 Commands print JSON, and `--help` lists each command's options. Responses are archived under `.cache/youtube-toolkit/` in the working directory.
 
-- `video` returns the parts its flags name, keyed by part, from one metadata fetch, or the metadata alone without flags:
-  - `--transcript` prefers manual subtitles, then automatic captions, never machine translations, and falls back to speech-to-text, when configured, if there are none; `--stt` uses speech-to-text even when captions exist, and `--translate` translates it into English, or `--translate LANGUAGE` into another language, as timestamped sentences. `--export` writes it to a text file, or with `--vision` to a Markdown file beside the collages.
+- `video` is modular: each part flag adds its part to the output, keyed by part, and any mix of parts shares one metadata fetch; without flags it returns the metadata alone:
+  - `--transcript` prefers manual subtitles, then automatic captions, never machine translations, and falls back to speech-to-text, when configured, if there are none; `--stt` uses speech-to-text even when captions exist. `--refine` cleans it up with an LLM, and `--translate` translates it into English, or `--translate LANGUAGE` into another language. `--export` writes it to a text file, or with `--vision` to a Markdown file beside the collages.
   - `--vision` picks screenshots and lays them out in collages of six, ranked against the same transcript when `--transcript` is given.
   - `--comments` samples the top 100 comments, or up to 1000 with `--comment-limit`, and keeps those containing the query.
 - `search` covers YouTube, or the channels named with `--channels`, and by default keeps videos with at least 10,000 views and 3 minutes to 8 hours long. `--mode semantic` ranks caption passages with embeddings.
+
+## Refine and translate
+
+![How refine and translate rewrite a transcript: without --timestamps into paragraphs under the chapter titles, with it line by line on each line's own timestamps, through numbered model requests whose replies are checked by ID.](docs/rewrite-pipeline.svg)
+
+Without `--timestamps`, the transcript comes back as paragraphs of complete sentences, under the video's chapter titles when it has them; with it, each caption line is rewritten on its own timestamps. `--refine` fixes typos, punctuation, and grammar slips and drops filler sounds such as "um", keeping the speaker's wording, and `--translate LANGUAGE` takes any wording the model understands, such as `zh-TW` or `Japanese`. Both spell names from the video's title and description. A transcript already in the requested language comes back unchanged unless `--refine` is given.
 
 ## Vision
 
