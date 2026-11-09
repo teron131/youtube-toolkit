@@ -11,13 +11,13 @@ from youtube_toolkit.stt.cloud import cloud_stt_status
 
 def test_shared_embedding_defaults_use_gemini_embedding_2(monkeypatch) -> None:
     monkeypatch.setattr(config, "config_value", {"EMBEDDING_API_KEY": "shared-key"}.get)
-    embedding = config.embedding_config_from_env()
+    embedding = config.embedding_config()
     assert embedding.model == "gemini-embedding-2"
     assert embedding.api_key == "shared-key"
     assert (
         embedding.base_url == "https://generativelanguage.googleapis.com/v1beta/openai"
     )
-    assert embedding.output_dimensionality == 768
+    assert embedding.dimensions == 768
 
 
 def test_shared_embedding_configuration_preserves_caller_overrides(monkeypatch) -> None:
@@ -28,11 +28,11 @@ def test_shared_embedding_configuration_preserves_caller_overrides(monkeypatch) 
         "EMBEDDING_DIMENSIONS": "512",
     }
     monkeypatch.setattr(config, "config_value", settings.get)
-    embedding = config.embedding_config_from_env()
+    embedding = config.embedding_config()
     assert embedding.model == "caller-model"
     assert embedding.api_key == "caller-key"
     assert embedding.base_url == "https://example.com/v1"
-    assert embedding.output_dimensionality == 512
+    assert embedding.dimensions == 512
 
 
 def test_decision_settings_need_only_a_key_and_default_to_vercel(monkeypatch) -> None:
@@ -81,17 +81,14 @@ def test_a_key_setting_can_name_the_variable_that_holds_the_key(monkeypatch) -> 
             },
             "shared-key",
         ),
-        (
-            {"GEMINI_API_KEY": "direct-key", "EMBEDDING_API_KEY": "shared-key"},
-            "direct-key",
-        ),
+        ({"GEMINI_API_KEY": "speech-key"}, None),
     ],
 )
 def test_vision_credentials_resolve_defaults_without_crossing_providers(
     monkeypatch, settings, expected
 ) -> None:
     monkeypatch.setattr(config, "config_value", settings.get)
-    assert config.vision_embedding_key() == expected
+    assert config.embedding_key() == expected
 
 
 def test_saved_settings_are_used_without_exporting_them(monkeypatch) -> None:
@@ -111,10 +108,10 @@ def test_saved_settings_are_used_without_exporting_them(monkeypatch) -> None:
     assert config.read_config() == {}
     assert not config.config_path().exists()
     config.save_config(settings)
-    embedding = config.embedding_config_from_env()
+    embedding = config.embedding_config()
     assert embedding.api_key == "saved-embedding-key"
     assert embedding.model == "saved-model"
-    assert embedding.output_dimensionality == 256
+    assert embedding.dimensions == 256
     assert cloud_stt_status()["provider"] == "Gemini"
     assert cloud_stt_status()["key_set"] is True
     assert dict(os.environ) == before

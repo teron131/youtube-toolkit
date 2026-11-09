@@ -25,8 +25,8 @@ from youtube_toolkit.embeddings.results import (
 )
 from youtube_toolkit.schemas import (
     SpeechTranscription,
-    TranscriptChunk,
     TranscriptDocument,
+    TranscriptSegment,
     VideoMetadata,
 )
 from youtube_toolkit.transcript import fetch_transcript
@@ -36,7 +36,7 @@ from youtube_toolkit.vision.decisions import (
     DecisionUsage,
     FrameDecision,
 )
-from youtube_toolkit.youtube.caption import CaptionTranscriptUnavailable
+from youtube_toolkit.youtube.captions import CaptionTranscriptUnavailable
 from youtube_toolkit.youtube.client import VISION_VIDEO_FORMAT_SELECTOR, YtDlpClient
 
 VIDEO_ID = "JpSHyEIZ_bo"
@@ -108,7 +108,7 @@ def test_local_selection_reports_its_reason_and_cleans_up(
     monkeypatch.setattr("youtube_toolkit.transcript._stt_transcriber", lambda: None)
     monkeypatch.setattr(
         workflow,
-        "vision_embedding_key",
+        "embedding_key",
         lambda: None if fallback == "no_key" else "test-key",
     )
     monkeypatch.setattr(
@@ -366,7 +366,7 @@ def test_candidate_grid_reaches_video_end_and_respects_exclusions(
         excluded_intervals=[(24, 75)],
     )
     times = [frame.timestamp_seconds for frame in candidates]
-    assert calls == [(0, 60), (60, 120), (120, 125)]
+    assert sorted(calls) == [(0, 60), (60, 120), (120, 125)]
     assert 2.5 in times
     assert 122.5 in times
     assert not any(24 <= time < 75 for time in times)
@@ -394,12 +394,12 @@ def semantic_video(monkeypatch, tmp_path):
         "en",
         "subtitles",
         [
-            TranscriptChunk(
+            TranscriptSegment(
                 5,
                 15,
                 "The circuit diagram explains how the current flows from the battery through each resistor.",
             ),
-            TranscriptChunk(
+            TranscriptSegment(
                 108,
                 116,
                 "The meter shows the current dropping as we add a second resistor in series.",
@@ -411,7 +411,7 @@ def semantic_video(monkeypatch, tmp_path):
     monkeypatch.setattr(
         workflow, "fetch_transcript", lambda *_args, **_kwargs: document
     )
-    monkeypatch.setattr(workflow, "vision_embedding_key", lambda: "test-key")
+    monkeypatch.setattr(workflow, "embedding_key", lambda: "test-key")
 
     def candidates(_path, _ffmpeg, *, duration, directory, excluded_intervals):
         return [store_frame(directory, timestamp, chart()) for timestamp in [12, 112]]
@@ -544,7 +544,7 @@ def test_decision_model_ranks_first_with_a_decision_key(
 
     def rank(frames, document, config):
         assert config == DECISION
-        assert document.chunks
+        assert document.segments
         assert len(frames) == 2
         return DecisionRanking(
             [(0, FrameDecision(0.95, 0.9, 0.3, 0.4, 0.2))],
@@ -631,7 +631,7 @@ def test_local_model_ranks_without_a_key_on_its_own_cutoffs(
         return transcript(*args, **kwargs)
 
     monkeypatch.setattr(workflow, "fetch_transcript", fetch)
-    monkeypatch.setattr(workflow, "vision_embedding_key", lambda: None)
+    monkeypatch.setattr(workflow, "embedding_key", lambda: None)
     monkeypatch.setattr(workflow, "local_embedding_installed", lambda: True)
     monkeypatch.setattr(workflow, "LocalImageEmbeddingClient", Embedder)
     result = workflow.sample_vision(VIDEO_ID, local_only=local_only)
@@ -656,12 +656,12 @@ def test_missing_captions_fall_back_to_speech_to_text_for_ranking(
         raise CaptionTranscriptUnavailable("No captions")
 
     segments = [
-        TranscriptChunk(
+        TranscriptSegment(
             5,
             15,
             "The circuit diagram explains how the current flows from the battery through each resistor.",
         ),
-        TranscriptChunk(
+        TranscriptSegment(
             108,
             116,
             "The meter shows the current dropping as we add a second resistor in series.",

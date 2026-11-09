@@ -14,9 +14,9 @@ from youtube_toolkit.cli import commands, health, output, setup
 from youtube_toolkit.cli.__main__ import main
 from youtube_toolkit.cli.parser import build_parser
 from youtube_toolkit.schemas import (
-    TranscriptChunk,
     TranscriptDocument,
     TranscriptRewrite,
+    TranscriptSegment,
     VideoMetadata,
 )
 from youtube_toolkit.search.request import ChannelTarget, SearchRequest
@@ -322,9 +322,11 @@ def test_video_transcript_prints_plain_or_timestamped_text(
         ),
         language="en",
         source="subtitles",
-        chunks=[
-            TranscriptChunk(start_seconds=0.0, end_seconds=2.5, text="First sentence."),
-            TranscriptChunk(
+        segments=[
+            TranscriptSegment(
+                start_seconds=0.0, end_seconds=2.5, text="First sentence."
+            ),
+            TranscriptSegment(
                 start_seconds=2.5, end_seconds=5.0, text="Second sentence."
             ),
         ],
@@ -364,9 +366,11 @@ def test_video_transcript_export_writes_metadata_and_plain_transcript(
         ),
         language="en",
         source="subtitles",
-        chunks=[
-            TranscriptChunk(start_seconds=0.0, end_seconds=2.5, text="First sentence."),
-            TranscriptChunk(
+        segments=[
+            TranscriptSegment(
+                start_seconds=0.0, end_seconds=2.5, text="First sentence."
+            ),
+            TranscriptSegment(
                 start_seconds=62.0, end_seconds=65.0, text="Second sentence."
             ),
         ],
@@ -442,9 +446,9 @@ def test_video_parts_share_one_metadata_fetch_and_export_markdown_beside_collage
         ),
         language="en",
         source="subtitles",
-        chunks=[
-            TranscriptChunk(0.0, 10.0, "Intro."),
-            TranscriptChunk(10.0, 20.0, "The ray tracer."),
+        segments=[
+            TranscriptSegment(0.0, 10.0, "Intro."),
+            TranscriptSegment(10.0, 20.0, "The ray tracer."),
         ],
     )
     vision = {
@@ -473,7 +477,7 @@ def test_video_parts_share_one_metadata_fetch_and_export_markdown_beside_collage
         lambda original, _llm, *, language, refine, article: replace(
             original,
             language=language,
-            chunks=[TranscriptChunk(0.0, 20.0, "Translated.")],
+            segments=[TranscriptSegment(0.0, 20.0, "Translated.")],
             rewrite=TranscriptRewrite("example/model", translated=True),
         ),
     )
@@ -824,7 +828,7 @@ def test_doctor_names_the_speech_to_text_route_or_the_next_step(
     for name, value in environment.items():
         monkeypatch.setenv(name, value)
     monkeypatch.setattr(health, "local_stt_installed", lambda: installed)
-    monkeypatch.setattr(health, "local_model_downloaded", lambda _model: downloaded)
+    monkeypatch.setattr(health, "local_stt_downloaded", lambda _model: downloaded)
 
     assert expected in health.stt_health()
 
@@ -836,12 +840,12 @@ def test_doctor_names_the_speech_to_text_route_or_the_next_step(
             {
                 "DECISION_API_KEY": "key",
                 "DECISION_BASE_URL": "https://openrouter.ai/api",
-                "GEMINI_API_KEY": "key",
+                "EMBEDDING_API_KEY": "key",
             },
             True,
             "available; ranks with perplexity/pplx-decider-flash-v1.2 at openrouter.ai",
         ),
-        ({"GEMINI_API_KEY": "key"}, True, "available; ranks with Gemini embeddings"),
+        ({"EMBEDDING_API_KEY": "key"}, True, "available; ranks with Gemini embeddings"),
         (
             {},
             True,

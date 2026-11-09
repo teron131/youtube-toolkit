@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 from youtube_toolkit import ffmpeg_utils
-from youtube_toolkit.schemas import SpeechTranscription, TranscriptChunk
+from youtube_toolkit.schemas import SpeechTranscription, TranscriptSegment
 from youtube_toolkit.stt import cloud, local
 from youtube_toolkit.stt.cloud import (
     PROVIDERS,
@@ -57,9 +57,9 @@ def test_xai_word_timings_become_caption_like_lines() -> None:
     assert result == SpeechTranscription(
         text="Hello world. After a pause next line",
         segments=[
-            TranscriptChunk(0.2, 1.0, "Hello world."),
-            TranscriptChunk(1.1, 2.0, "After a pause"),
-            TranscriptChunk(3.2, 3.9, "next line"),
+            TranscriptSegment(0.2, 1.0, "Hello world."),
+            TranscriptSegment(1.1, 2.0, "After a pause"),
+            TranscriptSegment(3.2, 3.9, "next line"),
         ],
         language="en",
     )
@@ -107,7 +107,7 @@ def test_elevenlabs_keeps_only_timed_words_and_multichannel_stays_untimed() -> N
 
     assert single == SpeechTranscription(
         text="transcript text",
-        segments=[TranscriptChunk(0.0, 1.5, "transcript text")],
+        segments=[TranscriptSegment(0.0, 1.5, "transcript text")],
         language="en",
     )
     assert multichannel == SpeechTranscription(
@@ -203,7 +203,7 @@ def test_vercel_gateway_takes_base64_audio_and_the_model_in_a_header(
     monkeypatch.setattr(cloud, "run_json_request", fake_run_json_request)
 
     assert transcribe_in_cloud(audio_path, ["GPT-6"]) == SpeechTranscription(
-        text="hello", segments=[TranscriptChunk(0.5, 1.25, "hello")], language="en"
+        text="hello", segments=[TranscriptSegment(0.5, 1.25, "hello")], language="en"
     )
     (request,) = requests
     assert request.full_url == http_provider("vercel").url
@@ -489,7 +489,10 @@ def test_local_pieces_become_timed_segments_at_their_offsets(
 
     assert local.transcribe_locally(tmp_path / "audio.m4a") == SpeechTranscription(
         text="first third",
-        segments=[TranscriptChunk(0, 28, "first"), TranscriptChunk(38, 43, "third")],
+        segments=[
+            TranscriptSegment(0, 28, "first"),
+            TranscriptSegment(38, 43, "third"),
+        ],
     )
 
 

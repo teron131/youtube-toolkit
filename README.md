@@ -27,8 +27,7 @@ youtube doctor
 | `DECISION_API_KEY` | Picking screenshots with a decision model | |
 | `DECISION_BASE_URL` | Any host serving TypeSafe's System One API | Vercel AI Gateway |
 | `DECISION_MODEL` | The decision model; it must read images | `perplexity/pplx-decider-flash-v1.2` |
-| `GEMINI_API_KEY` | Picking screenshots with Gemini Embedding 2 | |
-| `EMBEDDING_API_KEY` | Semantic search | |
+| `EMBEDDING_API_KEY` | Semantic search, and picking screenshots with Gemini Embedding 2 | |
 | `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL` | Any OpenAI-compatible embedding API | Gemini, `gemini-embedding-2` |
 | `EMBEDDING_LOCAL_MODEL` | Embeddings without a key | `jinaai/jina-embeddings-v5-omni-small-retrieval` (non-commercial) |
 | `STT_PROVIDER` | Cloud speech-to-text | `xai` |

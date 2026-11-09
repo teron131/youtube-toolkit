@@ -7,8 +7,8 @@ from typesafe_sdk import NoulAnswer
 from youtube_toolkit.config import DecisionConfig
 from youtube_toolkit.decisions import DecisionError, DecisionResult
 from youtube_toolkit.schemas import (
-    TranscriptChunk,
     TranscriptDocument,
+    TranscriptSegment,
     VideoChapter,
     VideoMetadata,
 )
@@ -26,11 +26,11 @@ DOCUMENT = TranscriptDocument(
     "en",
     "subtitles",
     [
-        TranscriptChunk(5, 10, "Far before."),
-        TranscriptChunk(70, 80, "The lens bends light."),
-        TranscriptChunk(95, 100, "Here is the ray diagram."),
-        TranscriptChunk(150, 160, "Far after."),
-        TranscriptChunk(185, 190, "[Music]"),
+        TranscriptSegment(5, 10, "Far before."),
+        TranscriptSegment(70, 80, "The lens bends light."),
+        TranscriptSegment(95, 100, "Here is the ray diagram."),
+        TranscriptSegment(150, 160, "Far after."),
+        TranscriptSegment(185, 190, "[Music]"),
     ],
 )
 
@@ -56,7 +56,7 @@ def image(item, key=decisions.FRAME_ASSET) -> str:
 
 
 def test_context_marks_the_frame_among_lines_within_thirty_seconds() -> None:
-    text = decisions._context(DOCUMENT, 90, decisions._nearby(DOCUMENT, 90))
+    text = decisions._context(DOCUMENT, 90, decisions._nearby(DOCUMENT.segments, 90))
     assert text.startswith("Chapter: Optics\n")
     assert text.endswith(
         f"The lens bends light. {decisions.MARKER} Here is the ray diagram."

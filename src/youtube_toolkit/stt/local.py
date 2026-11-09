@@ -18,7 +18,7 @@ import warnings
 from ..config import DEFAULT_LOCAL_STT_MODEL, local_stt_model
 from ..ffmpeg_utils import SAMPLE_RATE, decode_audio
 from ..huggingface import model_downloaded, quiet_transformers, torch_device
-from ..schemas import SpeechTranscription, TranscriptChunk
+from ..schemas import SpeechTranscription, TranscriptSegment
 from .synthetic_audio import tone_recording
 
 if TYPE_CHECKING:
@@ -42,7 +42,7 @@ def local_stt_installed() -> bool:
     return libraries_installed and shutil.which("ffmpeg") is not None
 
 
-def local_model_downloaded(model: str) -> bool:
+def local_stt_downloaded(model: str) -> bool:
     return local_stt_installed() and model_downloaded(model)
 
 
@@ -79,7 +79,7 @@ def transcribe_locally(audio_path: Path) -> SpeechTranscription:
     for piece, result in zip(pieces, results, strict=True):
         if piece_text := result["text"].strip():
             segments.append(
-                TranscriptChunk(
+                TranscriptSegment(
                     start_seconds=offset / SAMPLE_RATE,
                     end_seconds=(offset + len(piece)) / SAMPLE_RATE,
                     text=piece_text,
@@ -111,7 +111,7 @@ def load_recognizer() -> Any:
 
 
 def _build_recognizer(model: str) -> Any:
-    quiet_transformers(downloaded=local_model_downloaded(model))
+    quiet_transformers(downloaded=local_stt_downloaded(model))
     import torch
     from transformers import pipeline
 

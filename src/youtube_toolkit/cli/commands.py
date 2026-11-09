@@ -9,6 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from ..config import llm_config
+from ..export import (
+    TranscriptExportResult,
+    write_markdown_export,
+    write_text_export,
+)
 from ..rewrite import rewrite_transcript
 from ..schemas import TranscriptDocument, VideoMetadata
 from ..search import (
@@ -24,12 +29,7 @@ from ..stt import (
     cloud_stt_status,
     local_stt_installed,
 )
-from ..transcript import (
-    TranscriptExportResult,
-    fetch_transcript,
-    write_markdown_export,
-    write_transcript_export,
-)
+from ..transcript import fetch_transcript
 from ..youtube import (
     DEFAULT_COMMENT_LIMIT,
     ChannelOptions,
@@ -146,11 +146,9 @@ def _transcript(
             document, Path(vision["directory"]), timestamps=timestamps
         )
     if args.export:
-        return write_transcript_export(
-            document, timestamps=timestamps, force=args.force
-        )
+        return write_text_export(document, timestamps=timestamps, force=args.force)
     if timestamps:
-        return [asdict(chunk) for chunk in document.chunks]
+        return [asdict(segment) for segment in document.segments]
     return document.text
 
 

@@ -73,7 +73,7 @@ class VideoChapter:
 
 
 @dataclass(frozen=True, slots=True)
-class TranscriptChunk:
+class TranscriptSegment:
     start_seconds: float
     end_seconds: float
     text: str
@@ -84,7 +84,7 @@ class SpeechTranscription:
     """`segments` is empty when the route reports no timing, and `language` is None when it reports no detected language."""
 
     text: str
-    segments: list[TranscriptChunk]
+    segments: list[TranscriptSegment]
     language: str | None = None
 
 
@@ -97,7 +97,7 @@ class TranscriptRewrite:
 
 @dataclass(frozen=True, slots=True)
 class TranscriptDocument:
-    """A speech-to-text document holds the route's timed segments, or one untimed chunk at 0 seconds when the route reports no timing; its `language` is `speech-to-text` when no language was detected or reported.
+    """A speech-to-text document holds the route's timed segments, or one untimed segment at 0 seconds when the route reports no timing; its `language` is `speech-to-text` when no language was detected or reported.
 
     After a translation, `language` is the requested target language as the caller wrote it.
     """
@@ -105,16 +105,18 @@ class TranscriptDocument:
     metadata: VideoMetadata
     language: str
     source: TranscriptSource
-    chunks: list[TranscriptChunk]
+    segments: list[TranscriptSegment]
     rewrite: TranscriptRewrite | None = None
 
     @property
     def text(self) -> str:
-        return " ".join(chunk.text for chunk in self.chunks)
+        return " ".join(segment.text for segment in self.segments)
 
     @property
     def timed(self) -> bool:
-        return any(chunk.end_seconds > chunk.start_seconds for chunk in self.chunks)
+        return any(
+            segment.end_seconds > segment.start_seconds for segment in self.segments
+        )
 
 
 def parse_upload_date(value: Any) -> date | None:

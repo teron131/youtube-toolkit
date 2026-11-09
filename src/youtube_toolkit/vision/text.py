@@ -11,7 +11,7 @@ from typing import Literal
 
 from yake import KeywordExtractor
 
-from ..schemas import TranscriptChunk, TranscriptDocument
+from ..schemas import TranscriptDocument, TranscriptSegment
 
 CAPTION_GAP_SECONDS = 5
 SENTENCE_SECONDS = 15
@@ -41,18 +41,16 @@ def prepare_targets(
 ) -> list[TextTarget]:
     """Retain whole caption text once per sentence/paragraph scale, with real timing clipped at video and section boundaries.
 
-    Caption chunks are indivisible, so an unusually long chunk can exceed the nominal grouping duration.
-    Excluded intervals are half-open and remove chunks by their start time.
+    Caption segments are indivisible, so an unusually long segment can exceed the nominal grouping duration.
+    Excluded intervals are half-open and remove segments by their start time.
     Sound annotations are not speech, and a video of known duration with under MIN_SPEECH_WORDS_PER_MINUTE of speech has no targets at all.
     """
-    segments = _segments(document, excluded_intervals)
+    runs = _runs(document, excluded_intervals)
     duration = document.metadata.duration_seconds
     words = sum(
-        len(SPEECH_WORD.findall(chunk.text))
-        for segment in segments
-        for chunk in segment
+        len(SPEECH_WORD.findall(segment.text)) for run in runs for segment in run
     )
-    if not segments or (
+    if not runs or (
         duration is not None
         and math.isfinite(duration)
         and words < MIN_SPEECH_WORDS_PER_MINUTE * duration / 60
@@ -60,18 +58,18 @@ def prepare_targets(
         return []
     sentences: list[TextTarget] = []
     paragraphs: list[TextTarget] = []
-    for segment in segments:
-        segment_sentences = _group_sentences(segment)
-        sentences.extend(segment_sentences)
-        paragraphs.extend(_group_paragraphs(segment_sentences))
+    for run in runs:
+        run_sentences = _group_sentences(run)
+        sentences.extend(run_sentences)
+        paragraphs.extend(_group_paragraphs(run_sentences))
     return [*_keywords(paragraphs, document.language), *sentences, *paragraphs]
 
 
-def _segments(
+def _runs(
     document: TranscriptDocument,
     excluded_intervals: Sequence[tuple[float, float]],
-) -> list[list[TranscriptChunk]]:
-    """Runs of timed chunks that share a chapter or excluded-interval section and have no caption gap over CAPTION_GAP_SECONDS, with ends clipped to that section."""
+) -> list[list[TranscriptSegment]]:
+    """Runs of timed segments that share a chapter or excluded-interval section and have no caption gap over CAPTION_GAP_SECONDS, with ends clipped to that section."""
     duration = document.metadata.duration_seconds
     bound = (
         duration
@@ -93,53 +91,54 @@ def _segments(
         }
     )
     spoken = (
-        replace(chunk, text=" ".join(SOUND_ANNOTATION.sub(" ", chunk.text).split()))
-        for chunk in document.chunks
+        replace(segment, text=" ".join(SOUND_ANNOTATION.sub(" ", segment.text).split()))
+        for segment in document.segments
     )
-    chunks = sorted(
+    segments = sorted(
         (
-            chunk
-            for chunk in spoken
-            if math.isfinite(chunk.start_seconds)
-            and math.isfinite(chunk.end_seconds)
-            and 0 <= chunk.start_seconds < bound
-            and chunk.end_seconds > chunk.start_seconds
-            and chunk.text
+            segment
+            for segment in spoken
+            if math.isfinite(segment.start_seconds)
+            and math.isfinite(segment.end_seconds)
+            and 0 <= segment.start_seconds < bound
+            and segment.end_seconds > segment.start_seconds
+            and segment.text
             and not any(
-                start <= chunk.start_seconds < end for start, end in excluded_intervals
+                start <= segment.start_seconds < end
+                for start, end in excluded_intervals
             )
         ),
-        key=lambda chunk: chunk.start_seconds,
+        key=lambda segment: segment.start_seconds,
     )
-    segments: list[list[TranscriptChunk]] = []
+    runs: list[list[TranscriptSegment]] = []
     previous_section = -1
-    segment_end = 0.0
-    for chunk in chunks:
-        section = bisect_right(boundaries, chunk.start_seconds)
+    run_end = 0.0
+    for segment in segments:
+        section = bisect_right(boundaries, segment.start_seconds)
         end = min(
-            chunk.end_seconds,
+            segment.end_seconds,
             boundaries[section] if section < len(boundaries) else bound,
         )
         if (
-            not segments
+            not runs
             or section != previous_section
-            or chunk.start_seconds - segment_end > CAPTION_GAP_SECONDS
+            or segment.start_seconds - run_end > CAPTION_GAP_SECONDS
         ):
-            segments.append([])
-            segment_end = end
-        segments[-1].append(replace(chunk, end_seconds=end))
-        segment_end = max(segment_end, end)
+            runs.append([])
+            run_end = end
+        runs[-1].append(replace(segment, end_seconds=end))
+        run_end = max(run_end, end)
         previous_section = section
-    return segments
+    return runs
 
 
-def _group_sentences(segment: list[TranscriptChunk]) -> list[TextTarget]:
+def _group_sentences(run: list[TranscriptSegment]) -> list[TextTarget]:
     sentences: list[TextTarget] = []
-    group: list[TranscriptChunk] = []
-    for chunk in segment:
-        group.append(chunk)
+    group: list[TranscriptSegment] = []
+    for segment in run:
+        group.append(segment)
         if (
-            chunk.text.rstrip("\"')]}\u2019\u201d").endswith(SENTENCE_ENDINGS)
+            segment.text.rstrip("\"')]}\u2019\u201d").endswith(SENTENCE_ENDINGS)
             or max(item.end_seconds for item in group) - group[0].start_seconds
             >= SENTENCE_SECONDS
         ):
@@ -195,12 +194,12 @@ def _keyword_extractor(language: str) -> KeywordExtractor:
     return extractor
 
 
-def _sentence(chunks: list[TranscriptChunk]) -> TextTarget:
+def _sentence(segments: list[TranscriptSegment]) -> TextTarget:
     return TextTarget(
         "sentence",
-        chunks[0].start_seconds,
-        max(chunk.end_seconds for chunk in chunks),
-        " ".join(chunk.text for chunk in chunks),
+        segments[0].start_seconds,
+        max(segment.end_seconds for segment in segments),
+        " ".join(segment.text for segment in segments),
     )
 
 

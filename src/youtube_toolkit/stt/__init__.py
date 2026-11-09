@@ -9,7 +9,7 @@ from .cloud import (
 )
 from .local import (
     check_local_stt,
-    local_model_downloaded,
+    local_stt_downloaded,
     local_stt_installed,
     transcribe_locally,
 )
@@ -20,7 +20,7 @@ __all__ = [
     "cloud_provider",
     "cloud_stt_configured",
     "cloud_stt_status",
-    "local_model_downloaded",
+    "local_stt_downloaded",
     "local_stt_installed",
     "transcribe_in_cloud",
     "transcribe_locally",

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from openai import OpenAI, omit
+from openai import APIError, OpenAI, omit
 from openai.types.shared import ReasoningEffort
 
 from .config import LLMConfig
@@ -21,6 +21,7 @@ class ChatModel:
         temperature: float | None = None,
     ) -> None:
         self._model = config.model
+        self._host = config.host
         self._reasoning_effort = omit if reasoning_effort is None else reasoning_effort
         self._temperature = omit if temperature is None else temperature
         self._client = OpenAI(
@@ -31,15 +32,18 @@ class ChatModel:
         )
 
     def invoke(self, system: str, user: str) -> str:
-        """The reply text, empty when the model sends none; the SDK retries transport failures."""
-        response = self._client.chat.completions.create(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            reasoning_effort=self._reasoning_effort,
-            temperature=self._temperature,
-        )
+        """The reply text, empty when the model sends none; the SDK retries transport failures, and a request that still fails raises RuntimeError."""
+        try:
+            response = self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                reasoning_effort=self._reasoning_effort,
+                temperature=self._temperature,
+            )
+        except APIError as error:
+            raise RuntimeError(f"{self._host} chat request failed: {error}") from error
         content = response.choices[0].message.content if response.choices else None
         return content or ""

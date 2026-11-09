@@ -38,7 +38,7 @@ from ..config import (
     stt_provider_name,
 )
 from ..execution import retry_transient
-from ..schemas import SpeechTranscription, TranscriptChunk, normalize_text
+from ..schemas import SpeechTranscription, TranscriptSegment, normalize_text
 from .synthetic_audio import tone_recording
 
 if TYPE_CHECKING:
@@ -322,9 +322,7 @@ def _send_to_vercel(
         "ai-model-id": provider.model,
         "Content-Type": "application/json",
     }
-    return parse_transcription(
-        _request(provider, provider.url, body, headers), provider
-    )
+    return parse_transcription(_request(provider, body, headers), provider)
 
 
 def _send_multipart(
@@ -338,9 +336,7 @@ def _send_multipart(
     if vocabulary_field is not None:
         fields += [(vocabulary_field, term) for term in vocabulary]
     body, content_type = encode_multipart_form(fields=fields, file_path=audio_path)
-    response = _request(
-        provider, provider.url, body, {**auth, "Content-Type": content_type}
-    )
+    response = _request(provider, body, {**auth, "Content-Type": content_type})
     return parse_transcription(response, provider)
 
 
@@ -375,7 +371,7 @@ def parse_transcription(
     )
 
 
-def _timed_words(words: Any) -> list[TranscriptChunk]:
+def _timed_words(words: Any) -> list[TranscriptSegment]:
     """ElevenLabs also lists spacing and audio events, and its timings can be null; only timed words count."""
     if not isinstance(words, list):
         return []
@@ -390,11 +386,11 @@ def _timed_words(words: Any) -> list[TranscriptChunk]:
     return _lines(timed)
 
 
-def _gateway_segments(segments: Any) -> list[TranscriptChunk]:
+def _gateway_segments(segments: Any) -> list[TranscriptSegment]:
     if not isinstance(segments, list):
         return []
     return [
-        TranscriptChunk(start_seconds=start, end_seconds=end, text=segment_text)
+        TranscriptSegment(start_seconds=start, end_seconds=end, text=segment_text)
         for segment in segments
         if isinstance(segment, dict)
         and (start := _seconds(segment.get("startSecond"))) is not None
@@ -403,8 +399,8 @@ def _gateway_segments(segments: Any) -> list[TranscriptChunk]:
     ]
 
 
-def _lines(words: list[tuple[float, float, str]]) -> list[TranscriptChunk]:
-    lines: list[TranscriptChunk] = []
+def _lines(words: list[tuple[float, float, str]]) -> list[TranscriptSegment]:
+    lines: list[TranscriptSegment] = []
     line: list[tuple[float, float, str]] = []
     for index, (start, end, word) in enumerate(words):
         line.append((start, end, word))
@@ -415,7 +411,7 @@ def _lines(words: list[tuple[float, float, str]]) -> list[TranscriptChunk]:
             or end - line[0][0] >= LINE_MAX_SECONDS
         ):
             lines.append(
-                TranscriptChunk(
+                TranscriptSegment(
                     start_seconds=line[0][0],
                     end_seconds=end,
                     text=_join_words([text for _, _, text in line]),
@@ -445,13 +441,10 @@ def audio_content_type(audio_path: Path) -> str:
 
 
 def _request(
-    provider: HttpProvider,
-    url: str,
-    data: bytes,
-    headers: dict[str, str],
+    provider: HttpProvider, data: bytes, headers: dict[str, str]
 ) -> dict[str, Any]:
     request = urllib.request.Request(  # noqa: S310 - fixed HTTPS API endpoints from the provider table.
-        url, data=data, headers=headers, method="POST"
+        provider.url, data=data, headers=headers, method="POST"
     )
     return run_json_request(request, provider_name=provider.label)
 

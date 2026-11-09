@@ -6,7 +6,7 @@ from typing import Self, overload
 
 from openai import APIError, OpenAI
 
-from ..config import EmbeddingConfig, embedding_concurrency, embedding_config_from_env
+from ..config import EmbeddingConfig, embedding_concurrency, embedding_config
 from ..execution import collect_concurrently
 from .results import EmbeddingError
 
@@ -16,7 +16,7 @@ class EmbeddingClient:
 
     def __init__(self, config: EmbeddingConfig | None = None) -> None:
         try:
-            self._config = config or embedding_config_from_env()
+            self._config = config or embedding_config()
         except ValueError as error:
             raise EmbeddingError(str(error)) from error
         self._client = OpenAI(
@@ -60,7 +60,7 @@ class EmbeddingClient:
             response = self._client.embeddings.create(
                 model=self._config.model,
                 input=text,
-                dimensions=self._config.output_dimensionality,
+                dimensions=self._config.dimensions,
                 encoding_format="float",
             )
             values = response.data[0].embedding if response.data else None

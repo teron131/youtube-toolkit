@@ -6,6 +6,7 @@ On graded explainers its score ranked key frames at AUC 0.761 against 0.754 for 
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import io
 from typing import TYPE_CHECKING
@@ -26,7 +27,7 @@ from .text import SOUND_ANNOTATION
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from ..schemas import TranscriptChunk, TranscriptDocument
+    from ..schemas import TranscriptDocument, TranscriptSegment
     from .candidates import StoredFrame
 
 CONTEXT_SECONDS = 30
@@ -34,6 +35,8 @@ MARKER = "[THE FRAME APPEARS HERE]"
 FRAME_ASSET = "frame"
 # Questions were measured on frames sent at this size, which bills 397 tokens per image against 687 at 960x540.
 REQUEST_SIZE = (640, 360)
+# Pillow decodes, shrinks, and encodes outside the GIL: 150 frames took 0.29 s on 4 threads against 0.86 s one by one.
+ASSET_WORKERS = 4
 # Applied to the score, which the speech can only raise; from the picture alone it dropped 70 of 1,334 keyframes on four narrated screen videos and none of the 461 graded picks.
 MIN_SCORE = 0.30
 # On consecutive graded picks from those videos, 0.6 joined 86% of the graders' repeats and 24% of different screens, mostly benign pairs such as a loading screen and its scene or a prompt and its result.
@@ -118,7 +121,8 @@ def rank_frames(
     Items rank by score; a None document means the video has no speech to show, so step 2 asks nothing.
     A failed request leaves its frame out, scores it by the picture alone, or keeps its pair apart; more than MAX_FAILED_SHARE failing in any step raises.
     """
-    assets = [_asset(frame.image_path) for frame in frames]
+    with ThreadPoolExecutor(ASSET_WORKERS) as executor:
+        assets = list(executor.map(_asset, [frame.image_path for frame in frames]))
     results: list[DecisionResult] = []
     warnings: list[str] = []
 
@@ -154,9 +158,14 @@ def rank_frames(
     )
     speech: dict[int, str] = {}
     if document is not None:
+        spoken = [
+            segment
+            for segment in document.segments
+            if SOUND_ANNOTATION.sub("", segment.text).strip()
+        ]
         for index, picture in enumerate(pictures):
             timestamp = frames[index].timestamp_seconds
-            if picture is not None and (lines := _nearby(document, timestamp)):
+            if picture is not None and (lines := _nearby(spoken, timestamp)):
                 speech[index] = _context(document, timestamp, lines)
     illustrations = ask(
         CONTEXT_QUESTIONS,
@@ -258,12 +267,12 @@ def _probabilities(
 
 
 def _context(
-    document: TranscriptDocument, timestamp: float, lines: list[TranscriptChunk]
+    document: TranscriptDocument, timestamp: float, lines: list[TranscriptSegment]
 ) -> str:
     """The marker sits between the lines that start before the frame and those that start after it."""
-    spoken = [chunk.text for chunk in lines if chunk.start_seconds <= timestamp]
+    spoken = [segment.text for segment in lines if segment.start_seconds <= timestamp]
     spoken.append(MARKER)
-    spoken += [chunk.text for chunk in lines if chunk.start_seconds > timestamp]
+    spoken += [segment.text for segment in lines if segment.start_seconds > timestamp]
     chapter = next(
         (
             chapter.title
@@ -278,14 +287,15 @@ def _context(
     )
 
 
-def _nearby(document: TranscriptDocument, timestamp: float) -> list[TranscriptChunk]:
+def _nearby(
+    segments: list[TranscriptSegment], timestamp: float
+) -> list[TranscriptSegment]:
     return [
-        chunk
-        for chunk in document.chunks
-        if SOUND_ANNOTATION.sub("", chunk.text).strip()
-        and chunk.start_seconds - CONTEXT_SECONDS
+        segment
+        for segment in segments
+        if segment.start_seconds - CONTEXT_SECONDS
         <= timestamp
-        <= chunk.end_seconds + CONTEXT_SECONDS
+        <= segment.end_seconds + CONTEXT_SECONDS
     ]
 
 

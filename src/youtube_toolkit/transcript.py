@@ -1,23 +1,20 @@
-"""Transcript retrieval policy: prefer captions, fall back to cloud and then local speech-to-text when allowed and set up, which listens for the names typed in the title and description, convert Chinese text to Taiwan Traditional, archive each fresh document, and export readable text with overwrite protection, or as Markdown into a given directory."""
+"""Transcript retrieval policy: prefer captions, fall back to cloud and then local speech-to-text when allowed and set up, which listens for the names written in the title and description, convert Chinese text to Taiwan Traditional, and archive each fresh document."""
 
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Callable
 from dataclasses import asdict, replace
 from pathlib import Path
-import re
-from typing import Any, Literal, Protocol, TypedDict
-import unicodedata
+from typing import Any, Literal, Protocol
 
 from .artifacts import write_artifact
 from .convert_zh import convert_zh, is_japanese
 from .identity import VideoRef, require_video_id
+from .names import metadata_names
 from .schemas import (
     SpeechTranscription,
-    TranscriptChunk,
     TranscriptDocument,
-    TranscriptSource,
+    TranscriptSegment,
     VideoMetadata,
     normalize_text,
 )
@@ -45,25 +42,6 @@ SUBTITLE_LANGUAGES = (
     "zh-CN",
     "zh",
 )
-TRANSCRIPT_SOURCE_LABELS: dict[TranscriptSource, str] = {
-    "subtitles": "manual captions",
-    "automatic_captions": "automatic captions",
-    "speech-to-text": "speech-to-text",
-}
-# Name-shaped words, for the names each rewrite request lists and the vocabulary sent to speech-to-text; NAME judges only a word's shape, so it also takes ordinary words the text capitalizes or writes in katakana, such as a sentence start the captions left unpunctuated or a Japanese loanword.
-# Katakana runs of three or more, words with a capital or digit after their first letter such as GPT-5.5 or OpenAI, capitalized words in mid-sentence, and capitalized words right after Chinese or Japanese text or punctuation, which capitalizes nothing but names.
-# Latin words end at the first non-ASCII letter, since Chinese and Japanese put no space between a name and the next word, as in GPTは.
-NAME = re.compile(
-    r"[\u30a0-\u30ff]{3,}"
-    r"|(?<![A-Za-z0-9])[A-Z][A-Za-z0-9.-]*[A-Z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?![A-Za-z0-9])"
-    r"|(?<=[^\s.!?] )[A-Z][a-z]+(?![A-Za-z0-9])"
-    r"|(?<=[\u3000-\u30ff\u4e00-\u9fff\uff00-\uffef])[A-Z][a-z]+(?![A-Za-z0-9])"
-)
-# Links in a description carry video and channel IDs shaped like names, such as VRFfAeW30qE.
-LINK = re.compile(r"https?://\S+")
-UNSAFE_FILENAME_CHARACTERS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
-FILENAME_WHITESPACE = re.compile(r"\s+")
-REPEATED_UNDERSCORES = re.compile(r"_+")
 
 
 class TranscriptClient(Protocol):
@@ -72,11 +50,6 @@ class TranscriptClient(Protocol):
     def download_transcription_audio(self, video_ref: VideoRef, /) -> Path:
         """The caller deletes the returned file."""
         ...
-
-
-class TranscriptExportResult(TypedDict):
-    video_id: str
-    path: str
 
 
 def fetch_transcript(
@@ -116,8 +89,9 @@ def fetch_transcript(
     if not is_japanese(document.text):
         document = replace(
             document,
-            chunks=[
-                replace(chunk, text=convert_zh(chunk.text)) for chunk in document.chunks
+            segments=[
+                replace(segment, text=convert_zh(segment.text))
+                for segment in document.segments
             ],
         )
     request = {
@@ -127,40 +101,6 @@ def fetch_transcript(
     }
     write_artifact("transcripts", video_id, request, asdict(document))
     return document
-
-
-def write_transcript_export(
-    document: TranscriptDocument,
-    *,
-    timestamps: bool,
-    force: bool,
-) -> TranscriptExportResult:
-    path = Path.cwd() / _export_filename(document)
-    try:
-        with path.open(
-            "w" if force else "x", encoding="utf-8", newline="\n"
-        ) as export_file:
-            export_file.write(_render_export(document, timestamps=timestamps))
-    except FileExistsError as error:
-        raise ValueError(
-            f"Transcript export already exists: {path}; use --force to replace it"
-        ) from error
-    except OSError as error:
-        raise RuntimeError(
-            f"Could not write transcript export {path}: {error}"
-        ) from error
-    return {
-        "video_id": document.metadata.video_id,
-        "path": str(path),
-    }
-
-
-def write_markdown_export(
-    document: TranscriptDocument, directory: Path, *, timestamps: bool
-) -> TranscriptExportResult:
-    path = directory / Path(_export_filename(document)).with_suffix(".md")
-    path.write_text(_render_markdown(document, timestamps=timestamps), encoding="utf-8")
-    return {"video_id": document.metadata.video_id, "path": str(path)}
 
 
 def _stt_transcriber() -> Callable[[Path, list[str]], SpeechTranscription] | None:
@@ -181,7 +121,7 @@ def _fetch_stt_transcript(
     metadata = VideoMetadata.from_yt_dlp(metadata_payload)
     audio_path = client.download_transcription_audio(metadata.video_id)
     try:
-        transcription = transcribe(audio_path, _vocabulary(metadata))
+        transcription = transcribe(audio_path, metadata_names(metadata))
     finally:
         audio_path.unlink(missing_ok=True)
     return TranscriptDocument(
@@ -190,102 +130,6 @@ def _fetch_stt_transcript(
         or normalize_text(metadata_payload.get("language"))
         or "speech-to-text",
         source="speech-to-text",
-        chunks=transcription.segments
-        or [TranscriptChunk(start_seconds=0, end_seconds=0, text=transcription.text)],
+        segments=transcription.segments
+        or [TranscriptSegment(start_seconds=0, end_seconds=0, text=transcription.text)],
     )
-
-
-def _vocabulary(metadata: VideoMetadata) -> list[str]:
-    """Names typed in the title, description, and chapter titles, most frequent first: typed text spells them right, though NAME also takes the ordinary words of a title in title case."""
-    typed = "\n".join(
-        [
-            metadata.title or "",
-            metadata.description or "",
-            *(chapter.title for chapter in metadata.chapters),
-        ]
-    )
-    counts = Counter(NAME.findall(LINK.sub(" ", typed)))
-    return [name for name, _ in counts.most_common()]
-
-
-def _export_filename(document: TranscriptDocument) -> str:
-    """`TITLE_CHANNEL.txt`, `TITLE_CHANNEL_LANGUAGE.txt` for a translation, or `TITLE_CHANNEL_refined.txt` for a cleaned-up copy."""
-    metadata = document.metadata
-    title = _normalize_filename_component(metadata.title or "") or "transcript"
-    channel = _normalize_filename_component(metadata.channel or "")
-    rewrite = document.rewrite
-    suffix = ""
-    if rewrite is not None:
-        suffix = (
-            _normalize_filename_component(document.language)
-            if rewrite.translated
-            else "refined"
-        )
-    stem = "_".join(part for part in (title, channel, suffix) if part)
-    return f"{stem}.txt"
-
-
-def _normalize_filename_component(value: str) -> str:
-    normalized = unicodedata.normalize("NFKC", value)
-    normalized = UNSAFE_FILENAME_CHARACTERS.sub("", normalized)
-    normalized = FILENAME_WHITESPACE.sub("_", normalized)
-    normalized = REPEATED_UNDERSCORES.sub("_", normalized)
-    return normalized.strip(" ._")
-
-
-def _render_export(
-    document: TranscriptDocument,
-    *,
-    timestamps: bool,
-) -> str:
-    lines = [f"{name}: {value}" for name, value in _header_fields(document)]
-    transcript = document.text
-    if timestamps:
-        transcript = "\n".join(_timed_line(chunk) for chunk in document.chunks)
-    return "\n".join([*lines, "", transcript]).rstrip() + "\n"
-
-
-def _render_markdown(document: TranscriptDocument, *, timestamps: bool) -> str:
-    (_, title), *fields = _header_fields(document)
-    header = "\n".join(f"- {name}: {value}" for name, value in fields)
-    # Timed lines are separate paragraphs, since Markdown joins adjacent lines into one.
-    body = (
-        [_timed_line(chunk) for chunk in document.chunks]
-        if timestamps
-        else [document.text]
-    )
-    return "\n\n".join([f"# {title}", header, *body]) + "\n"
-
-
-def _header_fields(document: TranscriptDocument) -> list[tuple[str, str]]:
-    metadata = document.metadata
-    fields = [("Title", metadata.title or metadata.video_id)]
-    if metadata.channel:
-        fields.append(("Author", metadata.channel))
-    channel = metadata.channel_handle or metadata.channel_id
-    if channel:
-        fields.append(("Channel", channel))
-    if metadata.upload_date:
-        fields.append(("Published", metadata.upload_date))
-    if metadata.duration_seconds is not None:
-        fields.append(("Duration", _format_timestamp(metadata.duration_seconds)))
-    fields.append(("URL", metadata.url))
-    fields.append(("Transcript source", TRANSCRIPT_SOURCE_LABELS[document.source]))
-    if (rewrite := document.rewrite) is not None:
-        fields.append(
-            ("Translation", f"{document.language} by {rewrite.model}")
-            if rewrite.translated
-            else ("Refined by", rewrite.model)
-        )
-    return fields
-
-
-def _timed_line(chunk: TranscriptChunk) -> str:
-    return f"[{_format_timestamp(chunk.start_seconds)}] {chunk.text}"
-
-
-def _format_timestamp(seconds: float) -> str:
-    total_seconds = max(0, int(seconds))
-    hours, remainder = divmod(total_seconds, 3600)
-    minutes, remaining_seconds = divmod(remainder, 60)
-    return f"{hours:02d}:{minutes:02d}:{remaining_seconds:02d}"

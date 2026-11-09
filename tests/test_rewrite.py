@@ -2,6 +2,8 @@
 
 import re
 
+import httpx2
+import openai
 import pytest
 
 from youtube_toolkit.config import LLMConfig
@@ -10,9 +12,9 @@ from youtube_toolkit.rewrite.requests import ATTEMPTS
 from youtube_toolkit.rewrite.sentences import MAX_LINES_PER_SENTENCE, split_sentences
 from youtube_toolkit.rewrite.timestamped import CONTEXT_LINES, LINES_PER_BATCH
 from youtube_toolkit.schemas import (
-    TranscriptChunk,
     TranscriptDocument,
     TranscriptRewrite,
+    TranscriptSegment,
     VideoChapter,
     VideoMetadata,
 )
@@ -76,7 +78,7 @@ def test_transcripts_already_in_the_target_language_come_back_unchanged(
     monkeypatch.chdir(tmp_path)
     requests = fake_openai(monkeypatch, prefixed)
     document = TranscriptDocument(
-        METADATA, "en-orig", "automatic_captions", [TranscriptChunk(0, 1, "Hi")]
+        METADATA, "en-orig", "automatic_captions", [TranscriptSegment(0, 1, "Hi")]
     )
 
     assert translate(document, "en") is document
@@ -85,7 +87,7 @@ def test_transcripts_already_in_the_target_language_come_back_unchanged(
     refined = rewrite_transcript(
         document, CONFIG, language="en", refine=True, article=False
     )
-    assert refined.chunks == [TranscriptChunk(0, 1, "T Hi")]
+    assert refined.segments == [TranscriptSegment(0, 1, "T Hi")]
     assert refined.rewrite == TranscriptRewrite("example/model", translated=False)
     assert "Correct YouTube transcript lines" in requests[0]["system"]
 
@@ -93,11 +95,11 @@ def test_transcripts_already_in_the_target_language_come_back_unchanged(
 def test_requests_list_the_names_said_more_than_once(monkeypatch, tmp_path) -> None:
     monkeypatch.chdir(tmp_path)
     requests = fake_openai(monkeypatch, prefixed)
-    chunks = [
-        TranscriptChunk(0, 1, "We tried Zentrix today."),
-        TranscriptChunk(1, 2, "Then Zentrix beat Opus."),
+    segments = [
+        TranscriptSegment(0, 1, "We tried Zentrix today."),
+        TranscriptSegment(1, 2, "Then Zentrix beat Opus."),
     ]
-    document = TranscriptDocument(METADATA, "es", "subtitles", chunks)
+    document = TranscriptDocument(METADATA, "es", "subtitles", segments)
 
     translate(document, "en")
 
@@ -113,15 +115,15 @@ def test_caption_lines_split_into_sentences_at_their_end_marks() -> None:
         "close and see a ton of [ __ ] Because",
         "it broke.",
     ]
-    chunks = [
-        TranscriptChunk(index, index + 1, text) for index, text in enumerate(lines)
+    segments = [
+        TranscriptSegment(index, index + 1, text) for index, text in enumerate(lines)
     ]
-    chunks += [
-        TranscriptChunk(10 + index, 11 + index, "Okay")
+    segments += [
+        TranscriptSegment(10 + index, 11 + index, "Okay")
         for index in range(MAX_LINES_PER_SENTENCE + 1)
     ]
 
-    sentences = split_sentences(chunks)
+    sentences = split_sentences(segments)
 
     # A quotation holds its own sentences, a lowercase word continues the sentence, and a censored word ends one before a capital.
     assert [sentence.text for sentence in sentences] == [
@@ -150,16 +152,18 @@ def test_caption_lines_keep_their_own_timing_across_parallel_batches(
     monkeypatch.chdir(tmp_path)
     requests = fake_openai(monkeypatch, prefixed)
     count = LINES_PER_BATCH + 2
-    chunks = [TranscriptChunk(index, index + 1, f"L{index}") for index in range(count)]
-    document = TranscriptDocument(METADATA, "es", "subtitles", chunks)
+    segments = [
+        TranscriptSegment(index, index + 1, f"L{index}") for index in range(count)
+    ]
+    document = TranscriptDocument(METADATA, "es", "subtitles", segments)
 
     result = translate(document, "zh-TW")
 
     assert result.language == "zh-TW"
     assert requests[0]["system"].count("zh-TW") == 1
     assert result.rewrite == TranscriptRewrite("example/model", translated=True)
-    assert result.chunks == [
-        TranscriptChunk(index, index + 1, f"T L{index}") for index in range(count)
+    assert result.segments == [
+        TranscriptSegment(index, index + 1, f"T L{index}") for index in range(count)
     ]
     last = next(request for request in requests if f"L{count - 1}" in request["lines"])
     assert last["lines"] == [f"L{count - 2}", f"L{count - 1}"]
@@ -180,27 +184,27 @@ def test_untimed_speech_is_translated_by_sentence_and_joined_back(
         METADATA,
         "speech-to-text",
         "speech-to-text",
-        [TranscriptChunk(0, 0, "One. Two! 三。四。")],
+        [TranscriptSegment(0, 0, "One. Two! 三。四。")],
     )
 
     result = translate(document, "en")
 
     assert requests[0]["lines"] == ["One.", "Two!", "三。", "四。"]
-    assert result.chunks == [TranscriptChunk(0, 0, "ONE. TWO! 三。 四。")]
+    assert result.segments == [TranscriptSegment(0, 0, "ONE. TWO! 三。 四。")]
 
 
 def test_a_reply_missing_an_id_is_asked_for_again(monkeypatch, tmp_path) -> None:
     monkeypatch.chdir(tmp_path)
     replies = iter(["[LINE1] T S0. S1.", "[LINE1] T S0.\n[LINE2] T S1."])
     requests = fake_openai(monkeypatch, lambda _lines: next(replies))
-    chunks = [TranscriptChunk(index, index + 1, f"S{index}.") for index in range(2)]
-    document = TranscriptDocument(METADATA, "es", "subtitles", chunks)
+    segments = [TranscriptSegment(index, index + 1, f"S{index}.") for index in range(2)]
+    document = TranscriptDocument(METADATA, "es", "subtitles", segments)
 
     result = translate(document, "en")
 
-    assert result.chunks == [
-        TranscriptChunk(0, 1, "T S0."),
-        TranscriptChunk(1, 2, "T S1."),
+    assert result.segments == [
+        TranscriptSegment(0, 1, "T S0."),
+        TranscriptSegment(1, 2, "T S1."),
     ]
     assert len(requests) == 2
 
@@ -215,14 +219,14 @@ def test_replies_drop_labels_and_stray_ids_and_join_lines_without_one(
             "Translation:\n[LINE1] T S0\n[2] continued.\n[LINE2] T S1.\n[LINE3] T after."
         ),
     )
-    chunks = [TranscriptChunk(index, index + 1, f"S{index}.") for index in range(2)]
-    document = TranscriptDocument(METADATA, "es", "subtitles", chunks)
+    segments = [TranscriptSegment(index, index + 1, f"S{index}.") for index in range(2)]
+    document = TranscriptDocument(METADATA, "es", "subtitles", segments)
 
     result = translate(document, "en")
 
-    assert result.chunks == [
-        TranscriptChunk(0, 1, "T S0 [2] continued."),
-        TranscriptChunk(1, 2, "T S1."),
+    assert result.segments == [
+        TranscriptSegment(0, 1, "T S0 [2] continued."),
+        TranscriptSegment(1, 2, "T S1."),
     ]
 
 
@@ -233,14 +237,14 @@ def test_a_translated_line_merged_into_its_neighbour_shares_its_entry(
     requests = fake_openai(
         monkeypatch, lambda _lines: "[LINE2] T S0. S1.\n[LINE3] T S2."
     )
-    chunks = [TranscriptChunk(index, index + 1, f"S{index}.") for index in range(3)]
-    document = TranscriptDocument(METADATA, "es", "subtitles", chunks)
+    segments = [TranscriptSegment(index, index + 1, f"S{index}.") for index in range(3)]
+    document = TranscriptDocument(METADATA, "es", "subtitles", segments)
 
     result = translate(document, "en")
 
-    assert result.chunks == [
-        TranscriptChunk(0, 2, "T S0. S1."),
-        TranscriptChunk(2, 3, "T S2."),
+    assert result.segments == [
+        TranscriptSegment(0, 2, "T S0. S1."),
+        TranscriptSegment(2, 3, "T S2."),
     ]
     assert len(requests) == ATTEMPTS
 
@@ -251,16 +255,16 @@ def test_a_translated_line_merged_into_its_neighbour_shares_its_entry(
         (
             "[LINE1] The cat sat, and dogs bark.\n[LINE3] Birds fly!",
             [
-                TranscriptChunk(0, 2, "The cat sat, and dogs bark."),
-                TranscriptChunk(2, 3, "Birds fly!"),
+                TranscriptSegment(0, 2, "The cat sat, and dogs bark."),
+                TranscriptSegment(2, 3, "Birds fly!"),
             ],
         ),
         (
             "[LINE1] The cat sat down.\n[LINE3] Birds fly!",
             [
-                TranscriptChunk(0, 1, "The cat sat down."),
-                TranscriptChunk(1, 2, "Dogs bark."),
-                TranscriptChunk(2, 3, "Birds fly!"),
+                TranscriptSegment(0, 1, "The cat sat down."),
+                TranscriptSegment(1, 2, "Dogs bark."),
+                TranscriptSegment(2, 3, "Birds fly!"),
             ],
         ),
     ],
@@ -271,18 +275,18 @@ def test_a_cleaned_up_line_missing_from_the_reply_merges_or_keeps_its_original(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     fake_openai(monkeypatch, lambda _lines: reply)
-    chunks = [
-        TranscriptChunk(0, 1, "The cat sat."),
-        TranscriptChunk(1, 2, "Dogs bark."),
-        TranscriptChunk(2, 3, "Birds fly."),
+    segments = [
+        TranscriptSegment(0, 1, "The cat sat."),
+        TranscriptSegment(1, 2, "Dogs bark."),
+        TranscriptSegment(2, 3, "Birds fly."),
     ]
-    document = TranscriptDocument(METADATA, "en", "automatic_captions", chunks)
+    document = TranscriptDocument(METADATA, "en", "automatic_captions", segments)
 
     result = rewrite_transcript(
         document, CONFIG, language=None, refine=True, article=False
     )
 
-    assert result.chunks == expected
+    assert result.segments == expected
 
 
 def test_a_corrected_line_unlike_its_source_keeps_the_original(
@@ -293,17 +297,17 @@ def test_a_corrected_line_unlike_its_source_keeps_the_original(
         monkeypatch,
         lambda _lines: "[LINE1] The cat sat down.\n[LINE2] Something else entirely.",
     )
-    chunks = [
-        TranscriptChunk(0, 1, "The cat sat."),
-        TranscriptChunk(1, 2, "Dogs bark."),
+    segments = [
+        TranscriptSegment(0, 1, "The cat sat."),
+        TranscriptSegment(1, 2, "Dogs bark."),
     ]
-    document = TranscriptDocument(METADATA, "en", "automatic_captions", chunks)
+    document = TranscriptDocument(METADATA, "en", "automatic_captions", segments)
 
     result = rewrite_transcript(
         document, CONFIG, language=None, refine=True, article=False
     )
 
-    assert [chunk.text for chunk in result.chunks] == [
+    assert [segment.text for segment in result.segments] == [
         "The cat sat down.",
         "Dogs bark.",
     ]
@@ -320,16 +324,16 @@ def test_an_article_rewrites_paragraphs_under_translated_chapter_titles(
         url="https://youtu.be/JpSHyEIZ_bo",
         chapters=[VideoChapter("Main", 2, None), VideoChapter("Intro", 0, 2)],
     )
-    chunks = [TranscriptChunk(index, index + 1, f"S{index}.") for index in range(5)]
-    document = TranscriptDocument(metadata, "es", "subtitles", chunks)
+    segments = [TranscriptSegment(index, index + 1, f"S{index}.") for index in range(5)]
+    document = TranscriptDocument(metadata, "es", "subtitles", segments)
 
     result = rewrite_transcript(
         document, CONFIG, language="ja", refine=False, article=True
     )
 
     # Chapter starts open paragraphs at S0 and S2, and the model's turning point opens one at S3.
-    assert result.chunks == [
-        TranscriptChunk(
+    assert result.segments == [
+        TranscriptSegment(
             0, 5, "## T Intro\n\nT S0. S1.\n\n## T Main\n\nT S2.\n\nT S3. S4."
         )
     ]
@@ -361,8 +365,8 @@ def test_a_chapter_heading_moves_to_the_sentence_the_model_says_opens_it(
             VideoChapter("End", 4, None),
         ],
     )
-    chunks = [TranscriptChunk(index, index + 1, f"S{index}.") for index in range(6)]
-    document = TranscriptDocument(metadata, "es", "subtitles", chunks)
+    segments = [TranscriptSegment(index, index + 1, f"S{index}.") for index in range(6)]
+    document = TranscriptDocument(metadata, "es", "subtitles", segments)
 
     result = rewrite_transcript(
         document, CONFIG, language="ja", refine=False, article=True
@@ -372,7 +376,7 @@ def test_a_chapter_heading_moves_to_the_sentence_the_model_says_opens_it(
         request for request in requests if "turning points" in request["system"]
     )
     assert window["lines"][2:4] == ['<chapter id="CHAPTER2">Main</chapter>', "S2."]
-    assert result.chunks[0].text == (
+    assert result.segments[0].text == (
         "## T Intro\n\nT S0.\n\n## T Main\n\nT S1. S2. S3.\n\n## T End\n\nT S4. S5."
     )
 
@@ -387,8 +391,8 @@ def test_each_paragraph_window_rules_only_on_its_own_sentences(
     requests = fake_openai(
         monkeypatch, prefixed, starts=lambda _lines: "[LINE3] [LINE5]"
     )
-    chunks = [TranscriptChunk(index, index + 1, f"S{index}.") for index in range(6)]
-    document = TranscriptDocument(METADATA, "en", "automatic_captions", chunks)
+    segments = [TranscriptSegment(index, index + 1, f"S{index}.") for index in range(6)]
+    document = TranscriptDocument(METADATA, "en", "automatic_captions", segments)
 
     result = rewrite_transcript(
         document, CONFIG, language=None, refine=True, article=True
@@ -403,7 +407,7 @@ def test_each_paragraph_window_rules_only_on_its_own_sentences(
         ["S0.", "S1.", "S2.", "S3."],
         ["S2.", "S3.", "S4.", "S5."],
     ]
-    assert result.chunks[0].text == "T S0. S1.\n\nT S2. S3.\n\nT S4. S5."
+    assert result.segments[0].text == "T S0. S1.\n\nT S2. S3.\n\nT S4. S5."
 
 
 def test_a_refined_article_batch_that_shrinks_keeps_its_source(
@@ -411,17 +415,17 @@ def test_a_refined_article_batch_that_shrinks_keeps_its_source(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     requests = fake_openai(monkeypatch, lambda _lines: "[LINE1] Short.")
-    chunks = [
-        TranscriptChunk(0, 1, "This sentence is long enough to summarize."),
-        TranscriptChunk(1, 2, "So is this one, with a few more words."),
+    segments = [
+        TranscriptSegment(0, 1, "This sentence is long enough to summarize."),
+        TranscriptSegment(1, 2, "So is this one, with a few more words."),
     ]
-    document = TranscriptDocument(METADATA, "en", "automatic_captions", chunks)
+    document = TranscriptDocument(METADATA, "en", "automatic_captions", segments)
 
     result = rewrite_transcript(
         document, CONFIG, language=None, refine=True, article=True
     )
 
-    assert result.chunks[0].text == " ".join(chunk.text for chunk in chunks)
+    assert result.segments[0].text == " ".join(segment.text for segment in segments)
     assert len(requests) == 1 + ATTEMPTS
 
 
@@ -430,9 +434,37 @@ def test_a_batch_that_keeps_replying_empty_fails_the_whole_run(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     requests = fake_openai(monkeypatch, lambda _lines: "\n")
-    chunks = [TranscriptChunk(index, index + 1, f"S{index}.") for index in range(2)]
-    document = TranscriptDocument(METADATA, "es", "subtitles", chunks)
+    segments = [TranscriptSegment(index, index + 1, f"S{index}.") for index in range(2)]
+    document = TranscriptDocument(METADATA, "es", "subtitles", segments)
 
     with pytest.raises(RewriteError, match=r"lines 1-2 of 2.*no translation"):
         translate(document, "en")
     assert len(requests) == ATTEMPTS
+
+
+def test_a_failed_request_raises_a_runtime_error_naming_the_host(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    def answer(lines: list[str]) -> str:
+        if lines == ["Intro", "Main"]:
+            raise openai.APIConnectionError(
+                request=httpx2.Request("POST", CONFIG.base_url)
+            )
+        return prefixed(lines)
+
+    fake_openai(monkeypatch, answer)
+    metadata = VideoMetadata(
+        video_id=METADATA.video_id,
+        url=METADATA.url,
+        chapters=[VideoChapter("Intro", 0, 10), VideoChapter("Main", 10, None)],
+    )
+    segments = [
+        TranscriptSegment(0, 5, "Hello there."),
+        TranscriptSegment(12, 15, "Now."),
+    ]
+    document = TranscriptDocument(metadata, "en", "subtitles", segments)
+
+    with pytest.raises(RuntimeError, match=r"gateway\.example chat request failed"):
+        rewrite_transcript(document, CONFIG, language="ja", refine=False, article=True)

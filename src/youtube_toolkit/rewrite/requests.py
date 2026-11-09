@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Callable
 import re
 
 from ..execution import collect_concurrently
+from ..names import repeated_names
 from ..prompts import HEADER
 from ..schemas import TranscriptDocument
-from ..transcript import NAME
 
 # On Vercel AI Gateway the slowest request sets a round's pace, so more requests in flight shorten long videos without slowing short ones.
 MAX_WORKERS = 64
@@ -26,12 +25,8 @@ class RewriteError(RuntimeError):
 
 
 def request_header(document: TranscriptDocument) -> str:
-    """Title, description, and the names said more than once, most frequent first, which every request opens with.
-
-    The names are a heuristic, not a vetted list: NAME judges only a word's shape and the count only drops one-off words, so mishearings the captions repeat, such as GBD6 for GPT-6, stay in.
-    """
-    counts = Counter(NAME.findall(" ".join(chunk.text for chunk in document.chunks)))
-    names = [name for name, count in counts.most_common(MAX_NAMES) if count > 1]
+    """Title, description, and the names said more than once, most frequent first, which every request opens with."""
+    names = repeated_names(document.text)[:MAX_NAMES]
     metadata = document.metadata
     return HEADER.format(
         title=metadata.title or "",

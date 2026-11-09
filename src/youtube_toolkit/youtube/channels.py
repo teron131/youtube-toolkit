@@ -32,14 +32,13 @@ class ChannelVideosClient(Protocol):
 def fetch_channel_videos(
     channel_ref: ChannelRef,
     *,
-    options: ChannelOptions | None = None,
+    options: ChannelOptions,
     client: ChannelVideosClient | None = None,
 ) -> dict[str, Any]:
     """A day window keeps only videos uploaded inside it, each given its upload date, and leaves out videos whose metadata cannot be fetched.
 
     Flat listings omit upload dates, so a day window costs one metadata request per video, made newest first in concurrent batches until a batch reaches an older video or dates none.
     """
-    options = options or ChannelOptions()
     client = client or YtDlpClient()
     validate_channel_options(options)
     channel_url = normalize_channel_url(channel_ref)

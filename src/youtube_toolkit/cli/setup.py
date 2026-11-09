@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import getpass
 import sys
-from urllib.parse import urlparse
 import warnings
 
 from .. import config
@@ -14,7 +13,7 @@ from ..config import (
     DEFAULT_DECISION_MODEL,
     DEFAULT_EMBEDDING_BASE_URL,
     DEFAULT_EMBEDDING_CONCURRENCY,
-    DEFAULT_EMBEDDING_DIMENSIONALITY,
+    DEFAULT_EMBEDDING_DIMENSIONS,
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_LLM_BASE_URL,
     DEFAULT_LLM_MODEL,
@@ -55,6 +54,8 @@ def run_setup(args: argparse.Namespace) -> dict[str, object]:
         raise ValueError(
             "Hidden key entry is unavailable; no settings were saved"
         ) from error
+    except ValueError as error:
+        raise ValueError(f"{error}; no settings were saved") from error
     path = config.save_config(settings)
     overridden = config.environment_overrides(settings)
     if overridden:
@@ -73,22 +74,16 @@ def _setup_embeddings(settings: dict[str, str]) -> None:
     _prompt(settings, "EMBEDDING_API_KEY", secret=True)
     _prompt(settings, "EMBEDDING_BASE_URL", DEFAULT_EMBEDDING_BASE_URL)
     _prompt(settings, "EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
-    _prompt(settings, "EMBEDDING_DIMENSIONS", str(DEFAULT_EMBEDDING_DIMENSIONALITY))
+    _prompt(settings, "EMBEDDING_DIMENSIONS", str(DEFAULT_EMBEDDING_DIMENSIONS))
     _prompt(settings, "EMBEDDING_CONCURRENCY", str(DEFAULT_EMBEDDING_CONCURRENCY))
     _prompt(settings, "EMBEDDING_LOCAL_MODEL", DEFAULT_LOCAL_EMBEDDING_MODEL)
-    base_url = settings.get("EMBEDDING_BASE_URL", DEFAULT_EMBEDDING_BASE_URL)
-    if urlparse(base_url).scheme not in {"http", "https"}:
-        raise ValueError(
-            "EMBEDDING_BASE_URL must use http or https; no settings were saved"
-        )
+    config.check_http_url(
+        "EMBEDDING_BASE_URL",
+        settings.get("EMBEDDING_BASE_URL", DEFAULT_EMBEDDING_BASE_URL),
+    )
     for name in ("EMBEDDING_DIMENSIONS", "EMBEDDING_CONCURRENCY"):
-        value = settings.get(name)
-        if value is not None and (
-            not value.isascii() or not value.isdecimal() or int(value) <= 0
-        ):
-            raise ValueError(
-                f"{name} must be a positive integer; no settings were saved"
-            )
+        if (value := settings.get(name)) is not None:
+            config.parse_positive_int(name, value)
 
 
 def _setup_decisions(settings: dict[str, str]) -> None:
@@ -99,11 +94,10 @@ def _setup_decisions(settings: dict[str, str]) -> None:
     _prompt(settings, "DECISION_API_KEY", secret=True)
     _prompt(settings, "DECISION_BASE_URL", DEFAULT_DECISION_BASE_URL)
     _prompt(settings, "DECISION_MODEL", DEFAULT_DECISION_MODEL)
-    base_url = settings.get("DECISION_BASE_URL", DEFAULT_DECISION_BASE_URL)
-    if urlparse(base_url).scheme not in {"http", "https"}:
-        raise ValueError(
-            "DECISION_BASE_URL must use http or https; no settings were saved"
-        )
+    config.check_http_url(
+        "DECISION_BASE_URL",
+        settings.get("DECISION_BASE_URL", DEFAULT_DECISION_BASE_URL),
+    )
 
 
 def _setup_stt(settings: dict[str, str]) -> None:
@@ -114,9 +108,7 @@ def _setup_stt(settings: dict[str, str]) -> None:
     _prompt(settings, "STT_PROVIDER", DEFAULT_STT_PROVIDER)
     name = settings.get("STT_PROVIDER", DEFAULT_STT_PROVIDER)
     if name not in PROVIDERS:
-        raise ValueError(
-            f"STT_PROVIDER must be one of {', '.join(PROVIDERS)}; no settings were saved"
-        )
+        raise ValueError(f"STT_PROVIDER must be one of {', '.join(PROVIDERS)}")
     _prompt(settings, PROVIDERS[name].api_key_env, secret=True)
     _prompt(settings, "STT_LOCAL_MODEL", DEFAULT_LOCAL_STT_MODEL)
 
@@ -129,9 +121,9 @@ def _setup_llm(settings: dict[str, str]) -> None:
     _prompt(settings, "LLM_API_KEY", secret=True)
     _prompt(settings, "LLM_BASE_URL", DEFAULT_LLM_BASE_URL)
     _prompt(settings, "LLM_MODEL", DEFAULT_LLM_MODEL)
-    base_url = settings.get("LLM_BASE_URL", DEFAULT_LLM_BASE_URL)
-    if urlparse(base_url).scheme not in {"http", "https"}:
-        raise ValueError("LLM_BASE_URL must use http or https; no settings were saved")
+    config.check_http_url(
+        "LLM_BASE_URL", settings.get("LLM_BASE_URL", DEFAULT_LLM_BASE_URL)
+    )
 
 
 def _prompt(

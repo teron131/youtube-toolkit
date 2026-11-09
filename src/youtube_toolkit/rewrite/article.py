@@ -14,7 +14,7 @@ from ..prompts import (
     TRANSLATE_TITLES,
     TURNING_POINTS,
 )
-from ..schemas import TranscriptChunk, TranscriptDocument, VideoChapter
+from ..schemas import TranscriptDocument, TranscriptSegment, VideoChapter
 from .requests import (
     ATTEMPTS,
     RewriteError,
@@ -42,8 +42,8 @@ MAX_ARTICLE_RATIO = 1.3
 
 def rewrite_article(
     llm: ChatModel, header: str, document: TranscriptDocument, language: str | None
-) -> TranscriptChunk:
-    sentences = split_sentences(document.chunks)
+) -> TranscriptSegment:
+    sentences = split_sentences(document.segments)
     texts = [sentence.text for sentence in sentences]
     chapters = _chapter_starts(
         sentences, document.metadata.chapters if document.timed else []
@@ -59,13 +59,13 @@ def rewrite_article(
         if title := titles.get(start):
             blocks.append(f"## {title}")
         blocks.append(paragraph)
-    return TranscriptChunk(
+    return TranscriptSegment(
         sentences[0].start_seconds, sentences[-1].end_seconds, "\n\n".join(blocks)
     )
 
 
 def _chapter_starts(
-    sentences: list[TranscriptChunk], chapters: list[VideoChapter]
+    sentences: list[TranscriptSegment], chapters: list[VideoChapter]
 ) -> dict[int, str | None]:
     """The first sentence of each chapter's run, by the chapter the sentence starts in, with that chapter's title; sentences before the first chapter start an untitled run."""
     ordered = sorted(chapters, key=lambda chapter: chapter.start_seconds)

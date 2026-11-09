@@ -7,7 +7,7 @@ from difflib import SequenceMatcher
 
 from ..llm import ChatModel
 from ..prompts import CORRECT_LINES, TRANSLATE_LINES
-from ..schemas import TranscriptChunk
+from ..schemas import TranscriptSegment
 from .requests import (
     ATTEMPTS,
     RewriteError,
@@ -26,12 +26,12 @@ MIN_LINE_SIMILARITY = 0.5
 
 
 def rewrite_lines(
-    llm: ChatModel, header: str, lines: list[TranscriptChunk], language: str | None
-) -> list[TranscriptChunk]:
+    llm: ChatModel, header: str, lines: list[TranscriptSegment], language: str | None
+) -> list[TranscriptSegment]:
     texts = [line.text for line in lines]
     system = TRANSLATE_LINES.format(language=language) if language else CORRECT_LINES
 
-    def rewrite(start: int, end: int) -> list[TranscriptChunk]:
+    def rewrite(start: int, end: int) -> list[TranscriptSegment]:
         user = request(
             header, texts, (start, end), texts[start:end], context=CONTEXT_LINES
         )
@@ -51,12 +51,12 @@ def rewrite_lines(
         unit="lines",
         total=len(texts),
     )
-    return [chunk for batch in batches for chunk in batch]
+    return [segment for batch in batches for segment in batch]
 
 
 def _aligned(
-    lines: list[TranscriptChunk], texts: dict[int, str], *, translated: bool
-) -> list[TranscriptChunk]:
+    lines: list[TranscriptSegment], texts: dict[int, str], *, translated: bool
+) -> list[TranscriptSegment]:
     """Each line takes the reply under its ID; a missing ID means the model merged that line into a neighbour, so the entry before it, or after it for a batch's first line, spans both.
 
     A cleaned-up copy keeps the original wherever a reply is too unlike its line to be a correction of it, such as a neighbour's text moved onto it, and keeps a missing line apart when the neighbour's reply reads as that neighbour alone, which means the line was dropped rather than merged.
@@ -74,27 +74,27 @@ def _aligned(
             pending = pending or number
     if not groups:
         return lines
-    chunks: list[TranscriptChunk] = []
+    segments: list[TranscriptSegment] = []
     for first, last, owner in groups:
         span = lines[first - 1 : last]
         text = texts[owner]
-        merged = TranscriptChunk(span[0].start_seconds, span[-1].end_seconds, text)
+        merged = TranscriptSegment(span[0].start_seconds, span[-1].end_seconds, text)
         if translated:
-            chunks.append(merged)
+            segments.append(merged)
             continue
         own = _similarity(lines[owner - 1].text, text)
         if len(span) > 1 and _similarity(
             " ".join(line.text for line in span), text
         ) >= max(own, MIN_LINE_SIMILARITY):
-            chunks.append(merged)
+            segments.append(merged)
             continue
-        chunks.extend(
+        segments.extend(
             replace(line, text=text)
             if number == owner and own >= MIN_LINE_SIMILARITY
             else line
             for number, line in enumerate(span, first)
         )
-    return chunks
+    return segments
 
 
 def _similarity(source: str, rewritten: str) -> float:

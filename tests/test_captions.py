@@ -10,32 +10,32 @@ import pytest
 from youtube_toolkit.artifacts import write_artifact
 from youtube_toolkit.schemas import (
     SpeechTranscription,
-    TranscriptChunk,
     TranscriptDocument,
+    TranscriptSegment,
     VideoMetadata,
 )
 from youtube_toolkit.transcript import (
     SUBTITLE_LANGUAGES,
     fetch_transcript,
 )
-from youtube_toolkit.youtube.caption import (
+from youtube_toolkit.youtube.captions import (
     CaptionTranscriptUnavailable,
     fetch_caption_payload,
-    remove_sponsorblock_chunks,
+    remove_sponsorblock_segments,
     select_caption_track,
 )
 
 
-def test_remove_sponsorblock_chunks_drops_overlapping_chunks() -> None:
-    chunks = [
-        TranscriptChunk(start_seconds=0, end_seconds=5, text="main"),
-        TranscriptChunk(start_seconds=5, end_seconds=10, text="sponsor"),
-        TranscriptChunk(start_seconds=10, end_seconds=15, text="more"),
+def test_remove_sponsorblock_segments_drops_overlapping_segments() -> None:
+    segments = [
+        TranscriptSegment(start_seconds=0, end_seconds=5, text="main"),
+        TranscriptSegment(start_seconds=5, end_seconds=10, text="sponsor"),
+        TranscriptSegment(start_seconds=10, end_seconds=15, text="more"),
     ]
 
-    assert remove_sponsorblock_chunks(chunks, [(5, 10)]) == [
-        TranscriptChunk(start_seconds=0, end_seconds=5, text="main"),
-        TranscriptChunk(start_seconds=10, end_seconds=15, text="more"),
+    assert remove_sponsorblock_segments(segments, [(5, 10)]) == [
+        TranscriptSegment(start_seconds=0, end_seconds=5, text="main"),
+        TranscriptSegment(start_seconds=10, end_seconds=15, text="more"),
     ]
 
 
@@ -85,18 +85,18 @@ def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
     assert document.source == "speech-to-text"
     assert document.language == "zh"
     assert document.text == "數據庫"
-    assert document.chunks == [TranscriptChunk(0, 0, "數據庫")]
+    assert document.segments == [TranscriptSegment(0, 0, "數據庫")]
     assert not audio_path.exists()
 
 
-def test_timed_speech_to_text_segments_become_transcript_chunks(
+def test_timed_speech_to_text_segments_become_document_segments(
     monkeypatch, tmp_path
 ) -> None:
     audio_path = tmp_path / "JpSHyEIZ_bo.m4a"
     audio_path.write_bytes(b"audio")
     segments = [
-        TranscriptChunk(0.2, 1.0, "Hello world."),
-        TranscriptChunk(2.5, 3.2, "Next line"),
+        TranscriptSegment(0.2, 1.0, "Hello world."),
+        TranscriptSegment(2.5, 3.2, "Next line"),
     ]
 
     class FakeClient:
@@ -118,7 +118,7 @@ def test_timed_speech_to_text_segments_become_transcript_chunks(
     document = fetch_transcript("JpSHyEIZ_bo", client=FakeClient())
 
     assert document.source == "speech-to-text"
-    assert document.chunks == segments
+    assert document.segments == segments
     assert document.text == "Hello world. Next line"
 
 
@@ -142,7 +142,7 @@ def test_fetch_transcript_fetches_and_archives_captions(monkeypatch, tmp_path) -
             pytest.fail("caption retrieval should not download STT audio")
 
     monkeypatch.setattr(
-        "youtube_toolkit.youtube.caption.fetch_caption_payload",
+        "youtube_toolkit.youtube.captions.fetch_caption_payload",
         lambda _url: {
             "events": [
                 {
@@ -185,7 +185,7 @@ def test_chinese_caption_text_is_converted_to_taiwan_traditional(
             pytest.fail("caption retrieval should not download STT audio")
 
     monkeypatch.setattr(
-        "youtube_toolkit.youtube.caption.fetch_caption_payload",
+        "youtube_toolkit.youtube.captions.fetch_caption_payload",
         lambda _url: {
             "events": [
                 {
@@ -261,7 +261,7 @@ def test_fetch_caption_payload_retries_transient_network_failures(monkeypatch) -
         return FakeResponse()
 
     monkeypatch.setattr(
-        "youtube_toolkit.youtube.caption.urllib.request.urlopen", fake_urlopen
+        "youtube_toolkit.youtube.captions.urllib.request.urlopen", fake_urlopen
     )
     monkeypatch.setattr("youtube_toolkit.execution.time.sleep", delays.append)
 
@@ -495,8 +495,8 @@ def test_transcript_archives_preserve_timing_and_retrieval_policy(
         ),
         language="en",
         source="subtitles",
-        chunks=[
-            TranscriptChunk(start_seconds=1.5, end_seconds=4.0, text="An example.")
+        segments=[
+            TranscriptSegment(start_seconds=1.5, end_seconds=4.0, text="An example.")
         ],
     )
 
@@ -554,7 +554,7 @@ def test_caption_only_policy_never_uses_stt(
             VideoMetadata(video_id=video_id, url="https://youtu.be/" + video_id),
             "speech-to-text",
             "speech-to-text",
-            [TranscriptChunk(0, 0, "Untimed speech")],
+            [TranscriptSegment(0, 0, "Untimed speech")],
         )
         write_artifact(
             "transcripts",

@@ -52,7 +52,7 @@ def test_embedding_client_uses_config_and_one_sdk_client(monkeypatch) -> None:
         model="text-embedding-test",
         api_key="embedding-key",
         base_url="https://embedding.example/v1/",
-        output_dimensionality=512,
+        dimensions=512,
     )
     monkeypatch.setattr("youtube_toolkit.embeddings.openai.OpenAI", create_client)
 

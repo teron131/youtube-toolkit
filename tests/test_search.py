@@ -13,7 +13,7 @@ from youtube_toolkit.config import (
     EmbeddingConfig,
 )
 from youtube_toolkit.embeddings.openai import EmbeddingClient
-from youtube_toolkit.schemas import TranscriptChunk, TranscriptDocument, VideoMetadata
+from youtube_toolkit.schemas import TranscriptDocument, TranscriptSegment, VideoMetadata
 from youtube_toolkit.search.candidates import VideoResult
 import youtube_toolkit.search.discovery as search_discovery
 from youtube_toolkit.search.request import (
@@ -66,8 +66,8 @@ def search_transcript_side_effects(monkeypatch) -> dict[str, Any]:
             ),
             language="en",
             source="automatic_captions",
-            chunks=[
-                TranscriptChunk(
+            segments=[
+                TranscriptSegment(
                     start_seconds=0,
                     end_seconds=1,
                     text=f"Transcript for {video_id}",
@@ -1217,7 +1217,9 @@ def test_semantic_video_results_include_partial_transcript_warnings(
             ),
             language="en",
             source="automatic_captions",
-            chunks=[TranscriptChunk(start_seconds=0, end_seconds=1, text="GPU capex")],
+            segments=[
+                TranscriptSegment(start_seconds=0, end_seconds=1, text="GPU capex")
+            ],
         )
 
     def fake_fetch_transcript(
@@ -1282,8 +1284,8 @@ def test_semantic_search_defaults_to_chunk_results(
             ),
             language="en",
             source="automatic_captions",
-            chunks=[
-                TranscriptChunk(
+            segments=[
+                TranscriptSegment(
                     start_seconds=0,
                     end_seconds=1,
                     text="The GPU capex cycle is accelerating.",
@@ -1371,7 +1373,7 @@ def test_live_semantic_search_fetches_transcripts_concurrently(
             ),
             language="en",
             source="automatic_captions",
-            chunks=[TranscriptChunk(start_seconds=0, end_seconds=1, text=video_id)],
+            segments=[TranscriptSegment(start_seconds=0, end_seconds=1, text=video_id)],
         )
 
     monkeypatch.setattr(

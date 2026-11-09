@@ -16,11 +16,11 @@ from ..embeddings import local_embedding_downloaded, local_embedding_installed
 from ..stt import (
     cloud_provider,
     cloud_stt_configured,
-    local_model_downloaded,
+    local_stt_downloaded,
     local_stt_installed,
 )
 
-VISION_MODULES = ("numpy", "PIL", "cv2", "yake")
+VISION_MODULES = ("numpy", "PIL", "cv2", "typesafe_sdk", "yake")
 
 
 def run_doctor(args: argparse.Namespace) -> str:
@@ -52,7 +52,7 @@ def embedding_health() -> str:
             return f"Local {model} downloads on first use"
         return f"Configured (local {model})"
     try:
-        embedding = config.embedding_config_from_env()
+        embedding = config.embedding_config()
     except ValueError as error:
         return str(error)
     return f"Configured ({embedding.model})"
@@ -64,7 +64,7 @@ def vision_health() -> str:
         return "not installed"
     if decision := config.decision_config():
         return f"available; ranks with {decision.model} at {decision.host}"
-    if config.vision_embedding_key():
+    if config.embedding_key():
         return "available; ranks with Gemini embeddings"
     if local_embedding_installed():
         return f"available; ranks with local {config.local_embedding_model()}"
@@ -84,7 +84,7 @@ def stt_health() -> str:
     if not local_stt_installed():
         return f"Set {provider.api_key_env} with `youtube setup --stt`, or install youtube-toolkit[stt] and ffmpeg for local models"
     model = config.local_stt_model()
-    if not local_model_downloaded(model):
+    if not local_stt_downloaded(model):
         return f"Local {model} downloads on first use, or now with `youtube stt-setup`"
     return f"Configured (local {model}); `youtube stt-setup` checks that it runs"
 

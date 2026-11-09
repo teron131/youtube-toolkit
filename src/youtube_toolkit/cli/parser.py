@@ -72,7 +72,7 @@ def _add_video_command(subparsers: argparse._SubParsersAction) -> None:
         "--timestamps",
         action="store_true",
         default=None,
-        help="Timed transcript chunks instead of one text string",
+        help="Timed transcript segments instead of one text string",
     )
     transcript.add_argument(
         "--stt",

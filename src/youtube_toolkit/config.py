@@ -34,7 +34,7 @@ DEFAULT_EMBEDDING_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/o
 # Gemini's multimodal embedding model, which vision calls through Gemini's own API and the OpenAI-compatible embedding route uses by default.
 GEMINI_EMBEDDING_MODEL = "gemini-embedding-2"
 DEFAULT_EMBEDDING_MODEL = GEMINI_EMBEDDING_MODEL
-DEFAULT_EMBEDDING_DIMENSIONALITY = 768
+DEFAULT_EMBEDDING_DIMENSIONS = 768
 DEFAULT_EMBEDDING_CONCURRENCY = 16
 MAX_EMBEDDING_CONCURRENCY = 50
 # A Hugging Face model ID; EMBEDDING_LOCAL_MODEL can name any other model that loads in sentence-transformers, and vision also needs it to embed images.
@@ -76,12 +76,12 @@ LOCAL_EMBEDDING_CUTOFFS = EmbeddingCutoffs(
 
 @dataclass(frozen=True, slots=True)
 class EmbeddingConfig:
-    """Validated embedding endpoint configuration including the expected output dimensionality."""
+    """Validated embedding endpoint configuration including the expected output dimensions."""
 
     model: str
     api_key: str
     base_url: str
-    output_dimensionality: int = DEFAULT_EMBEDDING_DIMENSIONALITY
+    dimensions: int = DEFAULT_EMBEDDING_DIMENSIONS
 
     def __post_init__(self) -> None:
         """Normalize endpoint fields once so request code can treat config as validated."""
@@ -92,16 +92,15 @@ class EmbeddingConfig:
             raise ValueError("model must not be empty")
         if not api_key:
             raise ValueError("api_key must not be empty")
-        if urlparse(base_url).scheme not in {"http", "https"}:
-            raise ValueError("base_url must use http or https")
-        if self.output_dimensionality <= 0:
-            raise ValueError("output_dimensionality must be greater than 0")
+        check_http_url("base_url", base_url)
+        if self.dimensions <= 0:
+            raise ValueError("embedding dimensions must be greater than 0")
         object.__setattr__(self, "model", model)
         object.__setattr__(self, "api_key", api_key)
         object.__setattr__(self, "base_url", base_url)
 
 
-def embedding_config_from_env() -> EmbeddingConfig:
+def embedding_config() -> EmbeddingConfig:
     """Resolve EMBEDDING_* settings from environment overrides and saved app configuration, requiring only the API key."""
     api_key = config_value("EMBEDDING_API_KEY")
     if api_key is None:
@@ -110,8 +109,8 @@ def embedding_config_from_env() -> EmbeddingConfig:
         model=config_value("EMBEDDING_MODEL") or DEFAULT_EMBEDDING_MODEL,
         api_key=api_key,
         base_url=config_value("EMBEDDING_BASE_URL") or DEFAULT_EMBEDDING_BASE_URL,
-        output_dimensionality=config_int_value(
-            "EMBEDDING_DIMENSIONS", DEFAULT_EMBEDDING_DIMENSIONALITY
+        dimensions=config_int_value(
+            "EMBEDDING_DIMENSIONS", DEFAULT_EMBEDDING_DIMENSIONS
         ),
     )
 
@@ -131,8 +130,7 @@ class DecisionConfig:
     model: str
 
     def __post_init__(self) -> None:
-        if urlparse(self.base_url).scheme not in {"http", "https"}:
-            raise ValueError("DECISION_BASE_URL must use http or https")
+        check_http_url("DECISION_BASE_URL", self.base_url)
 
     @property
     def host(self) -> str:
@@ -158,8 +156,7 @@ class LLMConfig:
     model: str
 
     def __post_init__(self) -> None:
-        if urlparse(self.base_url).scheme not in {"http", "https"}:
-            raise ValueError("LLM_BASE_URL must use http or https")
+        check_http_url("LLM_BASE_URL", self.base_url)
 
     @property
     def host(self) -> str:
@@ -183,11 +180,8 @@ def stt_provider_name() -> str:
     return config_value("STT_PROVIDER") or DEFAULT_STT_PROVIDER
 
 
-def vision_embedding_key() -> str | None:
-    """Reuse the generic embedding key only when its model and endpoint identify Google Gemini."""
-    key = config_value("GEMINI_API_KEY")
-    if key:
-        return key
+def embedding_key() -> str | None:
+    """None unless EMBEDDING_* name Gemini Embedding 2 on Google's API, the only embedding API here that takes images."""
     model = config_value("EMBEDDING_MODEL") or DEFAULT_EMBEDDING_MODEL
     base_url = config_value("EMBEDDING_BASE_URL") or DEFAULT_EMBEDDING_BASE_URL
     if (
@@ -253,12 +247,19 @@ def config_int_value(
     name: str,
     default: int,
 ) -> int:
-    """Read a positive integer embedding setting with the provided default."""
     value = config_value(name)
-    if value is None:
-        return default
-    if not value.isdigit():
-        raise ValueError(f"Model config value must be a positive integer: {name}")
+    return default if value is None else parse_positive_int(name, value)
+
+
+def check_http_url(name: str, url: str) -> None:
+    if urlparse(url).scheme not in {"http", "https"}:
+        raise ValueError(f"{name} must use http or https")
+
+
+def parse_positive_int(name: str, value: str) -> int:
+    """Only ASCII digits count, since int() also accepts signs, spaces, and digits from other scripts."""
+    if not (value.isascii() and value.isdecimal()) or int(value) <= 0:
+        raise ValueError(f"{name} must be a positive integer")
     return int(value)
 
 

@@ -15,8 +15,8 @@ import urllib.request
 from ..execution import retry_transient
 from ..identity import ALLOWED_CAPTION_HOST_SUFFIXES, validate_url
 from ..schemas import (
-    TranscriptChunk,
     TranscriptDocument,
+    TranscriptSegment,
     TranscriptSource,
     VideoMetadata,
 )
@@ -43,12 +43,12 @@ def fetch_caption_transcript(
         metadata_payload, languages
     )
     caption_payload = fetch_caption_payload(caption_url)
-    chunks = extract_timed_chunks(caption_payload)
-    chunks = remove_sponsorblock_chunks(
-        chunks,
+    segments = extract_timed_segments(caption_payload)
+    segments = remove_sponsorblock_segments(
+        segments,
         extract_sponsorblock_intervals(metadata_payload),
     )
-    if not chunks:
+    if not segments:
         raise CaptionTranscriptUnavailable(
             f"Caption track resolved from {caption_source}:{language}, but no transcript text was found"
         )
@@ -57,7 +57,7 @@ def fetch_caption_transcript(
         metadata=metadata,
         language=language,
         source=caption_source,
-        chunks=chunks,
+        segments=segments,
     )
 
 
@@ -129,32 +129,30 @@ def fetch_caption_payload(url: str) -> dict:
         raise RuntimeError(detail) from error
 
 
-def extract_timed_chunks(caption_payload: dict) -> list[TranscriptChunk]:
-    last_chunk = ""
-    chunks: list[TranscriptChunk] = []
+def extract_timed_segments(caption_payload: dict) -> list[TranscriptSegment]:
+    last_text = ""
+    segments: list[TranscriptSegment] = []
     for event in caption_payload.get("events", []):
-        segments = event.get("segs") or []
-        if not segments:
+        segs = event.get("segs") or []
+        if not segs:
             continue
-        text = normalize_caption_chunk(
-            "".join(segment.get("utf8", "") for segment in segments)
-        )
-        if not text or text == last_chunk:
+        text = normalize_caption_segment("".join(seg.get("utf8", "") for seg in segs))
+        if not text or text == last_text:
             continue
         start_seconds = float(event.get("tStartMs", 0)) / 1000
         duration_seconds = float(event.get("dDurationMs") or 0) / 1000
-        chunks.append(
-            TranscriptChunk(
+        segments.append(
+            TranscriptSegment(
                 start_seconds=start_seconds,
                 end_seconds=start_seconds + duration_seconds,
                 text=text,
             )
         )
-        last_chunk = text
-    return chunks
+        last_text = text
+    return segments
 
 
-def normalize_caption_chunk(raw_text: str) -> str:
+def normalize_caption_segment(raw_text: str) -> str:
     text = html.unescape(raw_text.replace("\n", " "))
     return " ".join(text.split())
 
@@ -172,26 +170,26 @@ def extract_sponsorblock_intervals(metadata: dict) -> list[tuple[float, float]]:
     return intervals
 
 
-def remove_sponsorblock_chunks(
-    chunks: list[TranscriptChunk],
+def remove_sponsorblock_segments(
+    segments: list[TranscriptSegment],
     intervals: list[tuple[float, float]],
-) -> list[TranscriptChunk]:
+) -> list[TranscriptSegment]:
     if not intervals:
-        return chunks
+        return segments
 
-    filtered: list[TranscriptChunk] = []
-    for chunk in chunks:
+    filtered: list[TranscriptSegment] = []
+    for segment in segments:
         effective_end = (
-            chunk.end_seconds
-            if chunk.end_seconds > chunk.start_seconds
-            else chunk.start_seconds + 0.001
+            segment.end_seconds
+            if segment.end_seconds > segment.start_seconds
+            else segment.start_seconds + 0.001
         )
         overlaps_skip = any(
-            chunk.start_seconds < interval_end and effective_end > interval_start
+            segment.start_seconds < interval_end and effective_end > interval_start
             for interval_start, interval_end in intervals
         )
         if not overlaps_skip:
-            filtered.append(chunk)
+            filtered.append(segment)
     return filtered
 
 

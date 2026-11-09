@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections import deque
+from collections.abc import Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 import math
 from pathlib import Path
@@ -21,7 +24,9 @@ THUMBNAIL_WIDTH = 160
 THUMBNAIL_HEIGHT = 90
 DETECTOR_WIDTH = 320
 DETECTOR_HEIGHT = 180
-DECODE_CHUNK_SECONDS = 60
+DECODE_WINDOW_SECONDS = 60
+# FFmpeg decodes keyframes alone on one core whatever its thread count, so windows decode side by side; on a 10-minute 720p video 4 at a time took 1.1 s against 3.3 s one by one, and at most this many windows are held in memory.
+DECODE_WORKERS = 4
 DUPLICATE_LOOKBACK_SECONDS = 10
 # Stricter than REPEAT_SIMILARITY because a candidate dropped here reaches neither selection; both selections drop the remaining duplicates later.
 CANDIDATE_DUPLICATE_SIMILARITY = 0.98
@@ -81,10 +86,7 @@ def collect_candidates(
     directory.mkdir(parents=True, exist_ok=True)
     candidates: list[tuple[StoredFrame, np.ndarray]] = []
     recent: list[tuple[float, _PixelStats]] = []
-    for start in range(0, math.ceil(duration), DECODE_CHUNK_SECONDS):
-        times, images = decode_keyframes(
-            video_path, start, min(duration, start + DECODE_CHUNK_SECONDS), ffmpeg_path
-        )
+    for times, images in _keyframe_windows(video_path, ffmpeg_path, duration):
         previous = None
         for index, timestamp in enumerate(times):
             gray = _gray(images[index])
@@ -198,6 +200,23 @@ def select_ranked_frames(
         if len(selected) == max_frames:
             break
     return selected
+
+
+def _keyframe_windows(
+    video_path: Path, ffmpeg_path: str, duration: float
+) -> Iterator[tuple[list[float], np.ndarray]]:
+    """Each DECODE_WINDOW_SECONDS window's keyframes, in time order."""
+    with ThreadPoolExecutor(DECODE_WORKERS) as executor:
+        pending: deque[Future[tuple[list[float], np.ndarray]]] = deque()
+        for start in range(0, math.ceil(duration), DECODE_WINDOW_SECONDS):
+            stop = min(duration, start + DECODE_WINDOW_SECONDS)
+            pending.append(
+                executor.submit(decode_keyframes, video_path, start, stop, ffmpeg_path)
+            )
+            if len(pending) == DECODE_WORKERS:
+                yield pending.popleft().result()
+        while pending:
+            yield pending.popleft().result()
 
 
 def _gray(image: np.ndarray) -> np.ndarray:
