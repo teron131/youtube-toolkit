@@ -1,4 +1,4 @@
-"""Video and transcript-chunk search across YouTube or named channels: native mode ranks metadata, and semantic mode embeds fresh caption transcripts within the call."""
+"""Video search across YouTube or named channels, ranked by metadata or semantically by caption transcripts."""
 
 from .candidates import ChunkResult, VideoResult
 from .request import ChannelTarget, SearchRequest

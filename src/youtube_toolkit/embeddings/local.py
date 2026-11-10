@@ -1,8 +1,7 @@
-"""Local embeddings through sentence-transformers for the Hugging Face model ID in EMBEDDING_LOCAL_MODEL, used by semantic search and vision when no embedding API key is set.
+"""Local sentence-transformers embeddings for semantic search and vision when no embedding API key is set.
 
-sentence-transformers reads each model's own pooling, normalization, and query or document prompts, so any model ID it loads plugs in; vision also needs one that embeds images.
+Any model sentence-transformers loads works, and vision needs one that also embeds images.
 Models load with trust_remote_code because multimodal embedding models ship their own code, which then runs on this machine.
-Each client loads the model once on the best available device, downloading it the first time it is needed.
 The heavy libraries are imported inside the functions that need them, so commands that never embed locally do not pay for loading them.
 """
 
@@ -35,10 +34,7 @@ def local_embedding_downloaded(model: str) -> bool:
 
 
 class LocalTextEmbeddingClient:
-    """Stands in for the OpenAI-compatible client in semantic search, which embeds a single text only for a query and lists only for titles and transcript chunks.
-
-    A single text is therefore embedded as a query and a list as documents, the two sides retrieval models are trained on.
-    """
+    """Stands in for the OpenAI-compatible client in semantic search, embedding a single text as a query and a list as documents."""
 
     def __init__(self) -> None:
         self.model = local_embedding_model()
@@ -115,7 +111,7 @@ def _load(model: str) -> Any:
     import torch
 
     device = torch_device()
-    # On an Apple GPU half precision ran about four times faster than full precision in under half the memory, and the similarity cutoffs were measured in bfloat16; CPUs need full precision.
+    # CPUs need full precision.
     dtype = torch.float32 if device == "cpu" else torch.bfloat16
     # Cast after loading: models with their own loading code, including the default, ignore a requested dtype.
     return SentenceTransformer(model, device=device, trust_remote_code=True).to(dtype)

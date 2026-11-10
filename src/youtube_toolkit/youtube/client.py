@@ -28,9 +28,9 @@ VISION_VIDEO_FORMAT_SELECTOR = "bestvideo[height<=720][ext=mp4]/bestvideo[height
 # A metadata, search, or listing request that takes over a minute is stuck.
 YTDLP_REQUEST_TIMEOUT_SECONDS = 60
 MAX_CONCURRENT_METADATA_FETCHES = 8
-# A download can simply be slow: YouTube was measured as low as 0.5 MB/s, and a two-hour 720p video is about 300 MB.
+# Sized for a two-hour 720p video at YouTube's slowest observed download rate.
 YTDLP_DOWNLOAD_TIMEOUT_SECONDS = 10 * 60
-# YouTube refuses requests in short bursts, so a refused process is retried three times, after 5, 10, and 15 seconds.
+# YouTube refuses requests in short bursts, so a refused process is retried after growing pauses.
 FORBIDDEN_RETRIES = 3
 FORBIDDEN_BACKOFF_SECONDS = 5.0
 # YouTube marks machine-translated caption tracks with a tlang query parameter.
@@ -235,7 +235,7 @@ def _request_json(command: list[str], *, error_message: str) -> dict[str, Any]:
 
 
 def _drop_translated_captions(metadata: dict[str, Any]) -> dict[str, Any]:
-    """YouTube offers each recognized track machine-translated into every supported language, which can make up over 90% of a metadata payload."""
+    """YouTube offers each recognized track machine-translated into every supported language, which can dominate a metadata payload."""
     captions = metadata.get("automatic_captions")
     if not isinstance(captions, dict):
         return metadata

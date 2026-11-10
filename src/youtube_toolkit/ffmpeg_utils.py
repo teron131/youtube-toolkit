@@ -17,7 +17,6 @@ if TYPE_CHECKING:
 # Decoding a two-hour video's keyframes or audio track takes well under a minute, so ten minutes means FFmpeg is stuck.
 FFMPEG_TIMEOUT_SECONDS = 10 * 60
 FFMPEG_THREADS = min(4, os.process_cpu_count() or 1)
-# Vision models still read on-screen numbers reliably at 960x540; in a transcription test, 640x360 frames lost about a third of them.
 FRAME_WIDTH = 960
 FRAME_HEIGHT = 540
 FRAME_FILTER = f"scale={FRAME_WIDTH}:{FRAME_HEIGHT}:force_original_aspect_ratio=decrease:flags=lanczos,pad={FRAME_WIDTH}:{FRAME_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black"
@@ -42,7 +41,8 @@ def decode_keyframes(
 ) -> tuple[list[float], np.ndarray]:
     """Decode only keyframes, which need no earlier frames, so cost follows how many there are rather than every frame in the window.
 
-    Timestamps are absolute seconds read from FFmpeg's showinfo log; a count that disagrees with the decoded frames raises ValueError.
+    Timestamps are absolute seconds read from FFmpeg's showinfo log.
+    A timestamp count that disagrees with the decoded frames raises ValueError.
     """
     completed = _run_video_ffmpeg(
         ffmpeg_path,

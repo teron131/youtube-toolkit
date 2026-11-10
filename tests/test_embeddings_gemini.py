@@ -1,4 +1,4 @@
-"""Native multimodal requests preserve alignment, reject partial vectors, and report only known token usage."""
+"""Gemini multimodal embedding requests and how their responses are read."""
 
 import base64
 from email.message import Message

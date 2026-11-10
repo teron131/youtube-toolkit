@@ -68,7 +68,7 @@ def is_exact_channel_ref(channel_ref: ChannelRef) -> bool:
 class SearchRequest:
     """Channels choose where candidates come from: none searches all of YouTube, any searches only those channels' uploads.
 
-    Queries are equals, and no query ranks above another: across YouTube each runs as its own search, and in native channel search a title needs to contain only one of them.
+    Queries are equals: across YouTube each runs as its own search, and in native channel search a title needs to contain only one of them.
     """
 
     queries: tuple[str, ...]

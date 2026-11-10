@@ -97,9 +97,9 @@ class TranscriptRewrite:
 
 @dataclass(frozen=True, slots=True)
 class TranscriptDocument:
-    """A speech-to-text document holds the route's timed segments, or one untimed segment at 0 seconds when the route reports no timing; its `language` is `speech-to-text` when no language was detected or reported.
+    """Without timing, a speech-to-text document holds one untimed segment at 0 seconds, and without a detected language its `language` is `speech-to-text`.
 
-    After a translation, `language` is the requested target language as the caller wrote it.
+    After a translation, `language` is the target language as the caller wrote it.
     """
 
     metadata: VideoMetadata

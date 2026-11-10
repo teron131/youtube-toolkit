@@ -1,4 +1,4 @@
-"""Search contracts exercise discovery, filtering, and ephemeral semantic ranking."""
+"""Search discovery, filtering, and semantic ranking."""
 
 from collections.abc import Callable
 from threading import Barrier
@@ -703,7 +703,7 @@ def test_channel_search_can_sort_by_popularity(monkeypatch) -> None:
 def test_channel_search_fetches_metadata_missing_from_flat_listings(
     monkeypatch,
 ) -> None:
-    """Flat channel listings lack views and dates, so known filters run first and survivors are hydrated."""
+    """Flat channel listings lack views and dates, so known filters run before survivors are hydrated."""
 
     def fake_fetch_channel_videos(channel_ref: str, *, options) -> dict:
         return {
@@ -757,7 +757,6 @@ def test_channel_search_fetches_metadata_missing_from_flat_listings(
 def test_channel_date_filter_stops_hydrating_after_listing_passes_cutoff(
     monkeypatch,
 ) -> None:
-    """Newest-first channel listings stop fetching metadata after the batch that reaches an older video."""
     video_ids = [f"video{index:06d}" for index in range(20)]
 
     def fake_fetch_channel_videos(channel_ref: str, *, options) -> dict:
@@ -1011,7 +1010,6 @@ def test_semantic_channel_search_prefilters_by_title_embeddings(
 def test_semantic_titles_share_embeddings_and_keep_per_video_warnings(
     monkeypatch,
 ) -> None:
-    """Text-keyed batch results still rank every matching video and identify every failed video."""
     entries = [
         {"id": "aaaaaaaaaaa", "title": "Unavailable title"},
         {"id": "bbbbbbbbbbb", "title": "Unavailable title"},
@@ -1464,8 +1462,6 @@ def test_search_query_is_optional_only_for_native_channel_search(monkeypatch) ->
 
 
 def test_native_channel_search_keeps_titles_matching_any_query(monkeypatch) -> None:
-    """Queries are equals, so a channel video passes when its title contains any of them."""
-
     def fake_fetch_channel_videos(channel_ref: str, *, options) -> dict:
         return {
             "entries": [
@@ -1506,8 +1502,6 @@ def test_native_channel_search_keeps_titles_matching_any_query(monkeypatch) -> N
 def test_semantic_search_scores_passages_by_their_closest_query(
     monkeypatch, queries
 ) -> None:
-    """A passage matching only a later query still ranks, because no query outranks another."""
-
     def fake_fetch_channel_videos(channel_ref: str, *, options) -> dict:
         return {"entries": [{"id": "aaaaaaaaaaa", "title": "Talk"}]}
 

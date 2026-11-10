@@ -1,4 +1,4 @@
-"""Embed JPEG images and text separately through Gemini, preserving input alignment and reported usage."""
+"""Gemini embeddings for vision's JPEG frames and transcript texts."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 DIMENSIONS = 768
 ENDPOINT = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_EMBEDDING_MODEL}:batchEmbedContents"
-# On 384 frames at 960x540, 64 per request x 4 concurrent uploaded about twice as fast as 32 x 2 with no retries; 100 per request (the API maximum) risks Gemini's inline request size limit with dense frames.
+# The API allows 100 per request, but dense frames can then exceed Gemini's inline request size limit.
 BATCH_SIZE = 64
 MAX_WORKERS = 4
 REQUEST_TIMEOUT_SECONDS = 90

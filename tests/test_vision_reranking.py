@@ -1,4 +1,4 @@
-"""Frame reranking matches only nearby speech, scores it against the whole transcript, fuses scales, and spaces and deduplicates selected frames."""
+"""Frame reranking against the transcript and frame selection."""
 
 import math
 

@@ -23,7 +23,7 @@ SOUND_ANNOTATION = re.compile(r"\[[^\]]*\]|[\u266a\u266b]|>>")
 CJK_RANGES = "\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af"
 # Each CJK character counts as a word, since those scripts put no spaces between words, and other words stop where CJK text begins.
 SPEECH_WORD = re.compile(rf"[{CJK_RANGES}]|[^\W_{CJK_RANGES}]+")
-# Narration runs 100-200 words a minute; under 10 is automatic captioning hearing words in music, such as "Heat. Heat." over a wordless film, not speech to rank against.
+# Narration runs 100-200 words a minute, so less than this is automatic captioning hearing words in music, not speech to rank against.
 MIN_SPEECH_WORDS_PER_MINUTE = 10
 
 
@@ -39,7 +39,7 @@ def prepare_targets(
     document: TranscriptDocument,
     excluded_intervals: Sequence[tuple[float, float]],
 ) -> list[TextTarget]:
-    """Retain whole caption text once per sentence/paragraph scale, with real timing clipped at video and section boundaries.
+    """Return keyword, sentence, then paragraph targets, each spanning whole caption segments clipped at video, chapter, and excluded-interval boundaries.
 
     Caption segments are indivisible, so an unusually long segment can exceed the nominal grouping duration.
     Excluded intervals are half-open and remove segments by their start time.

@@ -1,4 +1,7 @@
-"""Transcript retrieval policy: prefer captions, fall back to cloud and then local speech-to-text when allowed and set up, which listens for the names written in the title and description, convert Chinese text to Taiwan Traditional, and archive each fresh document."""
+"""Transcript retrieval policy: captions first, then speech-to-text when allowed and set up.
+
+Chinese text is converted to Taiwan Traditional, and each fresh document is archived.
+"""
 
 from __future__ import annotations
 
@@ -61,7 +64,7 @@ def fetch_transcript(
 ) -> TranscriptDocument:
     """With "fallback", speech-to-text runs only when captions are missing, and when it is not set up the caption failure stands without any audio download. "always" skips captions and fails when speech-to-text is not set up.
 
-    Supplied metadata must be a response the current operation fetched for this video; otherwise metadata is fetched fresh.
+    Supplied metadata must be a response the current operation fetched for this video, and one for another video raises ValueError.
     """
     video_id = require_video_id(video_ref)
     if metadata is not None and metadata.get("id") != video_id:

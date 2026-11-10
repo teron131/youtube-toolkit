@@ -1,4 +1,4 @@
-"""Own video preflight, the choice of ranking route (decision model, Gemini embeddings, local embeddings, or time slots), temporary media lifecycle, and the vision result."""
+"""Vision's entry point, which picks a ranking route for a video's keyframes and writes the chosen frames as collages."""
 
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ type _Pick = tuple[DecodedFrame, dict[str, Any] | None]
 
 @dataclass(frozen=True, slots=True)
 class _Embedding:
-    """An embedding route with the transcript targets already embedded, row for row; texts need no video, so a bad key, quota, or model fails before the download and decoding."""
+    """Texts are embedded before the video downloads, so a bad key, quota, or model fails before the slow work."""
 
     embedder: GeminiEmbeddingClient | LocalImageEmbeddingClient
     cutoffs: EmbeddingCutoffs
@@ -76,13 +76,14 @@ def sample_vision(
     metadata: dict[str, Any] | None = None,
     document: TranscriptDocument | None = None,
 ) -> dict[str, Any]:
-    """The first available route ranks the video's keyframes: the decision model with DECISION_API_KEY, which judges frames by their pictures and, when there is timed speech, by whether they show what is being said, then Gemini embeddings with a Gemini key or the local embedding model when its libraries are installed, both of which need timed speech; otherwise time slots spread a local selection across the same keyframes.
+    """Rank the video's keyframes by the first available route and write the picks as collages in a new directory in the working directory's archive.
 
+    Routes in order: the decision model with DECISION_API_KEY, Gemini embeddings with EMBEDDING_API_KEY, the local embedding model when installed, then time slots.
     local_only skips both APIs and speech-to-text, so the local model ranks against captions only.
-    The transcript is fetched only when a model will rank and no document is given, since time slots never read it; without captions it comes from configured speech-to-text, which ranks frames only when the route reports timing.
-    min_similarity applies to embedding routes, and None means the cutoff measured for the ranking model.
-    max_frames limits the output, never the candidate search; ranking errors propagate.
-    Collages go to a new directory in the working directory's archive.
+    The transcript is fetched only when a model will rank and no document is given.
+    Without captions it comes from speech-to-text, which ranks frames only when its route reports timing.
+    min_similarity applies to embedding routes, and None means the cutoff tuned for the ranking model.
+    max_frames limits the output, never the candidate search.
     """
     if not 1 <= max_frames <= MAX_VISION_FRAMES:
         raise ValueError(f"max_frames must be between 1 and {MAX_VISION_FRAMES}")

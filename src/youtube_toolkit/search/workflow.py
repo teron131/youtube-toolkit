@@ -1,7 +1,6 @@
-"""Search workflow: collect candidates from YouTube search or the named channels, hydrate and filter them, then rank natively or hand them to semantic search.
+"""Search workflow from candidate collection through filtering to native or semantic ranking.
 
-Native mode stays metadata-first: relevance keeps YouTube's order, while recency and popularity sort locally.
-Full transcript output remains an explicit transcript command rather than a search side effect.
+Native relevance keeps YouTube's order, while recency and popularity sort locally.
 """
 
 from __future__ import annotations
@@ -99,11 +98,11 @@ def hydrate_candidates(
     fields: frozenset[str],
     newest_first: bool = False,
 ) -> list[dict[str, Any]]:
-    """Flat listings can omit fields (channel listings omit upload dates), so unknown values pass a lenient prefilter, and only survivors missing a needed field are fetched.
+    """Flat listings can omit fields, so unknown values pass a lenient prefilter and only survivors missing a needed field are fetched.
 
-    A newest-first listing under an upload cutoff is fetched in batches that stop at the first video older than the cutoff, because every later video is older too.
+    A newest-first listing under an upload cutoff is fetched in batches that stop at the first video older than the cutoff.
     Failed fetches leave candidates unhydrated for the strict filter to judge.
-    Hydrated candidates keep the raw response under "metadata", so later stages of this search reuse it instead of requesting it again.
+    Hydrated candidates keep the raw response under "metadata" for later stages to reuse.
     """
     survivors = filter_candidates(candidates, resolved, allow_missing=True)
     stop_before = resolved.upload_cutoff if newest_first else None

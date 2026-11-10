@@ -1,4 +1,4 @@
-"""Keep each test off the user's configuration: saved settings live in the test's temporary directory, API keys and model settings from the environment are cleared, and the local embedding route stays off unless a test switches it on, whatever extras this environment has."""
+"""Keeps every test off the user's saved settings, environment keys, and installed local embedding models."""
 
 import os
 

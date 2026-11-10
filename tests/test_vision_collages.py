@@ -1,4 +1,4 @@
-"""Collages keep each frame intact above its timestamp and pack six 540p frames per progressive JPEG page."""
+"""Collage layout and encoding."""
 
 import numpy as np
 from PIL import Image, JpegImagePlugin

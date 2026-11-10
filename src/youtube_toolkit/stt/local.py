@@ -1,9 +1,7 @@
-"""Local speech-to-text through the Hugging Face transformers automatic-speech-recognition (ASR) pipeline, for the model ID in STT_LOCAL_MODEL.
+"""Local speech-to-text through the Hugging Face transformers ASR pipeline, for any model ID in STT_LOCAL_MODEL.
 
-Nothing here is specific to one model: the same pipeline call runs any Hugging Face ASR model on the best available device.
-The one step transformers does not handle uniformly is long audio, so recordings are cut into short pieces first.
 A model that is not on this machine yet is downloaded the first time it is needed.
-The heavy libraries are imported inside the functions that need them, so commands that never transcribe locally do not pay for loading them.
+The heavy libraries are imported inside the functions that need them, so commands that never transcribe locally do not load them.
 """
 
 from __future__ import annotations
@@ -26,7 +24,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 # The pipeline's own chunking is right for Whisper and CTC models but repeats text for Parakeet, and without it Whisper refuses long audio and Parakeet stalls.
-# Pieces under Whisper's 30-second window were correct for all three model families, and Parakeet dropped whole sentences from three-minute pieces that it kept at this length.
+# Pieces stay under Whisper's 30-second window.
 MAX_PIECE_SECONDS = 28
 CUT_SEARCH_SECONDS = 5
 
@@ -66,7 +64,7 @@ def check_local_stt() -> dict[str, Any]:
 def transcribe_locally(audio_path: Path) -> SpeechTranscription:
     """Each piece becomes one timed segment, so timing is only as fine as the pieces, which works for any model without word timestamps.
 
-    The language is left for the model to work out, as with the cloud providers, so the result carries none.
+    The language is left for the model to work out, so the result carries none.
     """
     pieces = split_at_quiet_points(decode_audio(audio_path))
     recognizer = load_recognizer()

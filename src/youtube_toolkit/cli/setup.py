@@ -1,4 +1,4 @@
-"""Interactive app configuration keeps API keys out of shell history and saves only after every prompt succeeds."""
+"""`youtube setup`, which reads keys at hidden prompts and saves only after every prompt succeeds."""
 
 from __future__ import annotations
 

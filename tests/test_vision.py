@@ -1,4 +1,4 @@
-"""Vision keeps broad candidate coverage, explicit retrieval/fallback behavior, and bounded artifact publication."""
+"""Vision frame sampling, ranking routes, and artifacts."""
 
 from pathlib import Path
 import subprocess
@@ -310,7 +310,7 @@ def test_vision_download_failures_become_user_facing_runtime_errors(
 def test_video_vision_passes_only_given_options_to_extraction(
     monkeypatch, arguments, options
 ) -> None:
-    """Options left out keep sample_vision's own defaults, such as 96 frames."""
+    """Options left out keep sample_vision's own defaults."""
     payload = {"id": VIDEO_ID, "duration": 120}
     received = []
 

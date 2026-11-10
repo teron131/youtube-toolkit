@@ -1,4 +1,4 @@
-"""CLI contracts for retrieval archives, exports, and native or semantic search."""
+"""CLI command tests."""
 
 import argparse
 from dataclasses import replace
@@ -116,7 +116,7 @@ def test_video_command_returns_metadata_alone_without_part_flags(
 
 @pytest.fixture
 def comment_response(monkeypatch, tmp_path):
-    """Replace only the yt-dlp process so comment tests exercise real parsing, filtering, ordering, and archives."""
+    """Fakes only the yt-dlp process, so the real parsing and archiving run."""
     payload = {"id": "JpSHyEIZ_bo"}
     calls = []
 

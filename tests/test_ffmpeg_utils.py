@@ -1,4 +1,4 @@
-"""FFmpeg helpers keep bounded subprocess options, shape decoded output, and report failures with the operation they belong to."""
+"""FFmpeg subprocess helpers and their failures."""
 
 import subprocess
 

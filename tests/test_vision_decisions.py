@@ -1,4 +1,4 @@
-"""Decision ranking scores each picture on its own plus whether it shows what is being said, collapses neighbours showing one item to its best frame, and fails whole rather than ranking a set with many holes."""
+"""Frame ranking with the decision model."""
 
 from PIL import Image
 import pytest

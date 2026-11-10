@@ -1,6 +1,5 @@
-"""YouTube caption tracks become timed transcript documents here: track choice, JSON3 download, parsing, and SponsorBlock removal.
+"""Turn a video's YouTube caption track into a timed transcript document, without SponsorBlock segments.
 
-YouTube's machine translations are never used: the client drops them from metadata, and automatic captions are chosen only in the spoken language of the video.
 Language preference and the speech-to-text fallback belong to the transcript workflow that calls this adapter.
 """
 

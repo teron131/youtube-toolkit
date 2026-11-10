@@ -1,4 +1,4 @@
-"""Vision text targets filter sound annotations and sparse speech while preserving usable caption timing and words at each matching scale."""
+"""The caption text that vision matches frames against."""
 
 import math
 

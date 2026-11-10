@@ -1,4 +1,4 @@
-"""Caption selection, transcript archives, and STT fallback tests."""
+"""Caption selection, transcript archives, and speech-to-text fallback."""
 
 from dataclasses import asdict
 from pathlib import Path

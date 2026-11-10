@@ -24,7 +24,6 @@ from .config import DecisionConfig
 from .execution import collect_concurrently
 
 REQUEST_TIMEOUT_SECONDS = 60
-# For 690 vision frames on Decider Flash, 8 in flight took 102 s, 16 took 50 s, and 32 took 27 s at the same 1.2 s per request; 64 and 128 drew 503 overload errors under that sustained load.
 MAX_WORKERS = 32
 # Overloaded hosts answer 503 "try again shortly".
 MAX_RETRIES = 4
@@ -71,7 +70,7 @@ def decide_each(
     questions: Mapping[str, Question],
     inputs: list[DecisionInput],
 ) -> list[DecisionResult | DecisionError]:
-    """Ask the same questions about each input, MAX_WORKERS requests at a time; rows align with inputs and hold the error of a request that failed both rounds.
+    """Rows align with inputs, holding a DecisionError for each request that failed both rounds.
 
     When every request fails, there is no second round: a bad key, a bad model, or a host that is down will not recover in seconds.
     """
@@ -137,7 +136,7 @@ class _VercelRouting(BaseModel):
 
 
 class _VercelGateway(BaseModel):
-    """Billing and routing for one reply; unlike the SDK's strict models, this one accepts the decimal string Vercel sends as cost."""
+    """Unlike the SDK's strict models, this accepts the decimal string Vercel sends as cost."""
 
     cost: float
     routing: _VercelRouting

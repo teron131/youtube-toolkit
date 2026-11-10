@@ -1,4 +1,4 @@
-"""Channel listings own reference normalization, limits, and day windows that date flat listings with per-video metadata."""
+"""Channel upload listings, optionally limited to a window of recent days."""
 
 from __future__ import annotations
 

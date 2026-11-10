@@ -1,4 +1,4 @@
-"""Channel reference normalization and bounded listing retrieval tests."""
+"""Channel reference normalization and listing retrieval."""
 
 from datetime import date, timedelta
 

@@ -1,7 +1,6 @@
-"""Rank candidate frames with a decision model that judges each picture on its own and asks separately whether it shows what is being said: the picture questions see only the image, so naming a title card cannot raise its picture score, while the speech question lets the frame showing the thing described win over its neighbours, and neighbouring frames showing the same item collapse to one view.
+"""Rank candidate frames with a decision model that judges each picture on its own and asks separately whether it shows what is being said.
 
-On three blind-graded 10-minute clips, a creator talking over screens, a model review of 3D demos, and a documentary with real-world footage, this kept 54 different screenshots in 67 picks, against 50 in 66 when the speech only reordered items the picture had chosen and 50 in 64 when has_information also read the speech; the design was chosen after seeing those grades.
-On graded explainers its score ranked key frames at AUC 0.761 against 0.754 for one speech-weighted score per frame.
+The picture questions never see the speech, so a narrator naming a title card cannot raise its picture score.
 """
 
 from __future__ import annotations
@@ -33,28 +32,22 @@ if TYPE_CHECKING:
 CONTEXT_SECONDS = 30
 MARKER = "[THE FRAME APPEARS HERE]"
 FRAME_ASSET = "frame"
-# Questions were measured on frames sent at this size, which bills 397 tokens per image against 687 at 960x540.
 REQUEST_SIZE = (640, 360)
-# Pillow decodes, shrinks, and encodes outside the GIL: 150 frames took 0.29 s on 4 threads against 0.86 s one by one.
+# Pillow releases the GIL while decoding and encoding, so threads speed this up.
 ASSET_WORKERS = 4
-# Applied to the score, which the speech can only raise; from the picture alone it dropped 70 of 1,334 keyframes on four narrated screen videos and none of the 461 graded picks.
+# Applied to the combined score, so speech can lift a frame over it but never push one under.
 MIN_SCORE = 0.30
-# On consecutive graded picks from those videos, 0.6 joined 86% of the graders' repeats and 24% of different screens, mostly benign pairs such as a loading screen and its scene or a prompt and its result.
 SAME_ITEM = 0.6
-# On graded explainer frames, picture score plus 0.25 x illustrative ranked key frames at AUC 0.761, against 0.712 for the picture alone and 0.717 at a weight of 1.
 CONTEXT_WEIGHT = 0.25
-# Keyframes are 3 to 7 seconds apart and items span several, so a few failed requests rarely lose content; more than this share in any step means the host is failing and the ranking would have holes.
+# Items span several keyframes, so a few failed requests rarely lose content. More than this share failing in any step means the host is failing and the ranking would have holes.
 MAX_FAILED_SHARE = 0.1
-# Each description lists by category what counts and what does not; against one-line questions this lifted key-frame AUC on the graded videos from 0.70 to 0.76 and spread the visual answers on a wordless short from a median of 0.93 to 0.63.
 FRAME_QUESTIONS = {
-    # Excluding subtitles and name captions keeps talking heads with burned-in text from scoring as information, and asking for it in full ranks a finished slide above the frames that write it.
     "has_information": Noul(
         instructions="Does the frame show specific information a viewer could read or study, shown in full rather than still being written, typed, or drawn? Counts: slides and title cards with readable text; code, terminals, and app, web, or document screens; charts, tables, and figures with numbers; equations and labeled diagrams; posts, articles, and on-screen lists. Does not count: subtitles or captions of the speech, a speaker's name or channel caption, logos and watermarks, decorative or background text, and text too small, blurred, or partial to read."
     ),
     "visual": Noul(
         instructions="Is the frame a moment worth pausing on for what it shows, where something new has fully appeared and the shot holds on it? Counts: a complete scene, illustration, or animation at its finished state; a reveal of a new place, object, or idea; a finished artwork, photograph, product shot, or generated result; a demo showing its outcome. Does not count: an earlier step still being drawn, written, built, or assembled; transitions such as cuts, fades, swirls, zooms, morphs, or motion blur; people as the main subject, such as talking heads, face close-ups, reactions, or someone walking or working; blank, dark, logo, end, or loading screens."
     ),
-    # Judging the content rather than the frame keeps app windows and webcam insets from marking down every screen recording; it put clean views of a rendered scene at 0.61-0.73 and the same scene behind a settings panel at 0.43-0.56.
     "impressive": Noul(
         instructions="Looking at the main content and ignoring the app window around it and any small webcam inset, is it a visually impressive view: a striking, detailed render, scene, artwork, or result, shown fully and clearly? Does not count: main content partly covered by an open settings panel, menu, dialog, or tooltip; plain text, posts, tables, or code; blurry, dark, or half-loaded views."
     ),
@@ -74,10 +67,7 @@ CONTEXT_QUESTIONS = {
 
 @dataclass(frozen=True, slots=True)
 class FrameDecision:
-    """score gates and ranks frames; score plus impressive chooses the representative within an item.
-
-    illustrative is None when no speech is near the frame or its request failed, and the picture alone then scores it.
-    """
+    """illustrative is None when no speech is near the frame or its request failed, and the picture alone then scores it."""
 
     score: float
     has_information: float
@@ -88,7 +78,7 @@ class FrameDecision:
 
 @dataclass(frozen=True, slots=True)
 class DecisionUsage:
-    """Totals over successful responses, so failed attempts are not counted; each is None when any successful response omitted it."""
+    """Totals over successful responses only, each None when any of them omitted it."""
 
     input_tokens: int | None
     output_tokens: int | None
@@ -99,7 +89,10 @@ class DecisionUsage:
 
 @dataclass(frozen=True, slots=True)
 class DecisionRanking:
-    """One frame per item, best first, keyed by its index among the candidates; warning names requests that failed after retries and what that cost."""
+    """frames holds one frame per item, best first, keyed by its index among the candidates.
+
+    warning names requests that failed after retries and what that cost.
+    """
 
     frames: list[tuple[int, FrameDecision]]
     usage: DecisionUsage
@@ -111,15 +104,17 @@ def rank_frames(
     document: TranscriptDocument | None,
     config: DecisionConfig,
 ) -> DecisionRanking:
-    """Steps:
+    """Rank frames in four steps:
 
     1. Each frame alone: has_information, visual, and impressive.
     2. Each of those frames with speech within CONTEXT_SECONDS: illustrative, shown with that speech.
     3. Score: max(has_information, visual) + CONTEXT_WEIGHT x illustrative; frames under MIN_SCORE drop out.
     4. Each pair of neighbouring frames that both remain: same_item; neighbours at SAME_ITEM or more join one item, which keeps its frame with the highest score plus impressive.
 
-    Items rank by score; a None document means the video has no speech to show, so step 2 asks nothing.
-    A failed request leaves its frame out, scores it by the picture alone, or keeps its pair apart; more than MAX_FAILED_SHARE failing in any step raises.
+    Items rank by score.
+    A None document means the video has no speech to show, so step 2 asks nothing.
+    A failed request leaves its frame out, scores it by the picture alone, or keeps its pair apart, by step.
+    More than MAX_FAILED_SHARE failing in any step raises DecisionError.
     """
     with ThreadPoolExecutor(ASSET_WORKERS) as executor:
         assets = list(executor.map(_asset, [frame.image_path for frame in frames]))

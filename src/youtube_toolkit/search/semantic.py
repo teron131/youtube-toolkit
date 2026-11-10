@@ -112,7 +112,7 @@ def search_transcripts(
 def text_embedder() -> tuple[
     EmbeddingClient | LocalTextEmbeddingClient, EmbeddingCutoffs, str | None
 ]:
-    """An embedding API key wins; without one the local model runs when its libraries are installed, as with speech-to-text."""
+    """An embedding API key wins; without one the local model runs when its libraries are installed."""
     if config_value("EMBEDDING_API_KEY") is None and local_embedding_installed():
         client = LocalTextEmbeddingClient()
         cutoffs, warning = local_embedding_cutoffs(client.model)

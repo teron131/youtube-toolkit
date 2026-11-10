@@ -12,7 +12,7 @@ from .results import EmbeddingError
 
 
 class EmbeddingClient:
-    """A fresh SDK client per text would open a new TLS connection for every request; one shared client keeps connections alive between them."""
+    """One shared SDK client keeps connections alive between requests instead of opening one per text."""
 
     def __init__(self, config: EmbeddingConfig | None = None) -> None:
         try:

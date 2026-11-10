@@ -1,4 +1,4 @@
-"""The article route: sentences grouped into paragraphs at the model's turning points and at the sentence that truly opens each chapter, each paragraph corrected or translated whole under its own ID, and the result joined under the video's chapter titles."""
+"""The article route: sentences grouped into paragraphs at the model's turning points and chapter openings, then rewritten whole under the video's chapter titles."""
 
 from __future__ import annotations
 
@@ -28,14 +28,13 @@ from .sentences import split_sentences
 
 SENTENCE_ID = re.compile(r"\[LINE(\d+)\]")
 CHAPTER_ID = re.compile(r"CHAPTER(\d+)\s*\[LINE(\d+)\]")
-# On two videos, windows of 40, 60, and 128 sentences and chapter-sized ones moved gpt-6-luna's paragraph starts no more than rerunning the 40-sentence windows did, and the largest needs the fewest requests.
 SENTENCES_PER_WINDOW = 128
 # A sentence at a window's edge still sees the talk on both sides.
 WINDOW_CONTEXT = 10
-# Whole paragraphs are packed into requests of up to this many sentences, 590 to 1,410 caption tokens in the test videos, so a request finishes in about 30 seconds even at 70 output tokens a second; a longer paragraph goes alone.
+# Whole paragraphs are packed into requests of up to this many sentences to keep each request short; a longer paragraph goes alone.
 SENTENCES_PER_BATCH = 40
 CONTEXT_SENTENCES = 2
-# 40-sentence batches in the same language came out at 0.98 to 1.03 times their source's length in English and 0.91 to 1.04 in Japanese, so a batch outside these bounds was summarized or padded.
+# A same-language cleanup keeps close to its source's length, so a batch outside these bounds was summarized or padded.
 MIN_ARTICLE_RATIO = 0.5
 MAX_ARTICLE_RATIO = 1.3
 
@@ -83,10 +82,7 @@ def _chapter_starts(
 def _find_turning_points(
     llm: ChatModel, header: str, sentences: list[str], chapters: dict[int, str | None]
 ) -> tuple[set[int], dict[int, int]]:
-    """The sentences the model calls turning points, and by chapter number the sentence it names as truly opening that chapter.
-
-    Every window rules only on its own sentences and marks where its chapters' timestamps fall.
-    """
+    """The sentences the model calls turning points, and by chapter number the sentence it names as truly opening that chapter."""
     numbers = {
         index: number
         for number, (index, title) in enumerate(chapters.items(), 1)
@@ -142,7 +138,10 @@ def _find_turning_points(
 def _placed_chapters(
     chapters: dict[int, str | None], openings: dict[int, int], total: int
 ) -> dict[int, str | None]:
-    """`openings` maps a chapter's 1-based position to the sentence the model named to open it, which the title takes only between the previous chapter's start and the next chapter's timestamp, so chapters stay in order; otherwise the title stays where its timestamp falls."""
+    """`openings` maps a chapter's 1-based position to the sentence named to open it.
+
+    A title moves there only when it lands between the previous chapter's start and the next chapter's timestamp, so chapters stay in order.
+    """
     marks = list(chapters)
     placed: dict[int, str | None] = {}
     previous = -1
@@ -162,7 +161,7 @@ def _rewrite_paragraphs(
     starts: list[int],
     language: str | None,
 ) -> list[str]:
-    """One rewrite per paragraph, in order; a cleaned-up batch that fails its checks keeps its source text, while a translation fails instead."""
+    """A cleaned-up batch that fails its checks keeps its source text, while a translation raises RewriteError."""
     system = (
         TRANSLATE_ARTICLE.format(language=language) if language else CORRECT_ARTICLE
     )

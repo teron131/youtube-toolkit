@@ -157,7 +157,7 @@ def extract_channel_id(channel_ref: str) -> str | None:
 
 
 def normalize_channel_url(channel_ref: ChannelRef) -> str:
-    """Canonicalize to the videos tab URL that yt-dlp lists, treating a bare name as a handle: `OpenAI` and `https://youtube.com/@OpenAI` both become `https://www.youtube.com/@OpenAI/videos`."""
+    """Canonicalize to the `https://www.youtube.com/<channel>/videos` URL that yt-dlp lists, treating a bare name as a handle."""
     candidate = channel_ref.strip()
     if not candidate:
         raise ValueError("Expected a non-empty YouTube channel reference")

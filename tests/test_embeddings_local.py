@@ -1,4 +1,4 @@
-"""Local embedding clients put search queries and transcript texts on the query side, documents and frames on the document side, and load frames one batch at a time."""
+"""Local embedding clients: which side each input embeds on, and frame batching."""
 
 import numpy as np
 from PIL import Image

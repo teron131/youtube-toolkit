@@ -1,4 +1,4 @@
-"""Transcript rewrites through the LLM, a translation or a cleaned-up copy: the entry point picks one of three situations, each a chain of the package's steps, and archives the result.
+"""Entry point for transcript rewrites, which picks one of three routes and archives the result.
 
 - timestamped captions: caption lines → numbered batches → replies aligned onto each line's own timing
 - untimed speech: sentences → numbered batches → one untimed segment
@@ -29,9 +29,8 @@ def rewrite_transcript(
 ) -> TranscriptDocument:
     """`language` is the target language, None for the transcript's own, and a transcript already in it comes back unchanged unless `refine` asks for a cleaned-up copy.
 
-    Timed output keeps every caption line with its own timestamps, and an untimed transcript is rewritten sentence by sentence and comes back as one untimed segment; an article is one segment of paragraphs spanning the transcript.
-    A translation fails as a whole when a request keeps returning no text, so untranslated text never passes as translated, while a cleaned-up copy keeps the original wherever a reply fails its checks.
-    `language` reaches the model as written, so a code, a name, or a misspelling all work, and the output keeps that language's script: Taiwan Traditional conversion would corrupt Japanese kanji.
+    `language` reaches the model as written, so a name such as Japanese works but always counts as a translation.
+    A translation raises RewriteError rather than pass untranslated text, while a cleaned-up copy keeps the original wherever a reply fails its checks.
     """
     translated = language is not None and (
         _base_language(language) != _base_language(document.language)
@@ -40,7 +39,6 @@ def rewrite_transcript(
         return document
     target = language if translated else None
     header = request_header(document)
-    # The default reasoning effort tripled a gpt-6-luna translation batch's time with the same wording.
     llm = ChatModel(config, reasoning_effort="low")
     if article:
         segments = [rewrite_article(llm, header, document, target)]
@@ -75,5 +73,5 @@ def _rewrite_untimed_speech(
 
 
 def _base_language(language: str) -> str:
-    """The primary subtag, so en-US and en-orig both read as en and zh-Hant matches zh-TW; a name such as Japanese never matches a code and is always translated."""
+    """The primary subtag, so en-US and en-orig both read as en and zh-Hant matches zh-TW."""
     return language.split("-")[0].lower()

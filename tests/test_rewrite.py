@@ -1,4 +1,4 @@
-"""Transcript rewrite tests: same-language passthrough, caption lines rewritten in place and matched by line ID, untimed speech by sentence, replies that merge, drop, label, or drift from their lines, sentence splitting, and articles whose paragraphs start at turning points and chapter starts."""
+"""Transcript rewrites on each route, and sentence splitting."""
 
 import re
 

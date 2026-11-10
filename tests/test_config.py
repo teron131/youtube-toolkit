@@ -1,4 +1,4 @@
-"""Saved app configuration must preserve credentials, honor environment overrides, and never alter the shell environment."""
+"""Settings file and environment override tests."""
 
 import os
 from pathlib import Path
@@ -92,7 +92,7 @@ def test_vision_credentials_resolve_defaults_without_crossing_providers(
 
 
 def test_saved_settings_are_used_without_exporting_them(monkeypatch) -> None:
-    """Both model routes consume saved settings while environment values retain precedence."""
+    """Environment values take precedence over saved settings."""
     settings = {
         "EMBEDDING_API_KEY": "saved-embedding-key",
         "EMBEDDING_MODEL": "saved-model",
@@ -125,7 +125,6 @@ def test_saved_settings_are_used_without_exporting_them(monkeypatch) -> None:
 def test_saved_keys_have_private_permissions_and_atomic_replacement(
     monkeypatch,
 ) -> None:
-    """A failed replacement leaves the old config intact and removes the temporary secret file."""
     path = config.save_config({"EMBEDDING_API_KEY": "old-key"})
     if os.name == "posix":
         assert path.stat().st_mode & 0o777 == 0o600
@@ -161,7 +160,6 @@ def test_invalid_config_reports_the_file_without_its_contents(content: bytes) ->
 def test_dotenv_comments_quotes_and_exports_are_read_without_expansion(
     monkeypatch,
 ) -> None:
-    """Standard dotenv syntax is accepted while variable-like text in a key remains literal."""
     monkeypatch.setenv("EXAMPLE_SECRET", "must-not-be-expanded")
     config.config_path().write_text(
         "# YouTube Toolkit settings\n"

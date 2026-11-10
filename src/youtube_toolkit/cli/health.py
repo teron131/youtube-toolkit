@@ -1,4 +1,4 @@
-"""CLI readiness checks, optional dependency guards, and local environment reporting.
+"""Readiness checks behind `youtube doctor`, and the guard for the optional vision extra.
 
 Checks inspect configuration and installed packages only: they send no API requests, load no models, create no files, and report no secret values.
 """

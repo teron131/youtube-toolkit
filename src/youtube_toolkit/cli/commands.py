@@ -55,7 +55,7 @@ PART_OPTIONS = {
 
 
 def video(args: argparse.Namespace) -> dict[str, Any]:
-    """Parts run fastest first and share one metadata fetch; comments alone skip it, since their own request carries the title."""
+    """Parts share one metadata fetch, which comments alone skip since their own request carries the title."""
     for part, options in PART_OPTIONS.items():
         for option in options:
             if getattr(args, option) is not None and getattr(args, part) in (

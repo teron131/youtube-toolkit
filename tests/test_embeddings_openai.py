@@ -1,4 +1,4 @@
-"""Embedding transport, environment configuration, and transcript chunking contracts."""
+"""OpenAI-compatible embedding requests, configuration, and transcript chunking."""
 
 import json
 

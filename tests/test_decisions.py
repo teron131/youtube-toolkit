@@ -1,4 +1,4 @@
-"""Decision requests go through TypeSafe's SDK to whatever DECISION_BASE_URL names, always opt in to images, send them as base64 JSON, and read each host's usage and error shapes."""
+"""Decision requests through TypeSafe's SDK, and how each host's usage and errors are read."""
 
 import json
 

@@ -60,7 +60,7 @@ def create_artifact_directory(namespace: str, identifier: str) -> Path:
 
 
 def _artifact_stems(identifier: str, fetched_at: datetime) -> Iterator[str]:
-    """`@Open AI/videos` fetched at 09:05:07.123456 UTC yields `2026-10-20T090507.123456Z-@Open_AI_videos`, then that stem with `-2`, `-3`, and so on."""
+    """Yield the UTC fetch time joined to the filename-safe identifier, then that stem suffixed `-2`, `-3`, and so on."""
     label = re.sub(r"[^\w.@-]+", "_", identifier).strip(" ._")[:48] or "request"
     stem = f"{fetched_at.strftime('%Y-%m-%dT%H%M%S.%fZ')}-{label}"
     yield stem

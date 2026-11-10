@@ -1,15 +1,6 @@
-"""Cloud speech-to-text for audio files, with each provider described by a row of settings and sent in one of three ways.
+"""Cloud speech-to-text for audio files, with each provider described by a row of settings in PROVIDERS.
 
-ElevenLabs, OpenAI, and xAI take a multipart file upload, and Vercel AI Gateway takes base64 audio inside JSON.
-Gemini goes through Google's SDK, which uploads the audio to Gemini's file store.
-
-Provider documentation:
-
-- ElevenLabs: https://elevenlabs.io/docs/api-reference/speech-to-text/convert
-- Gemini: https://ai.google.dev/gemini-api/docs/generate-content/transcribe
-- OpenAI: https://developers.openai.com/api/docs/guides/speech-to-text
-- Vercel AI Gateway: https://vercel.com/docs/ai-gateway/modalities/speech-to-text
-- xAI: https://docs.x.ai/developers/model-capabilities/audio/speech-to-text
+ElevenLabs, OpenAI, and xAI take a multipart file upload, Vercel AI Gateway takes base64 audio inside JSON, and Gemini goes through Google's SDK and file store.
 """
 
 from __future__ import annotations
@@ -120,7 +111,7 @@ PROVIDERS: dict[str, CloudProvider] = {
         vocabulary_field="keyterm",
     ),
 }
-# The strictest of the providers' vocabulary limits: xAI takes at most 100 terms of up to 50 characters, ElevenLabs bills a request with more than 100 as at least 20 seconds and rejects terms of 50 characters, of more than five words, or with brackets or a backslash, and OpenAI rejects angle brackets and line breaks.
+# The strictest of the providers' vocabulary limits. xAI takes at most 100 terms, ElevenLabs rejects terms of 50 characters, of more than five words, or with brackets or a backslash, and OpenAI rejects angle brackets and line breaks.
 MAX_VOCABULARY_TERMS = 100
 MAX_TERM_CHARACTERS = 49
 MAX_TERM_WORDS = 5
@@ -345,8 +336,8 @@ def parse_transcription(
 ) -> SpeechTranscription | None:
     """Per-channel transcripts are joined when there is no single text, and stay untimed.
 
-    xAI and ElevenLabs time each word, Vercel AI Gateway times segments when its model does, and OpenAI's current models report no timing.
-    The language is a plain code for most providers; OpenAI sends a list of entries, and the first entry's code is used.
+    xAI and ElevenLabs time each word, Vercel AI Gateway times segments when its model does, and OpenAI reports no timing.
+    OpenAI reports languages as a list of entries, and the first entry's code is used.
     """
     text = normalize_text(response.get("text"))
     transcripts = response.get("transcripts")

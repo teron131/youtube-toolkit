@@ -1,4 +1,4 @@
-"""Caption lines regrouped into sentences at their end marks, for the article and for untimed speech, where no line's own timing has to survive the regrouping."""
+"""Caption lines regrouped into sentences, for rewrites where no line's own timing has to survive."""
 
 from __future__ import annotations
 
@@ -7,9 +7,10 @@ import re
 
 from ..schemas import TranscriptSegment
 
-# Captions without punctuation never end a sentence, so this caps how many lines one sentence gathers; a punctuated 77-minute video had 9 sentences cut mid-way at 8 lines and none at 16.
+# Captions without punctuation never end a sentence, so this caps how many lines one sentence gathers.
 MAX_LINES_PER_SENTENCE = 16
-# A full stop, exclamation mark, or question mark, also behind a closing quote or bracket, ends a sentence before whitespace unless a lowercase letter follows, as in a `page.close` broken across caption lines; the Chinese and Japanese marks end one with no space after them.
+# A Latin end mark, also behind a closing quote or bracket, ends a sentence before whitespace unless a lowercase letter follows, which keeps a `page.close` broken across caption lines whole.
+# The Chinese and Japanese marks end one with no space after them.
 # YouTube captions write a censored word as `[ __ ]` and drop the end mark after it, so the marker ends a sentence when a capital letter follows.
 SENTENCE_BOUNDARY = re.compile(
     r"(?:(?<=[.!?])|(?<=[.!?][\"'\u201d\u2019)\]]))\s+(?=[^\sa-z]|$)"
@@ -38,7 +39,7 @@ def split_sentences(segments: Sequence[TranscriptSegment]) -> list[TranscriptSeg
                 lines += 1
             parts.append(piece)
             text = " ".join(parts)
-            # Every piece but a line's last ends at a sentence boundary, though a quotation can hold several sentences.
+            # A quotation can hold several sentences, so a boundary inside one does not end the sentence.
             boundary = index < len(pieces) - 1 or _ends_sentence(piece, following)
             if (
                 boundary and not _inside_quote(text)

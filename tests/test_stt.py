@@ -1,4 +1,4 @@
-"""Speech-to-text provider requests and response parsing, retry policy, and the local route's audio splitting and model loading, with network calls and models faked."""
+"""Speech-to-text providers and the local route, with network calls and models faked."""
 
 import base64
 from email.message import Message

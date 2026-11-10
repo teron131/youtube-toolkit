@@ -1,4 +1,4 @@
-"""Collect a video's keyframes as disk-backed candidates, minus near-copies and cross-fades, then select from them best first for decision ranking or, without a ranking model, in equal time slots, dropping pixel repeats either way."""
+"""Collect a video's keyframes as disk-backed candidates and select frames from them, either in a ranked order or spread over equal time slots."""
 
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ from PIL import Image
 
 from ..ffmpeg_utils import decode_keyframes
 
-# On four graded videos, 10-15 s slots caught about 95% of key moments while 20 s slots caught 77%; 12 s keeps a margin before that drop.
 SLOT_SECONDS = 12
 REPEAT_SIMILARITY = 0.95
 MIN_CONTRAST = 3.0
@@ -25,12 +24,12 @@ THUMBNAIL_HEIGHT = 90
 DETECTOR_WIDTH = 320
 DETECTOR_HEIGHT = 180
 DECODE_WINDOW_SECONDS = 60
-# FFmpeg decodes keyframes alone on one core whatever its thread count, so windows decode side by side; on a 10-minute 720p video 4 at a time took 1.1 s against 3.3 s one by one, and at most this many windows are held in memory.
+# FFmpeg decodes keyframes alone on one core whatever its thread count, so windows decode side by side. At most this many windows are held in memory.
 DECODE_WORKERS = 4
 DUPLICATE_LOOKBACK_SECONDS = 10
-# Stricter than REPEAT_SIMILARITY because a candidate dropped here reaches neither selection; both selections drop the remaining duplicates later.
+# Stricter than REPEAT_SIMILARITY because a candidate dropped here never reaches selection, which drops the remaining duplicates itself.
 CANDIDATE_DUPLICATE_SIMILARITY = 0.98
-# A candidate that a mix of the candidates on either side fits with under this share of the nearer one's pixel error is a cross-fade or fade; on four test videos 0.4 flagged only transitions, a mid-zoom frame, and a repeated title card, while the closest clean photo fit at 0.56.
+# A candidate that a mix of the candidates on either side fits with under this share of the nearer one's pixel error is a cross-fade or fade.
 CROSS_FADE_FIT_RATIO = 0.4
 # Outside this mix range the frame is mostly one neighbour, which the fit ratio already compares against.
 CROSS_FADE_MIX_RANGE = (0.2, 0.8)
@@ -78,10 +77,9 @@ def collect_candidates(
     directory: Path,
     excluded_intervals: list[tuple[float, float]],
 ) -> list[StoredFrame]:
-    """Collect the video's keyframes as candidates independently of the final frame budget.
+    """Write each usable keyframe to directory as a JPEG, skipping excluded intervals, near-blank frames, near-duplicates of recent candidates, and cross-fades.
 
-    YouTube encodes place a keyframe every three to seven seconds, so keyframes give an even grid without decoding the frames between them.
-    Nearby duplicates by pixel similarity are dropped, as are cross-fades between the candidates on either side; these appearance checks do not guarantee semantic equivalence.
+    YouTube encodes place a keyframe every few seconds, so keyframes alone give an even grid without decoding the frames between them.
     """
     directory.mkdir(parents=True, exist_ok=True)
     candidates: list[tuple[StoredFrame, np.ndarray]] = []

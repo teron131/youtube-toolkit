@@ -1,4 +1,4 @@
-"""Transcript exports: the metadata and transcript as readable text named for the video's title and channel, written to the working directory with overwrite protection, or as Markdown into a given directory."""
+"""Transcript exports named for the video's title and channel: readable text in the working directory, or Markdown in a given directory."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Search one bounded comment sample and blend Top and like-count rankings into lean, source-linked results."""
+"""Comment search over one bounded sample, blending Top and like-count rankings."""
 
 from __future__ import annotations
 

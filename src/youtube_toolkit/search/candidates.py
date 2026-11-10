@@ -1,6 +1,6 @@
-"""Search candidates are parsed once as yt-dlp entries arrive, then deduplicated, filtered, ranked, and projected into public results.
+"""Search candidates from yt-dlp entries, carried through filtering and ranking into public results.
 
-A parsed candidate is its yt-dlp entry with the canonical video `id`, its `source`, and an ISO `upload_date` or None, so later stages read those keys without re-deriving them.
+A parsed candidate is its yt-dlp entry plus the canonical video `id`, its `source`, and an ISO `upload_date` or None.
 """
 
 from __future__ import annotations
@@ -66,10 +66,7 @@ def parse_candidates(
 def interlace_relevance(
     entry_lists: list[list[dict[str, Any]]],
 ) -> list[dict[str, Any]]:
-    """This is the ranking for multi-query search, not just a merge: every list arrives in YouTube's own relevance order, and nothing is scored locally because that would mean fetching and processing every candidate.
-
-    Taking the next result from each list in turn assumes equal ranks are equally relevant, which keeps the merged order roughly descending at no cost.
-    """
+    """Rank multi-query search by taking each list's next result in turn, assuming equal ranks in YouTube's relevance order are equally relevant."""
     return [
         entry
         for rank in zip_longest(*entry_lists)

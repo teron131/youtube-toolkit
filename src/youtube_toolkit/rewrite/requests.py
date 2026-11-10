@@ -1,4 +1,4 @@
-"""What every rewrite request shares: a header with the video's title, description, and repeated names, items numbered with bracketed IDs that replies are matched by, neighbouring text as context, and the loop that runs batches in parallel."""
+"""The request and reply format every rewrite step shares, and the parallel batch runner."""
 
 from __future__ import annotations
 
@@ -10,12 +10,10 @@ from ..names import repeated_names
 from ..prompts import HEADER
 from ..schemas import TranscriptDocument
 
-# On Vercel AI Gateway the slowest request sets a round's pace, so more requests in flight shorten long videos without slowing short ones.
 MAX_WORKERS = 64
-# A reply that is empty, misses an ID, or fails its step's checks is asked for again, up to this many times in all; the SDK already retries transport failures.
+# Counts attempts at a reply that is empty, misses an ID, or fails its step's checks; the SDK already retries transport failures.
 ATTEMPTS = 3
 # A reply line opens with its item's ID, so a merged or split item shows as a missing ID or a line without one instead of shifting every later line onto the wrong item.
-# In dialogue the model merges or splits short lines: plain lines broke the count in 9 of 26 and 12 of 60 first replies for two Japanese videos and 1 of 37 for an English one, and with IDs none of those 123 missed one.
 LINE_ID = re.compile(r"\s*\[LINE(\d+)\]\s*(.*)")
 MAX_NAMES = 60
 
@@ -25,7 +23,7 @@ class RewriteError(RuntimeError):
 
 
 def request_header(document: TranscriptDocument) -> str:
-    """Title, description, and the names said more than once, most frequent first, which every request opens with."""
+    """Every request opens with this header, which lists the names said more than once."""
     names = repeated_names(document.text)[:MAX_NAMES]
     metadata = document.metadata
     return HEADER.format(
@@ -56,7 +54,7 @@ def numbered(lines: list[str]) -> str:
 
 
 def replies(reply: str, count: int) -> dict[int, str]:
-    """Reply text by ID from 1 to `count`: a line without an ID continues the one before it, and lines before the first ID or under an ID out of range, such as a label or a context line, are dropped."""
+    """A line without an ID continues the one before it, and lines before the first ID or under an ID outside 1 to `count` are dropped."""
     parts: dict[int, list[str]] = {}
     current = None
     for line in reply.splitlines():
@@ -76,7 +74,7 @@ def run_batches[Result](
     unit: str,
     total: int,
 ) -> list[Result]:
-    """Runs every (start, end) batch in parallel and returns their results in batch order; the earliest batch that fails raises, named by its 1-based span."""
+    """Results come back in batch order, and the earliest failed batch raises RewriteError naming its 1-based span."""
     results, failures = collect_concurrently(
         dict(enumerate(batches)), lambda bounds: job(*bounds), max_workers=MAX_WORKERS
     )

@@ -1,4 +1,4 @@
-"""YouTube reference identity parsing tests."""
+"""YouTube reference parsing."""
 
 from youtube_toolkit.identity import (
     extract_channel_id,

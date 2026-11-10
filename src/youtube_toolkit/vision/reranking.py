@@ -1,4 +1,4 @@
-"""Rerank visual candidates by their similarity to text spoken around them, relative to the whole transcript, fuse scales with RRF, then apply output spacing, duplicate removal, and limits."""
+"""Rank frames by image-embedding similarity to the speech around them, fusing keyword, sentence, and paragraph scales with reciprocal rank fusion."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import numpy as np
 from .text import TextTarget
 
 RRF_CONSTANT = 60
-# Visuals often appear just before they are discussed and stay up afterward, so a frame belongs to text from 2 s before it starts until 5 s after it ends.
+# Visuals often appear just before they are discussed and stay up afterward, so each text's span is padded on both sides.
 PADDING_BEFORE_SECONDS = 2
 PADDING_AFTER_SECONDS = 5
 LEVELS = ("keyword", "sentence", "paragraph")
@@ -41,12 +41,11 @@ def rerank_frames(
     min_gap_seconds: float,
     duplicate_cosine: float,
 ) -> list[FrameRanking]:
-    """Consume normalized vectors aligned with targets/timestamps and return selection rank order.
+    """Return frames best first from normalized vectors whose rows align with targets and timestamps, raising ValueError when they do not align.
 
-    A frame matches only text whose padded span contains its timestamp, and eligibility uses that match's raw cosine.
+    A frame matches only text whose padded span contains its timestamp, and min_similarity applies to that match's raw cosine.
     Ranking subtracts the frame's mean similarity to every unique text at that scale across the whole transcript before RRF.
-    A frame is dropped when it lies within the minimum gap of a selected frame or duplicates one by image cosine of at least duplicate_cosine, so a screen recurring minutes apart is selected once.
-    Empty eligibility stays empty, and an exact minimum timestamp gap is allowed.
+    A frame is dropped when it lies closer than min_gap_seconds to a selected frame or duplicates one by image cosine of at least duplicate_cosine, so a screen recurring minutes apart is selected once.
     """
     if max_frames < 1 or not timestamps or not targets:
         return []
