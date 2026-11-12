@@ -20,7 +20,10 @@ youtube setup --decisions
 youtube doctor
 ```
 
-`youtube setup` saves keys and model settings, or one group with `--embeddings`, `--decisions`, `--stt`, or `--llm`; keys are entered at hidden prompts. Any `*_API_KEY` setting can hold another variable's name, such as `AI_GATEWAY_API_KEY`, to reuse that variable's value. Settings live in a user-only `.env` under `~/Library/Application Support/youtube-toolkit/` on macOS, `~/.config/youtube-toolkit/` on Linux, or `%APPDATA%/youtube-toolkit/` on Windows, and environment variables override them. `youtube doctor` checks readiness without the network.
+`youtube setup` saves keys and model settings, or one group with `--embeddings`, `--decisions`, `--stt`, or `--llm`; keys are entered at hidden prompts. Settings live in a user-only `.env` under `~/Library/Application Support/youtube-toolkit/` on macOS, `~/.config/youtube-toolkit/` on Linux, or `%APPDATA%/youtube-toolkit/` on Windows, and environment variables override them. `youtube doctor` checks readiness without the network.
+
+> [!TIP]
+> Any `*_API_KEY` setting can hold another variable's name instead of a key: enter `AI_GATEWAY_API_KEY` at the prompt to reuse that variable's value, read each time a command runs, so the key itself is never stored in the settings file.
 
 | Variable | Used for | Default |
 | --- | --- | --- |
@@ -32,7 +35,7 @@ youtube doctor
 | `EMBEDDING_LOCAL_MODEL` | Embeddings without a key | `jinaai/jina-embeddings-v5-omni-small-retrieval` (non-commercial) |
 | `STT_PROVIDER` | Cloud speech-to-text | `xai` |
 | `STT_LOCAL_MODEL` | Speech-to-text without a key | `nvidia/parakeet-tdt-0.6b-v3` (European languages) |
-| `LLM_API_KEY` | Refining and translating transcripts | |
+| `LLM_API_KEY` | Refining, translating, and summarizing transcripts | |
 | `LLM_BASE_URL`, `LLM_MODEL` | Any OpenAI-compatible chat API | Vercel AI Gateway, `openai/gpt-6-luna` |
 
 Speech-to-text providers are `xai` (`XAI_API_KEY`), `elevenlabs` (`ELEVENLABS_API_KEY`), `vercel` (`AI_GATEWAY_API_KEY`), `openai` (`OPENAI_API_KEY`), and `gemini` (`GEMINI_API_KEY`).
@@ -42,6 +45,7 @@ Speech-to-text providers are `xai` (`XAI_API_KEY`), `elevenlabs` (`ELEVENLABS_AP
 ```bash
 youtube video URL_OR_ID --transcript --timestamps
 youtube video URL_OR_ID --transcript --translate zh-TW --export
+youtube video URL_OR_ID --summary
 youtube video URL_OR_ID --transcript --vision --export
 youtube video URL_OR_ID --comments "QUERY"
 youtube video URL_OR_ID
@@ -55,6 +59,7 @@ Commands print JSON, and `--help` lists each command's options. Responses are ar
 
 - `video` is modular: each part flag adds its part to the output, keyed by part, and any mix of parts shares one metadata fetch; without flags it returns the metadata alone:
   - `--transcript` prefers manual subtitles, then automatic captions, never machine translations, and falls back to speech-to-text, when configured, if there are none; `--stt` uses speech-to-text even when captions exist. `--refine` cleans it up with an LLM, and `--translate` translates it into English, or `--translate LANGUAGE` into another language. `--export` writes it to a text file, or with `--vision` to a Markdown file beside the collages.
+  - `--summary` summarizes the transcript with an LLM, in the transcript's language, the `--translate` language, or `--summary LANGUAGE`; the transcript itself is printed only with `--transcript`.
   - `--vision` picks screenshots and lays them out in collages of six, ranked against the same transcript when `--transcript` is given.
   - `--comments` samples the top 100 comments, or up to 1000 with `--comment-limit`, and keeps those containing the query.
 - `search` covers YouTube, or the channels named with `--channels`, and by default keeps videos with at least 10,000 views and 3 minutes to 8 hours long. `--mode semantic` ranks caption passages with embeddings.

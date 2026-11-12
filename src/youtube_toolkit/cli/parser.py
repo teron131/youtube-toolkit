@@ -104,6 +104,14 @@ def _add_video_command(subparsers: argparse._SubParsersAction) -> None:
         action="store_true",
         help="Replace an existing transcript export; requires --export",
     )
+    summary = video_parser.add_argument_group("summary")
+    summary.add_argument(
+        "--summary",
+        nargs="?",
+        const="",
+        metavar="LANGUAGE",
+        help="A Markdown summary of the transcript by the model saved by `youtube setup --llm`, written in LANGUAGE, else the --translate language, else the transcript's own; the transcript itself is printed only with --transcript",
+    )
     vision = video_parser.add_argument_group("vision")
     vision.add_argument(
         "--vision",

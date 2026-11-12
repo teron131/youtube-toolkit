@@ -9,7 +9,7 @@ import warnings
 
 import pytest
 
-from youtube_toolkit import config
+from youtube_toolkit import config, summary
 from youtube_toolkit.cli import commands, health, output, setup
 from youtube_toolkit.cli.__main__ import main
 from youtube_toolkit.cli.parser import build_parser
@@ -482,13 +482,23 @@ def test_video_parts_share_one_metadata_fetch_and_export_markdown_beside_collage
         ),
     )
 
+    summaries = []
+
+    def summarize_transcript(original, _llm, *, language):
+        summaries.append((original, language))
+        return "Summary."
+
+    monkeypatch.setattr(summary, "summarize_transcript", summarize_transcript)
+
     parts = ["--vision", "--transcript", "--stt", "--translate", "ja", "--metadata"]
-    assert main(["video", "JpSHyEIZ_bo", *parts]) == 0
+    assert main(["video", "JpSHyEIZ_bo", *parts, "--summary"]) == 0
     assert policies == ["always"]
     output = json.loads(capsys.readouterr().out)
-    assert list(output) == ["transcript", "vision", "metadata"]
+    assert list(output) == ["transcript", "summary", "vision", "metadata"]
     assert output["metadata"]["title"] == "Ray tracing"
     assert output["transcript"] == "Translated."
+    assert output["summary"] == "Summary."
+    assert summaries == [(document, "ja")]
     assert output["vision"] == vision
     payload = {"id": "JpSHyEIZ_bo", "title": "Ray tracing"}
     assert metadata_calls == ["JpSHyEIZ_bo"]
@@ -523,14 +533,46 @@ def test_video_parts_share_one_metadata_fetch_and_export_markdown_beside_collage
 
 
 @pytest.mark.parametrize(
+    ("flags", "language"),
+    [(["--summary"], None), (["--summary", "zh-TW"], "zh-TW")],
+)
+def test_video_summary_alone_prints_only_the_summary(
+    capsys, monkeypatch, metadata_calls, flags, language
+) -> None:
+    document = TranscriptDocument(
+        metadata=VideoMetadata(
+            video_id="JpSHyEIZ_bo", url="https://www.youtube.com/watch?v=JpSHyEIZ_bo"
+        ),
+        language="en",
+        source="subtitles",
+        segments=[TranscriptSegment(0.0, 2.5, "First sentence.")],
+    )
+    languages = []
+    monkeypatch.setenv("LLM_API_KEY", "key")
+    monkeypatch.setattr(
+        commands, "fetch_transcript", lambda _video_ref, **_options: document
+    )
+    monkeypatch.setattr(
+        summary,
+        "summarize_transcript",
+        lambda _document, _llm, *, language: languages.append(language) or "Summary.",
+    )
+
+    assert main(["video", "JpSHyEIZ_bo", *flags]) == 0
+    assert json.loads(capsys.readouterr().out) == {"summary": "Summary."}
+    assert languages == [language]
+
+
+@pytest.mark.parametrize(
     ("arguments", "message"),
     [
         (["--timestamps"], "--timestamps requires --transcript"),
         (["--stt"], "--stt requires --transcript"),
         (["--refine"], "--refine requires --transcript"),
         (["--translate"], "--translate requires --transcript"),
-        (["--transcript", "--refine"], "--refine and --translate need LLM_API_KEY"),
-        (["--transcript", "--translate"], "--refine and --translate need LLM_API_KEY"),
+        (["--transcript", "--refine"], "and --summary need LLM_API_KEY"),
+        (["--transcript", "--translate"], "and --summary need LLM_API_KEY"),
+        (["--summary"], "and --summary need LLM_API_KEY"),
         (["--vision", "--export"], "--export requires --transcript"),
         (["--transcript", "--force"], "--force requires --export"),
         (["--comment-limit", "5"], "--comment-limit requires --comments"),

@@ -7,13 +7,13 @@ Evidence (re-verify on update):
   Speech-to-text: transcript.py _stt_transcriber, stt/cloud.py and stt/local.py, when captions are missing, or always when the video stt flag makes cli/commands.py pass stt="always"; vision reaches it through fetch_transcript whenever it ranks frames and is not local-only
   Embeddings: embeddings/openai.py for semantic search; embeddings/gemini.py, or embeddings/local.py without a key, for vision when no decision key is set
   Decisions API: decisions.py decide_each through typesafe_sdk TypeSafeClient, called by vision/decisions.py rank_frames when config.py decision_config() is set, ahead of embeddings in vision/workflow.py sample_vision
-  LLM: rewrite/workflow.py rewrite_transcript through llm.py and the openai SDK at LLM_BASE_URL (config.py llm_config), called by cli/commands.py video for the refine and translate flags, after vision
+  LLM: rewrite/workflow.py rewrite_transcript through llm.py and the openai SDK at LLM_BASE_URL (config.py llm_config), called by cli/commands.py video for the refine and translate flags, after vision; summary.py summarize_transcript through the same client for the summary flag, on the transcript that video fetches through captions, or speech-to-text when captions are missing
   "ranking frames": vision/workflow.py fetches the transcript only when a decision, Gemini, or local embedding route is set
   local stops: search/candidates.py filters and native sort, vision/candidates.py and vision/reranking.py frame picks, youtube/comments.py filter and interleave, cli/health.py checks
 -->
-<svg xmlns="http://www.w3.org/2000/svg" width="1326" height="754" viewBox="0 0 1326 754" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1326" height="818" viewBox="0 0 1326 818" role="img" aria-labelledby="title desc">
   <title id="title">How the commands fit together</title>
-  <desc id="desc">A transit map of the youtube commands. Each command, and each part flag of the video command, is a colored line, and the parts several commands share are interchanges with an icon header; a line passes only through the interchanges its command uses, and dashed segments run only in some cases. Every retrieval line meets at YouTube through yt-dlp, whose responses are archived. video --transcript uses YouTube and captions, uses cloud or local speech-to-text when captions are missing or with --stt, and with --refine or --translate passes the transcript to an LLM that cleans it up or translates it. video --vision picks frames locally from keyframes that FFmpeg decodes, downloads the video through YouTube, and when it ranks frames also uses captions, or speech-to-text when captions are missing, with the Decisions API or else embeddings. video --comments filters a Top sample by keyword and interleaves Top and like order. video --metadata only reaches YouTube. search filters and ranks results by views, length and date, and with --mode semantic also uses captions and embeddings. channel only reaches YouTube. doctor runs local readiness checks without the network.</desc>
+  <desc id="desc">A transit map of the youtube commands. Each command, and each part flag of the video command, is a colored line, and the parts several commands share are interchanges with an icon header; a line passes only through the interchanges its command uses, and dashed segments run only in some cases. Every retrieval line meets at YouTube through yt-dlp, whose responses are archived. video --transcript uses YouTube and captions, uses cloud or local speech-to-text when captions are missing or with --stt, and with --refine or --translate passes the transcript to an LLM that cleans it up or translates it. video --summary takes the same route to its transcript, using speech-to-text only when captions are missing, and always passes it to the LLM to summarize. video --vision picks frames locally from keyframes that FFmpeg decodes, downloads the video through YouTube, and when it ranks frames also uses captions, or speech-to-text when captions are missing, with the Decisions API or else embeddings. video --comments filters a Top sample by keyword and interleaves Top and like order. video --metadata only reaches YouTube. search filters and ranks results by views, length and date, and with --mode semantic also uses captions and embeddings. channel only reaches YouTube. doctor runs local readiness checks without the network.</desc>
   <defs>
     <style>
       /* Barlow (c) 2017 The Barlow Project Authors, SIL Open Font License 1.1; Basic Latin subset. */
@@ -34,19 +34,19 @@ Evidence (re-verify on update):
       .guide { fill: none; stroke: #C3C9D3; stroke-width: 1.5; stroke-dasharray: 2 5; stroke-linecap: round; }
     </style>
   </defs>
-  <rect x="0.5" y="0.5" width="1325" height="753" rx="16" fill="#FFFFFF" stroke="#D6DAE2"/>
+  <rect x="0.5" y="0.5" width="1325" height="817" rx="16" fill="#FFFFFF" stroke="#D6DAE2"/>
   <g id="header">
     <text x="44" y="62" class="title">How the commands fit together</text>
     <text x="44" y="92" class="lede">Each command is a line through the parts it uses; shared parts are where lines meet.</text>
     <text x="44" y="114" class="lede">Dashed segments run only in some cases.</text>
     <text x="44" y="236" class="prompt">youtube video URL_OR_ID</text>
-    <text x="44" y="532" class="prompt">youtube COMMAND</text>
+    <text x="44" y="596" class="prompt">youtube COMMAND</text>
   </g>
   <g id="shared-parts">
     <g id="ffmpeg"><rect x="302" y="139" width="56" height="38" rx="5" fill="#1B2238"/><rect x="307" y="143" width="6" height="4" rx="1" fill="#FFFFFF"/><rect x="307" y="169" width="6" height="4" rx="1" fill="#FFFFFF"/><rect x="317.5" y="143" width="6" height="4" rx="1" fill="#FFFFFF"/><rect x="317.5" y="169" width="6" height="4" rx="1" fill="#FFFFFF"/><rect x="328" y="143" width="6" height="4" rx="1" fill="#FFFFFF"/><rect x="328" y="169" width="6" height="4" rx="1" fill="#FFFFFF"/><rect x="338.5" y="143" width="6" height="4" rx="1" fill="#FFFFFF"/><rect x="338.5" y="169" width="6" height="4" rx="1" fill="#FFFFFF"/><rect x="349" y="143" width="6" height="4" rx="1" fill="#FFFFFF"/><rect x="349" y="169" width="6" height="4" rx="1" fill="#FFFFFF"/><path d="M325 152 L337 158 L325 164Z" fill="#FFFFFF"/>
     <text x="330" y="204" class="station" text-anchor="middle">FFmpeg</text>
     <text x="330" y="222" class="note" text-anchor="middle">keyframes</text></g>
-    <path d="M330 234 V298" class="guide"/>
+    <path d="M330 234 V362" class="guide"/>
     <g id="youtube"><rect x="456" y="141" width="48" height="34" rx="9" fill="#E5302A"/><path d="M473 149 L490 158 L473 167Z" fill="#FFFFFF"/>
     <text x="480" y="204" class="station" text-anchor="middle">YouTube</text>
     <text x="480" y="222" class="note" text-anchor="middle">via yt-dlp</text></g>
@@ -64,66 +64,72 @@ Evidence (re-verify on update):
     <text x="1230" y="222" class="note" text-anchor="middle">via TypeSafe SDK</text></g>
     <g id="llm"><rect x="906" y="140.0" width="48" height="32" rx="9" fill="#FFFFFF" stroke="#1B2238" stroke-width="1.4"/><path d="M917 171.3 L915 181 L926 171.3" fill="#FFFFFF" stroke="#1B2238" stroke-width="1.4" stroke-linejoin="round"/><rect x="914" y="148" width="24" height="3.5" rx="1.5" fill="#1B2238"/><rect x="914" y="155" width="32" height="3.5" rx="1.5" fill="#9AA6BF"/><rect x="914" y="162" width="18" height="3.5" rx="1.5" fill="#9AA6BF"/>
     <text x="930" y="204" class="station" text-anchor="middle">LLM</text>
-    <text x="930" y="222" class="note" text-anchor="middle">rewriting</text></g>
-    <path d="M1080 234 V298" class="guide"/>
-    <path d="M1230 234 V298" class="guide"/>
+    <text x="930" y="222" class="note" text-anchor="middle">rewriting, summaries</text></g>
+    <path d="M1080 234 V362" class="guide"/>
+    <path d="M1230 234 V362" class="guide"/>
   </g>
   <g id="lines">
-    <path d="M170 326 H480" class="route" stroke="#C77C00"/>
-    <path d="M480 326 H1230" class="branch" stroke="#C77C00"/>
-    <path d="M170 558 H480" class="route" stroke="#0F9D74"/>
-    <path d="M480 558 H1080" class="branch" stroke="#0F9D74"/>
+    <path d="M170 390 H480" class="route" stroke="#C77C00"/>
+    <path d="M480 390 H1230" class="branch" stroke="#C77C00"/>
+    <path d="M170 622 H480" class="route" stroke="#0F9D74"/>
+    <path d="M480 622 H1080" class="branch" stroke="#0F9D74"/>
     <path d="M170 262 H630" class="route" stroke="#2E63E6"/>
     <path d="M630 262 H930" class="branch" stroke="#2E63E6"/>
-    <path d="M170 410 H480" class="route" stroke="#C44773"/>
-    <path d="M170 494 H480" class="route" stroke="#8A4FD8"/>
-    <path d="M170 642 H480" class="route" stroke="#8A4FD8"/>
-    <path d="M170 706 H250" class="route" stroke="#8C93A3"/>
+    <path d="M170 326 H630" class="route" stroke="#0891B2"/>
+    <path d="M630 326 H860" class="branch" stroke="#0891B2"/>
+    <path d="M860 326 H930" class="route" stroke="#0891B2"/>
+    <path d="M170 474 H480" class="route" stroke="#C44773"/>
+    <path d="M170 558 H480" class="route" stroke="#8A4FD8"/>
+    <path d="M170 706 H480" class="route" stroke="#8A4FD8"/>
+    <path d="M170 770 H250" class="route" stroke="#8C93A3"/>
   </g>
   <g id="interchanges">
-    <rect x="316" y="304" width="28" height="44" rx="14" fill="#FFFFFF" stroke="#1B2238" stroke-width="3"/>
-    <rect x="466" y="240" width="28" height="424" rx="14" fill="#E5302A" stroke="none" stroke-width="3"/>
-    <rect x="616" y="240" width="28" height="340" rx="14" fill="#FFFFFF" stroke="#1B2238" stroke-width="3"/>
-    <rect x="766" y="240" width="28" height="108" rx="14" fill="#FFFFFF" stroke="#1B2238" stroke-width="3"/>
-    <rect x="916" y="240" width="28" height="44" rx="14" fill="#FFFFFF" stroke="#1B2238" stroke-width="3"/>
-    <rect x="1066" y="304" width="28" height="276" rx="14" fill="#FFFFFF" stroke="#1B2238" stroke-width="3"/>
-    <rect x="1216" y="304" width="28" height="44" rx="14" fill="#FFFFFF" stroke="#1B2238" stroke-width="3"/>
+    <rect x="316" y="368" width="28" height="44" rx="14" fill="#FFFFFF" stroke="#1B2238" stroke-width="3"/>
+    <rect x="466" y="240" width="28" height="488" rx="14" fill="#E5302A" stroke="none" stroke-width="3"/>
+    <rect x="616" y="240" width="28" height="404" rx="14" fill="#FFFFFF" stroke="#1B2238" stroke-width="3"/>
+    <rect x="766" y="240" width="28" height="172" rx="14" fill="#FFFFFF" stroke="#1B2238" stroke-width="3"/>
+    <rect x="916" y="240" width="28" height="108" rx="14" fill="#FFFFFF" stroke="#1B2238" stroke-width="3"/>
+    <rect x="1066" y="368" width="28" height="276" rx="14" fill="#FFFFFF" stroke="#1B2238" stroke-width="3"/>
+    <rect x="1216" y="368" width="28" height="44" rx="14" fill="#FFFFFF" stroke="#1B2238" stroke-width="3"/>
   </g>
   <g id="stops">
-    <rect x="166" y="312" width="8" height="28" rx="2" fill="#C77C00"/>
-    <rect x="210" y="310" width="80" height="32" rx="16" fill="#FFFFFF" stroke="#1B2238" stroke-width="2"/><g opacity="0.45"><rect x="217" y="318.5" width="20" height="15" rx="2" fill="#E4EAF6" stroke="#1B2238" stroke-width="1.3"/><rect x="221" y="322.5" width="11" height="2.5" fill="#1B2238"/><rect x="221" y="327.5" width="7" height="2.5" fill="#9AA6BF"/></g><g opacity="1"><rect x="240" y="318.5" width="20" height="15" rx="2" fill="#E4EAF6" stroke="#1B2238" stroke-width="1.3"/><rect x="244" y="322.5" width="11" height="2.5" fill="#1B2238"/><rect x="244" y="327.5" width="7" height="2.5" fill="#9AA6BF"/></g><rect x="237" y="315.5" width="26" height="21" rx="4" fill="none" stroke="#0F9D74" stroke-width="2.4"/><g opacity="0.45"><rect x="263" y="318.5" width="20" height="15" rx="2" fill="#E4EAF6" stroke="#1B2238" stroke-width="1.3"/><rect x="267" y="322.5" width="11" height="2.5" fill="#1B2238"/><rect x="267" y="327.5" width="7" height="2.5" fill="#9AA6BF"/></g>
-    <rect x="166" y="544" width="8" height="28" rx="2" fill="#0F9D74"/>
-    <circle cx="250" cy="558" r="22" fill="#FFFFFF" stroke="#1B2238" stroke-width="2"/>
-    <path d="M238 548 H262 L253 559 V569 L247 566 V559 Z" fill="#F8DCE6" stroke="#C44773" stroke-width="2" stroke-linejoin="round"/>
+    <rect x="166" y="376" width="8" height="28" rx="2" fill="#C77C00"/>
+    <rect x="210" y="374" width="80" height="32" rx="16" fill="#FFFFFF" stroke="#1B2238" stroke-width="2"/><g opacity="0.45"><rect x="217" y="382.5" width="20" height="15" rx="2" fill="#E4EAF6" stroke="#1B2238" stroke-width="1.3"/><rect x="221" y="386.5" width="11" height="2.5" fill="#1B2238"/><rect x="221" y="391.5" width="7" height="2.5" fill="#9AA6BF"/></g><g opacity="1"><rect x="240" y="382.5" width="20" height="15" rx="2" fill="#E4EAF6" stroke="#1B2238" stroke-width="1.3"/><rect x="244" y="386.5" width="11" height="2.5" fill="#1B2238"/><rect x="244" y="391.5" width="7" height="2.5" fill="#9AA6BF"/></g><rect x="237" y="379.5" width="26" height="21" rx="4" fill="none" stroke="#0F9D74" stroke-width="2.4"/><g opacity="0.45"><rect x="263" y="382.5" width="20" height="15" rx="2" fill="#E4EAF6" stroke="#1B2238" stroke-width="1.3"/><rect x="267" y="386.5" width="11" height="2.5" fill="#1B2238"/><rect x="267" y="391.5" width="7" height="2.5" fill="#9AA6BF"/></g>
+    <rect x="166" y="608" width="8" height="28" rx="2" fill="#0F9D74"/>
+    <circle cx="250" cy="622" r="22" fill="#FFFFFF" stroke="#1B2238" stroke-width="2"/>
+    <path d="M238 612 H262 L253 623 V633 L247 630 V623 Z" fill="#F8DCE6" stroke="#C44773" stroke-width="2" stroke-linejoin="round"/>
     <rect x="166" y="248" width="8" height="28" rx="2" fill="#2E63E6"/>
-    <rect x="166" y="396" width="8" height="28" rx="2" fill="#C44773"/>
-    <circle cx="250" cy="410" r="22" fill="#FFFFFF" stroke="#1B2238" stroke-width="2"/>
-    <path d="M238 400 H262 L253 411 V421 L247 418 V411 Z" fill="#F8DCE6" stroke="#C44773" stroke-width="2" stroke-linejoin="round"/>
-    <rect x="166" y="480" width="8" height="28" rx="2" fill="#8A4FD8"/>
-    <rect x="166" y="628" width="8" height="28" rx="2" fill="#8A4FD8"/>
-    <rect x="166" y="692" width="8" height="28" rx="2" fill="#8C93A3"/>
-    <rect x="233.0" y="689" width="34" height="34" rx="7" fill="#FFFFFF" stroke="#1B2238" stroke-width="1.4"/><path d="M240 700 L244 704 L251 696" fill="none" stroke="#0F9D74" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><rect x="254" y="698" width="7" height="3.5" rx="1.5" fill="#9AA6BF"/><path d="M240 712 L244 716 L251 708" fill="none" stroke="#0F9D74" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><rect x="254" y="710" width="7" height="3.5" rx="1.5" fill="#9AA6BF"/>
+    <rect x="166" y="312" width="8" height="28" rx="2" fill="#0891B2"/>
+    <rect x="166" y="460" width="8" height="28" rx="2" fill="#C44773"/>
+    <circle cx="250" cy="474" r="22" fill="#FFFFFF" stroke="#1B2238" stroke-width="2"/>
+    <path d="M238 464 H262 L253 475 V485 L247 482 V475 Z" fill="#F8DCE6" stroke="#C44773" stroke-width="2" stroke-linejoin="round"/>
+    <rect x="166" y="544" width="8" height="28" rx="2" fill="#8A4FD8"/>
+    <rect x="166" y="692" width="8" height="28" rx="2" fill="#8A4FD8"/>
+    <rect x="166" y="756" width="8" height="28" rx="2" fill="#8C93A3"/>
+    <rect x="233.0" y="753" width="34" height="34" rx="7" fill="#FFFFFF" stroke="#1B2238" stroke-width="1.4"/><path d="M240 764 L244 768 L251 760" fill="none" stroke="#0F9D74" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><rect x="254" y="762" width="7" height="3.5" rx="1.5" fill="#9AA6BF"/><path d="M240 776 L244 780 L251 772" fill="none" stroke="#0F9D74" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><rect x="254" y="774" width="7" height="3.5" rx="1.5" fill="#9AA6BF"/>
   </g>
   <g id="labels">
-    <text x="500" y="314" class="mode" style="fill: #C77C00">ranking frames</text>
-    <text x="152" y="333" class="command" text-anchor="end">--vision</text>
-    <text x="250" y="366" class="name" text-anchor="middle">Pick frames</text>
-    <text x="250" y="384" class="note" text-anchor="middle">rank or time slots</text>
-    <text x="500" y="546" class="mode" style="fill: #0F9D74">--mode semantic</text>
-    <text x="152" y="565" class="command" text-anchor="end">search</text>
-    <text x="250" y="598" class="name" text-anchor="middle">Filter and rank</text>
-    <text x="250" y="616" class="note" text-anchor="middle">views, length, date</text>
+    <text x="500" y="378" class="mode" style="fill: #C77C00">ranking frames</text>
+    <text x="152" y="397" class="command" text-anchor="end">--vision</text>
+    <text x="250" y="430" class="name" text-anchor="middle">Pick frames</text>
+    <text x="250" y="448" class="note" text-anchor="middle">rank or time slots</text>
+    <text x="500" y="610" class="mode" style="fill: #0F9D74">--mode semantic</text>
+    <text x="152" y="629" class="command" text-anchor="end">search</text>
+    <text x="250" y="662" class="name" text-anchor="middle">Filter and rank</text>
+    <text x="250" y="680" class="note" text-anchor="middle">views, length, date</text>
     <text x="650" y="250" class="mode" style="fill: #2E63E6">no captions, --stt</text>
     <text x="800" y="250" class="mode" style="fill: #2E63E6">refine, translate</text>
     <text x="152" y="269" class="command" text-anchor="end">--transcript</text>
-    <text x="152" y="417" class="command" text-anchor="end">--comments</text>
-    <text x="250" y="450" class="name" text-anchor="middle">Filter and interleave</text>
-    <text x="250" y="468" class="note" text-anchor="middle">keyword, Top / likes</text>
-    <text x="152" y="501" class="command" text-anchor="end">--metadata</text>
-    <text x="152" y="649" class="command" text-anchor="end">channel</text>
-    <text x="152" y="713" class="command" text-anchor="end">doctor</text>
-    <text x="280" y="712" class="name">Readiness checks</text>
-    <text x="416" y="712" class="note">no network</text>
-    <text x="480" y="690" class="note" text-anchor="middle">responses archived</text>
+    <text x="650" y="314" class="mode" style="fill: #0891B2">no captions</text>
+    <text x="152" y="333" class="command" text-anchor="end">--summary</text>
+    <text x="152" y="481" class="command" text-anchor="end">--comments</text>
+    <text x="250" y="514" class="name" text-anchor="middle">Filter and interleave</text>
+    <text x="250" y="532" class="note" text-anchor="middle">keyword, Top / likes</text>
+    <text x="152" y="565" class="command" text-anchor="end">--metadata</text>
+    <text x="152" y="713" class="command" text-anchor="end">channel</text>
+    <text x="152" y="777" class="command" text-anchor="end">doctor</text>
+    <text x="280" y="776" class="name">Readiness checks</text>
+    <text x="416" y="776" class="note">no network</text>
+    <text x="480" y="754" class="note" text-anchor="middle">responses archived</text>
   </g>
 </svg>

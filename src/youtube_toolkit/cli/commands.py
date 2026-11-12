@@ -68,15 +68,20 @@ def video(args: argparse.Namespace) -> dict[str, Any]:
     if args.vision:
         require_vision()
     llm = None
-    if args.refine or args.translate is not None:
+    if args.refine or args.translate is not None or args.summary is not None:
         llm = llm_config()
         if llm is None:
             raise ValueError(
-                "--refine and --translate need LLM_API_KEY; save one with `youtube setup --llm`"
+                "--refine, --translate, and --summary need LLM_API_KEY; save one with `youtube setup --llm`"
             )
     client = YtDlpClient()
     payload = cache(partial(client.metadata, args.video_ref))
-    shown_alone = not (args.transcript or args.comments is not None or args.vision)
+    shown_alone = not (
+        args.transcript
+        or args.summary is not None
+        or args.comments is not None
+        or args.vision
+    )
     metadata = (
         asdict(VideoMetadata.from_yt_dlp(payload()))
         if args.metadata or shown_alone
@@ -89,7 +94,7 @@ def video(args: argparse.Namespace) -> dict[str, Any]:
             client=client,
             metadata=payload(),
         )
-        if args.transcript
+        if args.transcript or args.summary is not None
         else None
     )
     comments = (
@@ -103,6 +108,14 @@ def video(args: argparse.Namespace) -> dict[str, Any]:
         if args.comments is not None
         else None
     )
+    summary = None
+    if args.summary is not None and document is not None and llm is not None:
+        from ..summary import summarize_transcript
+
+        # The summary reads the transcript as fetched rather than a translation of it, and writes in the --translate language itself.
+        summary = summarize_transcript(
+            document, llm, language=args.summary or args.translate
+        )
     vision = None
     if args.vision:
         from ..vision import sample_vision
@@ -127,7 +140,10 @@ def video(args: argparse.Namespace) -> dict[str, Any]:
             article=not args.timestamps,
         )
     parts = {
-        "transcript": None if document is None else _transcript(document, args, vision),
+        "transcript": None
+        if document is None or not args.transcript
+        else _transcript(document, args, vision),
+        "summary": summary,
         "vision": vision,
         "comments": comments,
         "metadata": metadata,

@@ -115,7 +115,7 @@ def _setup_stt(settings: dict[str, str]) -> None:
 
 def _setup_llm(settings: dict[str, str]) -> None:
     print(
-        "\nLLM for `youtube video --transcript --refine` and `--translate`: any OpenAI-compatible chat API, Vercel AI Gateway by default.",
+        "\nLLM for `youtube video --transcript --refine` and `--translate`, and `youtube video --summary`: any OpenAI-compatible chat API, Vercel AI Gateway by default.",
         file=sys.stderr,
     )
     _prompt(settings, "LLM_API_KEY", secret=True)
