@@ -13,9 +13,9 @@ from ..artifacts import write_artifact
 from ..config import LLMConfig
 from ..llm import ChatModel
 from ..schemas import TranscriptDocument, TranscriptRewrite, TranscriptSegment
+from ..sentences import split_sentences
 from .article import rewrite_article
 from .requests import request_header
-from .sentences import split_sentences
 from .timestamped import rewrite_lines
 
 

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Self, overload
 
 from ..config import local_embedding_model
-from ..huggingface import model_downloaded, quiet_transformers, torch_device
+from ..huggingface_utils import model_downloaded, quiet_transformers, torch_device
 from .results import EmbeddingResult, EmbeddingUsage
 
 IMAGE_BATCH_SIZE = 8

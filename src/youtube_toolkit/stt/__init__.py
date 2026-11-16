@@ -1,6 +1,7 @@
 """Speech-to-text for videos without captions: cloud providers and local Hugging Face ASR models."""
 
 from .cloud import (
+    PROVIDERS,
     check_cloud_stt,
     cloud_provider,
     cloud_stt_configured,
@@ -15,6 +16,7 @@ from .local import (
 )
 
 __all__ = [
+    "PROVIDERS",
     "check_cloud_stt",
     "check_local_stt",
     "cloud_provider",

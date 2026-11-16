@@ -64,7 +64,7 @@ def vision_health() -> str:
         return "not installed"
     if decision := config.decision_config():
         return f"available; ranks with {decision.model} at {decision.host}"
-    if config.embedding_key():
+    if config.gemini_embedding_key():
         return "available; ranks with Gemini embeddings"
     if local_embedding_installed():
         return f"available; ranks with local {config.local_embedding_model()}"

@@ -10,8 +10,9 @@ if TYPE_CHECKING:
     from .schemas import VideoMetadata
 
 # NAME judges only a word's shape, so it also takes ordinary capitalized words and Japanese loanwords.
-# It matches katakana runs of three or more, words with a capital or digit after their first letter, capitalized words in mid-sentence, and capitalized words right after Chinese or Japanese text, which capitalizes nothing but names.
+# It matches katakana runs of three or more, capitalized words with another capital or a digit after their first letter, capitalized words in mid-sentence, and capitalized words right after Chinese or Japanese text, which capitalizes nothing but names.
 # Latin words end at the first non-ASCII letter, since Chinese and Japanese put no space between a name and the next word, as in GPTは.
+# "We ran GPT-X on the iPhone, and Sam liked it. Then クロード" → GPT-X, Sam, クロード
 NAME = re.compile(
     r"[\u30a0-\u30ff]{3,}"
     r"|(?<![A-Za-z0-9])[A-Z][A-Za-z0-9.-]*[A-Z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?![A-Za-z0-9])"

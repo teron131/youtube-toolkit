@@ -7,9 +7,8 @@ import re
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-type YouTubeRef = str
-type ChannelRef = YouTubeRef
-type VideoRef = YouTubeRef
+type ChannelRef = str
+type VideoRef = str
 
 ALLOWED_VIDEO_HOSTS = {
     "youtu.be",
@@ -20,7 +19,6 @@ ALLOWED_VIDEO_HOSTS = {
     "youtube-nocookie.com",
     "www.youtube-nocookie.com",
 }
-ALLOWED_CAPTION_HOST_SUFFIXES = ("youtube.com",)
 ALLOWED_CHANNEL_HOSTS = {
     "youtube.com",
     "www.youtube.com",
@@ -46,24 +44,6 @@ class ChannelIdentity:
 
     def has_identity(self) -> bool:
         return self.youtube_channel_id is not None or self.channel_handle is not None
-
-
-def validate_url(
-    url: str,
-    *,
-    allowed_hosts: set[str] | tuple[str, ...],
-) -> None:
-    """Each allowed host also admits its subdomains."""
-    parsed = urlparse(url)
-    if parsed.scheme not in {"https", "http"}:
-        raise ValueError(f"Unsupported URL scheme: {parsed.scheme or 'missing'}")
-
-    hostname = parsed.hostname or ""
-    if hostname in allowed_hosts:
-        return
-    if any(hostname.endswith(f".{suffix}") for suffix in allowed_hosts):
-        return
-    raise ValueError(f"Unsupported URL host: {hostname or 'missing'}")
 
 
 def is_video_id(value: str) -> bool:

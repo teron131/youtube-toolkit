@@ -76,6 +76,7 @@ def _export_filename(document: TranscriptDocument) -> str:
 
 
 def _normalize_filename_component(value: str) -> str:
+    """Characters a filename cannot hold are removed and each run of whitespace becomes one underscore: `  TITLE: "SUBTITLE"  PART? ` → `TITLE_SUBTITLE_PART`."""
     normalized = unicodedata.normalize("NFKC", value)
     normalized = UNSAFE_FILENAME_CHARACTERS.sub("", normalized)
     normalized = FILENAME_WHITESPACE.sub("_", normalized)
@@ -135,6 +136,7 @@ def _timed_line(segment: TranscriptSegment) -> str:
 
 
 def _format_timestamp(seconds: float) -> str:
+    """Always HH:MM:SS, rounded down: 3725.9 → `01:02:05`."""
     total_seconds = max(0, int(seconds))
     hours, remainder = divmod(total_seconds, 3600)
     minutes, remaining_seconds = divmod(remainder, 60)

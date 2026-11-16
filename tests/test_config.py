@@ -88,7 +88,7 @@ def test_vision_credentials_resolve_defaults_without_crossing_providers(
     monkeypatch, settings, expected
 ) -> None:
     monkeypatch.setattr(config, "config_value", settings.get)
-    assert config.embedding_key() == expected
+    assert config.gemini_embedding_key() == expected
 
 
 def test_saved_settings_are_used_without_exporting_them(monkeypatch) -> None:

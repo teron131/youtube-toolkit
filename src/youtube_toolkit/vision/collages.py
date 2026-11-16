@@ -76,6 +76,7 @@ def add_timestamp_footer(
 
 
 def format_timestamp(timestamp_seconds: float) -> str:
+    """Hours show only from one hour on, and seconds round to the nearest: 65.4 → `01:05`, 3725.9 → `1:02:06`."""
     total_seconds = round(timestamp_seconds)
     hours, remainder = divmod(total_seconds, 3600)
     minutes, remaining_seconds = divmod(remainder, 60)

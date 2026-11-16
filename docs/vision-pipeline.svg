@@ -7,7 +7,7 @@ Evidence (re-verify on update):
   Time slots (SELECT), local 10 s gap, Repeats (DEDUP, pixel SSIM 0.95 to any earlier pick): vision/candidates.py select_slot_frames
   Collages, 2x3 per page: vision/collages.py COLLAGE_COLUMNS, COLLAGE_ROWS
   dashed lane 3: vision/workflow.py uses select_slot_frames when no route is set up, when an embedding route has no timed speech (vision/text.py drops sound annotations and transcripts under MIN_SPEECH_WORDS_PER_MINUTE), or with the local-only flag and no local model
-  Lane order (1 decision, 2 embeddings: Gemini Embedding 2 with EMBEDDING_API_KEY, else the local model, 3 time slots; 2 needs timed speech, 1 runs without it): vision/workflow.py sample_vision via config.py decision_config (DECISION_API_KEY) and embedding_key, embeddings local_embedding_installed
+  Lane order (1 decision, 2 embeddings: Gemini Embedding 2 with EMBEDDING_API_KEY, else the local model, 3 time slots; 2 needs timed speech, 1 runs without it): vision/workflow.py sample_vision via config.py decision_config (DECISION_API_KEY) and gemini_embedding_key, embeddings local_embedding_installed
   Ask each frame (DECIDE, picture alone at 640x360 for information, visual, impressive; with speech within 30 s, a separate illustrative request): vision/decisions.py FRAME_QUESTIONS, REQUEST_SIZE, CONTEXT_QUESTIONS, CONTEXT_SECONDS, rank_frames steps 1-2; decisions.py decide_each
   Same item (DEDUP, neighbours at 0.6 join one item, which keeps its best score plus impressive): vision/decisions.py SAME_ITEM_QUESTIONS, SAME_ITEM, rank_frames step 4
   Score (RANK, better of information and visual plus 0.25 x illustrative, 0.30 and up, best first): vision/decisions.py CONTEXT_WEIGHT, MIN_SCORE, _decision, rank_frames step 3; vision/workflow.py

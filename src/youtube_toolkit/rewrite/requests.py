@@ -14,6 +14,7 @@ MAX_WORKERS = 64
 # Counts attempts at a reply that is empty, misses an ID, or fails its step's checks; the SDK already retries transport failures.
 ATTEMPTS = 3
 # A reply line opens with its item's ID, so a merged or split item shows as a missing ID or a line without one instead of shifting every later line onto the wrong item.
+# " [LINE12]  TEXT" → ("12", "TEXT")
 LINE_ID = re.compile(r"\s*\[LINE(\d+)\]\s*(.*)")
 MAX_NAMES = 60
 

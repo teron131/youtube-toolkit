@@ -19,7 +19,7 @@ from ..config import (
     DecisionConfig,
     EmbeddingCutoffs,
     decision_config,
-    embedding_key,
+    gemini_embedding_key,
     local_embedding_cutoffs,
 )
 from ..embeddings import (
@@ -32,8 +32,7 @@ from ..embeddings import (
 from ..identity import VideoRef, require_video_id
 from ..schemas import TranscriptDocument, VideoMetadata
 from ..transcript import fetch_transcript
-from ..youtube import YtDlpClient
-from ..youtube.captions import extract_sponsorblock_intervals
+from ..youtube import YtDlpClient, extract_sponsorblock_intervals
 from .candidates import (
     DecodedFrame,
     StoredFrame,
@@ -119,7 +118,7 @@ def sample_vision(
         )
     excluded_intervals = _excluded_intervals(metadata, duration)
     decision = None if local_only else decision_config()
-    gemini_key = None if local_only else embedding_key()
+    gemini_key = None if local_only else gemini_embedding_key()
     transcript_warning = None
     embedding_warning = None
     targets: list[TextTarget] = []

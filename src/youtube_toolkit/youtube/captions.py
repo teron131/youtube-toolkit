@@ -9,10 +9,10 @@ from collections.abc import Sequence
 import html
 import json
 import urllib.error
+from urllib.parse import urlparse
 import urllib.request
 
 from ..execution import retry_transient
-from ..identity import ALLOWED_CAPTION_HOST_SUFFIXES, validate_url
 from ..schemas import (
     TranscriptDocument,
     TranscriptSegment,
@@ -20,6 +20,7 @@ from ..schemas import (
     VideoMetadata,
 )
 
+CAPTION_HOST = "youtube.com"
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 CAPTION_REQUEST_ATTEMPTS = 3
 CAPTION_RETRY_BACKOFF_SECONDS = 1.0
@@ -94,7 +95,7 @@ def select_caption_track(
 
 
 def fetch_caption_payload(url: str) -> dict:
-    validate_url(url, allowed_hosts=ALLOWED_CAPTION_HOST_SUFFIXES)
+    _check_caption_url(url)
     request = urllib.request.Request(  # noqa: S310 - caption URLs are scheme/host validated above.
         url,
         headers={"User-Agent": USER_AGENT},
@@ -157,6 +158,7 @@ def normalize_caption_segment(raw_text: str) -> str:
 
 
 def extract_sponsorblock_intervals(metadata: dict) -> list[tuple[float, float]]:
+    """Reads the chapters yt-dlp adds under `--sponsorblock-mark`, so metadata fetched without that flag yields no intervals."""
     intervals: list[tuple[float, float]] = []
     for chapter in metadata.get("sponsorblock_chapters") or []:
         try:
@@ -190,6 +192,16 @@ def remove_sponsorblock_segments(
         if not overlaps_skip:
             filtered.append(segment)
     return filtered
+
+
+def _check_caption_url(url: str) -> None:
+    """CAPTION_HOST's subdomains pass too."""
+    parsed = urlparse(url)
+    if parsed.scheme not in {"https", "http"}:
+        raise ValueError(f"Unsupported URL scheme: {parsed.scheme or 'missing'}")
+    hostname = parsed.hostname or ""
+    if hostname != CAPTION_HOST and not hostname.endswith(f".{CAPTION_HOST}"):
+        raise ValueError(f"Unsupported URL host: {hostname or 'missing'}")
 
 
 def _spoken_first(languages: Sequence[str], spoken: str | None) -> list[str]:

@@ -20,10 +20,10 @@ from youtube_toolkit.stt.cloud import (
     PROVIDERS,
     HttpProvider,
     encode_multipart_form,
-    parse_transcription,
     run_json_request,
     transcribe_in_cloud,
 )
+from youtube_toolkit.stt.responses import parse_transcription
 
 
 def http_provider(name: str) -> HttpProvider:
@@ -51,7 +51,7 @@ def test_xai_word_timings_become_caption_like_lines() -> None:
                 {"text": text, "start": start, "end": end} for text, start, end in words
             ],
         },
-        http_provider("xai"),
+        language_key=http_provider("xai").language_key,
     )
 
     assert result == SpeechTranscription(
@@ -73,7 +73,8 @@ def test_long_unpunctuated_speech_breaks_into_ten_second_lines_and_cjk_joins_wit
         for second in range(12)
     ]
     result = parse_transcription(
-        {"text": "數據" * 12, "language": "zh", "words": words}, http_provider("xai")
+        {"text": "數據" * 12, "language": "zh", "words": words},
+        language_key=http_provider("xai").language_key,
     )
 
     assert result is not None
@@ -98,11 +99,11 @@ def test_elevenlabs_keeps_only_timed_words_and_multichannel_stays_untimed() -> N
                 {"text": "lost", "type": "word", "start": None, "end": None},
             ],
         },
-        http_provider("elevenlabs"),
+        language_key=http_provider("elevenlabs").language_key,
     )
     multichannel = parse_transcription(
         {"transcripts": [{"text": "left"}, {"text": "right"}], "language_code": "en"},
-        http_provider("elevenlabs"),
+        language_key=http_provider("elevenlabs").language_key,
     )
 
     assert single == SpeechTranscription(

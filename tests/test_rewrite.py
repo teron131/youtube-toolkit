@@ -9,7 +9,6 @@ import pytest
 from youtube_toolkit.config import LLMConfig
 from youtube_toolkit.rewrite import RewriteError, article, rewrite_transcript
 from youtube_toolkit.rewrite.requests import ATTEMPTS
-from youtube_toolkit.rewrite.sentences import MAX_LINES_PER_SENTENCE, split_sentences
 from youtube_toolkit.rewrite.timestamped import CONTEXT_LINES, LINES_PER_BATCH
 from youtube_toolkit.schemas import (
     TranscriptDocument,
@@ -18,6 +17,7 @@ from youtube_toolkit.schemas import (
     VideoChapter,
     VideoMetadata,
 )
+from youtube_toolkit.sentences import MAX_LINES_PER_SENTENCE, split_sentences
 
 CONFIG = LLMConfig(
     base_url="https://gateway.example/v1", api_key="key", model="example/model"

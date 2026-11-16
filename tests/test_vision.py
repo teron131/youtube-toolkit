@@ -108,7 +108,7 @@ def test_local_selection_reports_its_reason_and_cleans_up(
     monkeypatch.setattr("youtube_toolkit.transcript._stt_transcriber", lambda: None)
     monkeypatch.setattr(
         workflow,
-        "embedding_key",
+        "gemini_embedding_key",
         lambda: None if fallback == "no_key" else "test-key",
     )
     monkeypatch.setattr(
@@ -411,7 +411,7 @@ def semantic_video(monkeypatch, tmp_path):
     monkeypatch.setattr(
         workflow, "fetch_transcript", lambda *_args, **_kwargs: document
     )
-    monkeypatch.setattr(workflow, "embedding_key", lambda: "test-key")
+    monkeypatch.setattr(workflow, "gemini_embedding_key", lambda: "test-key")
 
     def candidates(_path, _ffmpeg, *, duration, directory, excluded_intervals):
         return [store_frame(directory, timestamp, chart()) for timestamp in [12, 112]]
@@ -631,7 +631,7 @@ def test_local_model_ranks_without_a_key_on_its_own_cutoffs(
         return transcript(*args, **kwargs)
 
     monkeypatch.setattr(workflow, "fetch_transcript", fetch)
-    monkeypatch.setattr(workflow, "embedding_key", lambda: None)
+    monkeypatch.setattr(workflow, "gemini_embedding_key", lambda: None)
     monkeypatch.setattr(workflow, "local_embedding_installed", lambda: True)
     monkeypatch.setattr(workflow, "LocalImageEmbeddingClient", Embedder)
     result = workflow.sample_vision(VIDEO_ID, local_only=local_only)

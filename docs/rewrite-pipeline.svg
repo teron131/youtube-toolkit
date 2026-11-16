@@ -2,7 +2,7 @@
 Evidence (re-verify on update):
   Lanes: cli/commands.py video passes article=not args.timestamps; rewrite/workflow.py rewrite_transcript runs rewrite_article, else rewrite_lines for timed transcripts, else _rewrite_untimed_speech, and returns the document unchanged when its base language matches the target and refine is off
   Captions or speech-to-text: transcript.py fetch_transcript
-  Sentences (CHUNK, upper lane): rewrite/sentences.py split_sentences joins caption lines and splits them at end marks, called by rewrite/article.py rewrite_article
+  Sentences (CHUNK, upper lane): sentences.py split_sentences joins caption lines and splits them at end marks, called by rewrite/article.py rewrite_article
   Caption lines (CHUNK, lower lane): timed captions reach rewrite/timestamped.py rewrite_lines as they are, each with its own timing; untimed speech, one segment from speech-to-text (schemas.py TranscriptDocument), goes through rewrite/workflow.py _rewrite_untimed_speech, which splits it into sentences and rejoins the rewritten sentences into one untimed segment
   Turning points (DECIDE): rewrite/article.py _find_turning_points with prompts.py TURNING_POINTS and CHAPTER_MARKERS, windows run by rewrite/requests.py run_batches
   Chapter headings (ALIGN, dashed): rewrite/article.py _chapter_starts and _placed_chapters, only when the video has chapters and the transcript is timed (rewrite_article passes no chapters otherwise)

@@ -24,8 +24,8 @@ from .prompts import (
     SUMMARY_WRITE_REQUEST,
     TARGET_LANGUAGE,
 )
-from .rewrite.sentences import split_sentences
 from .schemas import TranscriptDocument
+from .sentences import split_sentences
 
 HASH_LENGTH = 6
 # A sentence's reference is its number and a hash of its text, so a miscounted number does not copy the wrong sentence.

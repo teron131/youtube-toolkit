@@ -7,7 +7,7 @@ from datetime import date
 from typing import Literal, get_args
 
 from ..identity import ChannelRef, is_channel_id, parse_channel_ref
-from ..youtube.channels import cutoff_date_for_days
+from ..youtube import cutoff_date_for_days
 
 SearchMode = Literal["native", "semantic"]
 SearchReturnType = Literal["video", "chunk"]

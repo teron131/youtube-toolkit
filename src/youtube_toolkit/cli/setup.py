@@ -21,7 +21,7 @@ from ..config import (
     DEFAULT_LOCAL_STT_MODEL,
     DEFAULT_STT_PROVIDER,
 )
-from ..stt.cloud import PROVIDERS
+from ..stt import PROVIDERS
 
 
 def run_setup(args: argparse.Namespace) -> dict[str, object]:

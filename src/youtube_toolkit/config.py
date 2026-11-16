@@ -166,7 +166,7 @@ def stt_provider_name() -> str:
     return config_value("STT_PROVIDER") or DEFAULT_STT_PROVIDER
 
 
-def embedding_key() -> str | None:
+def gemini_embedding_key() -> str | None:
     """None unless EMBEDDING_* name Gemini Embedding 2 on Google's API, the only embedding API here that takes images."""
     model = config_value("EMBEDDING_MODEL") or DEFAULT_EMBEDDING_MODEL
     base_url = config_value("EMBEDDING_BASE_URL") or DEFAULT_EMBEDDING_BASE_URL
@@ -282,6 +282,7 @@ def save_config(settings: dict[str, str]) -> Path:
         delete_on_close=False,
     ) as stream:
         for name, value in settings.items():
+            # python-dotenv unescapes \\ and \' inside single quotes: `A'B\C` is saved as `'A\'B\\C'`.
             escaped = value.replace("\\", "\\\\").replace("'", "\\'")
             stream.write(f"{name}='{escaped}'\n")
         # Windows requires the temporary file to be closed before replacement.

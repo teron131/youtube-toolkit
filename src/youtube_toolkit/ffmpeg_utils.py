@@ -20,6 +20,7 @@ FFMPEG_THREADS = min(4, os.process_cpu_count() or 1)
 FRAME_WIDTH = 960
 FRAME_HEIGHT = 540
 FRAME_FILTER = f"scale={FRAME_WIDTH}:{FRAME_HEIGHT}:force_original_aspect_ratio=decrease:flags=lanczos,pad={FRAME_WIDTH}:{FRAME_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black"
+# showinfo logs one line per frame: `[Parsed_showinfo_0 @ ADDRESS] n:N pts:PTS pts_time:SECONDS ...` → `SECONDS`.
 SHOWINFO_PTS_TIME = re.compile(rb"Parsed_showinfo[^\n]*?pts_time:\s*(-?[0-9.]+)")
 SAMPLE_RATE = 16_000
 

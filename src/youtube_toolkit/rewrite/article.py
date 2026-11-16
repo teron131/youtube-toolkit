@@ -15,6 +15,7 @@ from ..prompts import (
     TURNING_POINTS,
 )
 from ..schemas import TranscriptDocument, TranscriptSegment, VideoChapter
+from ..sentences import split_sentences
 from .requests import (
     ATTEMPTS,
     RewriteError,
@@ -24,8 +25,9 @@ from .requests import (
     request,
     run_batches,
 )
-from .sentences import split_sentences
 
+# A reply such as "[LINE3] [LINE9]\nCHAPTER2 [LINE41]" names sentences 3 and 9 as turning points and sentence 41 as the one that opens chapter 2.
+# Chapter answers are cut from the reply before the turning points are read, so 41 is not one.
 SENTENCE_ID = re.compile(r"\[LINE(\d+)\]")
 CHAPTER_ID = re.compile(r"CHAPTER(\d+)\s*\[LINE(\d+)\]")
 SENTENCES_PER_WINDOW = 128

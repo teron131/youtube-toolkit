@@ -15,7 +15,7 @@ import warnings
 
 from ..config import DEFAULT_LOCAL_STT_MODEL, local_stt_model
 from ..ffmpeg_utils import SAMPLE_RATE, decode_audio
-from ..huggingface import model_downloaded, quiet_transformers, torch_device
+from ..huggingface_utils import model_downloaded, quiet_transformers, torch_device
 from ..schemas import SpeechTranscription, TranscriptSegment
 from .synthetic_audio import tone_recording
 

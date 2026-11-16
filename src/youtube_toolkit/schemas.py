@@ -1,4 +1,4 @@
-"""External YouTube payloads are normalized here before search and transcript workflows depend on them."""
+"""The video and transcript shapes every workflow shares, with yt-dlp payloads normalized on the way in."""
 
 from __future__ import annotations
 

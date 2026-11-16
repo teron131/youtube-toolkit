@@ -1,17 +1,18 @@
-"""Caption lines regrouped into sentences, for rewrites where no line's own timing has to survive."""
+"""Caption lines regrouped into sentences, for rewrites where no line's own timing has to survive and for the references a summary picks its sound bites by."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 import re
 
-from ..schemas import TranscriptSegment
+from .schemas import TranscriptSegment
 
 # Captions without punctuation never end a sentence, so this caps how many lines one sentence gathers.
 MAX_LINES_PER_SENTENCE = 16
 # A Latin end mark, also behind a closing quote or bracket, ends a sentence before whitespace unless a lowercase letter follows, which keeps a `page.close` broken across caption lines whole.
 # The Chinese and Japanese marks end one with no space after them.
 # YouTube captions write a censored word as `[ __ ]` and drop the end mark after it, so the marker ends a sentence when a capital letter follows.
+# 'He left. "Why?" she asked. then ran. 好。再见' → 'He left.' | '"Why?" she asked. then ran.' | '好。' | '再见'
 SENTENCE_BOUNDARY = re.compile(
     r"(?:(?<=[.!?])|(?<=[.!?][\"'\u201d\u2019)\]]))\s+(?=[^\sa-z]|$)"
     r"|(?<=[\u3002\uff01\uff1f])"
