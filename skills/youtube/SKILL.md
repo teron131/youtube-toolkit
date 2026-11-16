@@ -26,7 +26,11 @@ youtube video URL_OR_ID --transcript --timestamps
 youtube video URL_OR_ID --transcript --export
 ```
 
-`--transcript` gives the text as one string, so `jq -r .transcript` prints it; `--timestamps` gives segments with `start_seconds`, `end_seconds`, and `text`. It prefers manual subtitles, then automatic captions, never machine translations, and falls back to speech-to-text, when configured, if there are none. `--stt` transcribes the audio even when captions exist, for when the captions are poor; it takes longer and fails if speech-to-text is not set up. `--refine` cleans up recognition errors and filler words, and `--translate` returns the transcript in English, or `--translate LANGUAGE` in another language written any way the model understands, such as `zh-TW` or `Japanese`: line by line on the captions' own timestamps with `--timestamps`, otherwise as paragraphs of complete sentences under the video's chapter titles. A transcript whose language code matches comes back unchanged unless `--refine` is also given. Use them when the user wants the full text to read or in another language, since reading a transcript to answer a question needs neither. Stdout stops at 400,000 characters, so for long videos use `--export`, which writes a text file to the working directory, and `transcript` holds its path.
+`--transcript` gives the text as one string, so `jq -r .transcript` prints it; `--timestamps` gives segments with `start_seconds`, `end_seconds`, and `text`. It prefers manual subtitles, then automatic captions, never machine translations, and falls back to speech-to-text, when configured, if there are none. `--stt` transcribes the audio even when captions exist, for when the captions are poor; it takes longer and fails if speech-to-text is not set up.
+
+`--refine` cleans up recognition errors and filler words, and `--translate` returns the transcript in English, or `--translate LANGUAGE` in another language written any way the model understands, such as `zh-TW` or `Japanese`: line by line on the captions' own timestamps with `--timestamps`, otherwise as paragraphs of complete sentences under the video's chapter titles. A transcript whose language code matches comes back unchanged unless `--refine` is also given. Use them when the user wants the full text to read or in another language, since reading a transcript to answer a question needs neither.
+
+Stdout stops at 400,000 characters, so for long videos use `--export`, which writes a text file to the working directory, and `transcript` holds its path.
 
 ### Summary
 
@@ -35,7 +39,7 @@ youtube video URL_OR_ID --summary
 youtube video URL_OR_ID --summary en
 ```
 
-`--summary` gives a Markdown summary of the whole transcript, written by the LLM set up with `youtube setup --llm`, in the transcript's language, the `--translate` language, or LANGUAGE written any way the model understands. It fetches the transcript without printing it unless `--transcript` is also given. Use it when the user wants a video summarized, especially a long one; a summary leaves details out, so answer specific questions from the transcript.
+`--summary` gives a Markdown summary of the whole transcript, written by the LLM set up with `youtube setup --llm`, in the transcript's language, the `--translate` language, or LANGUAGE written any way the model understands. It fetches the transcript without printing it unless `--transcript` is also given. Use it when the user wants a video summarized, especially a long one; a summary leaves details out, so answer specific questions from the transcript. It only condenses one video, so analysis and comparisons across videos are yours.
 
 ### Vision
 
@@ -83,5 +87,3 @@ youtube channel @OpenAI --days 7
 Install from the toolkit's checkout with `uv run python scripts/install.py`, adding `--vision`, `--embeddings`, or `--stt` as needed; vision and speech-to-text also need `ffmpeg`.
 
 `youtube setup` saves keys and model settings, or one group with `--embeddings`, `--decisions`, `--stt`, or `--llm`. Keys go through hidden prompts, so let the user type secrets themselves and never echo them into commands or chat. `youtube doctor` checks readiness without the network. `youtube stt-setup --cloud-test` sends a recording the provider bills, so run it only when asked to verify the key.
-
-The calling agent owns analysis and comparisons across videos; `--summary` only condenses one video.
