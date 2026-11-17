@@ -10,6 +10,7 @@ from ..config import (
     DEFAULT_VISION_MIN_GAP_SECONDS,
     MAX_VISION_FRAMES,
 )
+from ..search import DEFAULT_CHANNEL_SEARCH_LIMIT, DEFAULT_YOUTUBE_SEARCH_LIMIT
 from ..youtube import DEFAULT_COMMENT_LIMIT, DEFAULT_LAST_VIDEOS, MAX_COMMENT_LIMIT
 from . import commands
 from .health import run_doctor
@@ -21,7 +22,7 @@ class YoutubeArgumentParser(argparse.ArgumentParser):
 
     def add_argument(self, *args, **kwargs):
         action = kwargs.get("action", "store")
-        if "type" not in kwargs and action in {"store", "append"}:
+        if "type" not in kwargs and action in {"store", "append", "extend"}:
             kwargs["type"] = normalize_arg_string
         return super().add_argument(*args, **kwargs)
 
@@ -48,7 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_search_command(subparsers)
     _add_channel_command(subparsers)
     _add_setup_command(subparsers)
-    _add_stt_setup_command(subparsers)
+    _add_stt_check_command(subparsers)
     _add_doctor_command(subparsers)
     return parser
 
@@ -57,7 +58,7 @@ def _add_video_command(subparsers: argparse._SubParsersAction) -> None:
     video_parser = subparsers.add_parser(
         "video",
         help="Fetch a video's metadata, transcript, comments, or screenshots",
-        description="Each part flag adds that part to the output, keyed by part; with none, the output holds the metadata alone. Options for a part require its flag.",
+        description="Each part flag adds that part to the output, keyed by part; with none, the output holds the metadata alone. Options for a part require its flag; --stt and --translate also work with --summary.",
     )
     video_parser.add_argument(
         "video_ref", metavar="url", help="YouTube video URL or ID"
@@ -179,63 +180,99 @@ def _add_search_command(subparsers: argparse._SubParsersAction) -> None:
         help="Search query; give several to interleave their results",
     )
     search_parser.add_argument(
-        "--mode", choices=("native", "semantic"), default="native"
+        "--semantic",
+        choices=("chunk", "video"),
+        help="Rank caption chunks by meaning with embeddings, and return the chunks or their videos",
     )
     search_parser.add_argument(
-        "--return", dest="return_type", choices=("video", "chunk"), default=None
-    )
-    search_parser.add_argument(
-        "--channels",
-        action="append",
+        "--in-channels",
+        dest="channels",
+        nargs="+",
+        action="extend",
         default=[],
         metavar="CHANNEL",
-        help="Search only this channel's uploads; URL, handle, or ID",
+        help="Search only these channels' uploads; URLs, handles, or IDs",
     )
-    search_parser.add_argument("--limit", type=int, default=None)
     search_parser.add_argument(
-        "--sort", choices=("relevance", "recency", "popularity"), default=None
+        "--limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help=f"Maximum results (default: {DEFAULT_YOUTUBE_SEARCH_LIMIT}, or {DEFAULT_CHANNEL_SEARCH_LIMIT} inside channels)",
     )
-    search_parser.add_argument("--min-views", type=int, default=10_000)
-    search_parser.add_argument("--min-duration", default="3:00")
-    search_parser.add_argument("--max-duration", default="8:00:00")
+    search_parser.add_argument(
+        "--sort",
+        choices=("relevance", "recency", "popularity"),
+        default=None,
+        help="Result order (default: relevance, or recency inside channels without --semantic); a search across YouTube without --semantic cannot sort by recency",
+    )
+    search_parser.add_argument(
+        "--min-views",
+        type=int,
+        default=10_000,
+        metavar="N",
+        help="Only include videos with at least N views (default: %(default)s)",
+    )
+    search_parser.add_argument(
+        "--min-duration",
+        default="3:00",
+        metavar="TIME",
+        help="Only include videos at least this long, as seconds, MM:SS, or HH:MM:SS (default: %(default)s)",
+    )
+    search_parser.add_argument(
+        "--max-duration",
+        default="8:00:00",
+        metavar="TIME",
+        help="Only include videos at most this long (default: %(default)s)",
+    )
     search_parser.add_argument(
         "--uploaded-after",
         default=None,
         help="Only include videos uploaded on or after YYYY-MM-DD",
     )
     search_parser.add_argument(
-        "--uploaded-within-days",
+        "--days",
+        dest="uploaded_within_days",
         type=int,
+        metavar="N",
         default=None,
         help="Only include videos uploaded within the last N days",
     )
     search_parser.add_argument(
-        "--include-channel",
-        "--include-channels",
+        "--include-channel-names",
         dest="include_channel",
-        action="append",
+        nargs="+",
+        action="extend",
         default=[],
+        metavar="TEXT",
+        help="Keep videos whose channel name or handle contains every TEXT",
     )
     search_parser.add_argument(
-        "--exclude-channel",
-        "--exclude-channels",
+        "--exclude-channel-names",
         dest="exclude_channel",
-        action="append",
+        nargs="+",
+        action="extend",
         default=[],
+        metavar="TEXT",
+        help="Drop videos whose channel name or handle contains any TEXT",
     )
     search_parser.add_argument(
-        "--include-title",
         "--include-titles",
         dest="include_title",
-        action="append",
+        nargs="+",
+        action="extend",
         default=[],
+        metavar="TEXT",
+        help="Keep videos whose title contains every TEXT",
     )
     search_parser.add_argument(
-        "--exclude-title",
         "--exclude-titles",
         dest="exclude_title",
-        action="append",
+        nargs="+",
+        action="extend",
         default=[],
+        metavar="TEXT",
+        help="Drop videos whose title contains any TEXT",
     )
     search_parser.set_defaults(handler=commands.search)
 
@@ -284,17 +321,17 @@ def _add_setup_command(subparsers: argparse._SubParsersAction) -> None:
     setup_parser.set_defaults(handler=run_setup)
 
 
-def _add_stt_setup_command(subparsers: argparse._SubParsersAction) -> None:
-    setup_parser = subparsers.add_parser(
-        "stt-setup",
+def _add_stt_check_command(subparsers: argparse._SubParsersAction) -> None:
+    check_parser = subparsers.add_parser(
+        "stt-check",
         help=f"Report the speech-to-text setup; download the Hugging Face ASR model named by STT_LOCAL_MODEL (default: {DEFAULT_LOCAL_STT_MODEL}) and check that it runs",
     )
-    setup_parser.add_argument(
+    check_parser.add_argument(
         "--cloud-test",
         action="store_true",
         help="Also send a two-second test recording to the cloud provider (a real request, billed by the provider)",
     )
-    setup_parser.set_defaults(handler=commands.stt_setup)
+    check_parser.set_defaults(handler=commands.stt_check)
 
 
 def _add_doctor_command(subparsers: argparse._SubParsersAction) -> None:

@@ -39,7 +39,7 @@ from ..youtube import (
 )
 from .health import require_vision
 
-# CLI option names that apply only with their part's flag, and the sample_vision parameter each vision option sets.
+# CLI option names that apply only with one of their parts' flags, and the sample_vision parameter each vision option sets.
 VISION_OPTIONS = {
     "max_frames": "max_frames",
     "min_similarity": "min_similarity",
@@ -48,21 +48,22 @@ VISION_OPTIONS = {
     "auto_clean": "auto_clean",
 }
 PART_OPTIONS = {
-    "transcript": ("timestamps", "stt", "refine", "translate", "export"),
-    "vision": tuple(VISION_OPTIONS),
-    "comments": ("comment_limit",),
+    ("transcript",): ("timestamps", "refine", "export"),
+    ("transcript", "summary"): ("stt", "translate"),
+    ("vision",): tuple(VISION_OPTIONS),
+    ("comments",): ("comment_limit",),
 }
 
 
 def video(args: argparse.Namespace) -> dict[str, Any]:
     """Parts share one metadata fetch, which comments alone skip since their own request carries the title."""
-    for part, options in PART_OPTIONS.items():
+    for parts, options in PART_OPTIONS.items():
+        if any(getattr(args, part) not in (None, False) for part in parts):
+            continue
         for option in options:
-            if getattr(args, option) is not None and getattr(args, part) in (
-                None,
-                False,
-            ):
-                raise ValueError(f"--{option.replace('_', '-')} requires --{part}")
+            if getattr(args, option) is not None:
+                flags = " or ".join(f"--{part}" for part in parts)
+                raise ValueError(f"--{option.replace('_', '-')} requires {flags}")
     if args.force and not args.export:
         raise ValueError("--force requires --export")
     if args.vision:
@@ -131,7 +132,8 @@ def video(args: argparse.Namespace) -> dict[str, Any]:
             },
         )
     # Rewriting waits for vision, which matches frames to timed caption lines that an article replaces with one block of paragraphs.
-    if document is not None and llm is not None:
+    # A summary alone prints no transcript, so its --translate language must not buy a translation nobody reads.
+    if args.transcript and document is not None and llm is not None:
         document = rewrite_transcript(
             document,
             llm,
@@ -174,7 +176,7 @@ def channel(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
-def stt_setup(args: argparse.Namespace) -> dict[str, Any]:
+def stt_check(args: argparse.Namespace) -> dict[str, Any]:
     cloud = check_cloud_stt() if args.cloud_test else cloud_stt_status()
     local = check_local_stt() if local_stt_installed() else {"installed": False}
     return {"cloud": cloud, "local": local}
@@ -184,8 +186,8 @@ def search(args: argparse.Namespace) -> list[VideoResult] | list[ChunkResult]:
     return search_videos(
         SearchRequest(
             queries=tuple(query for query in args.queries if query),
-            mode=args.mode,
-            return_type=args.return_type,
+            mode="native" if args.semantic is None else "semantic",
+            return_type=args.semantic,
             channels=tuple(
                 ChannelTarget.from_ref(channel) for channel in args.channels
             ),

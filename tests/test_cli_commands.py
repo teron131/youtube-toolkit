@@ -36,15 +36,13 @@ def test_parser_normalizes_string_arguments_before_handlers() -> None:
             "search",
             "'agent memory'",
             "'langgraph'",
-            "--mode",
-            "'semantic'",
-            "--return",
+            "--semantic",
             "'video'",
-            "--channels",
+            "--in-channels",
             "'@OpenAI'",
-            "--include-channel",
+            "--include-channel-names",
             "'OpenAI'",
-            "--exclude-title",
+            "--exclude-titles",
             "'shorts'",
             "--sort",
             "'popularity'",
@@ -55,8 +53,7 @@ def test_parser_normalizes_string_arguments_before_handlers() -> None:
     assert video_args.video_ref == "https://www.youtube.com/watch?v=JpSHyEIZ_bo"
     assert video_args.comments == "pricing"
     assert search_args.queries == ["agent memory", "langgraph"]
-    assert search_args.mode == "semantic"
-    assert search_args.return_type == "video"
+    assert search_args.semantic == "video"
     assert search_args.channels == ["@OpenAI"]
     assert search_args.include_channel == ["OpenAI"]
     assert search_args.exclude_title == ["shorts"]
@@ -534,7 +531,12 @@ def test_video_parts_share_one_metadata_fetch_and_export_markdown_beside_collage
 
 @pytest.mark.parametrize(
     ("flags", "language"),
-    [(["--summary"], None), (["--summary", "zh-TW"], "zh-TW")],
+    [
+        (["--summary"], None),
+        (["--summary", "zh-TW"], "zh-TW"),
+        (["--summary", "--translate", "ja"], "ja"),
+        (["--summary", "--stt"], None),
+    ],
 )
 def test_video_summary_alone_prints_only_the_summary(
     capsys, monkeypatch, metadata_calls, flags, language
@@ -557,6 +559,11 @@ def test_video_summary_alone_prints_only_the_summary(
         "summarize_transcript",
         lambda _document, _llm, *, language: languages.append(language) or "Summary.",
     )
+    monkeypatch.setattr(
+        commands,
+        "rewrite_transcript",
+        lambda *_args, **_options: pytest.fail("no transcript is printed to rewrite"),
+    )
 
     assert main(["video", "JpSHyEIZ_bo", *flags]) == 0
     assert json.loads(capsys.readouterr().out) == {"summary": "Summary."}
@@ -567,9 +574,10 @@ def test_video_summary_alone_prints_only_the_summary(
     ("arguments", "message"),
     [
         (["--timestamps"], "--timestamps requires --transcript"),
-        (["--stt"], "--stt requires --transcript"),
+        (["--stt"], "--stt requires --transcript or --summary"),
         (["--refine"], "--refine requires --transcript"),
-        (["--translate"], "--translate requires --transcript"),
+        (["--summary", "--refine"], "--refine requires --transcript"),
+        (["--translate"], "--translate requires --transcript or --summary"),
         (["--transcript", "--refine"], "and --summary need LLM_API_KEY"),
         (["--transcript", "--translate"], "and --summary need LLM_API_KEY"),
         (["--summary"], "and --summary need LLM_API_KEY"),
@@ -611,9 +619,8 @@ def test_search_command_group_parses_channel_search() -> None:
         [
             "search",
             "agents",
-            "--channels",
+            "--in-channels",
             "@OpenAI",
-            "--channels",
             "UC1234567890123456789012",
             "--limit",
             "2",
@@ -632,7 +639,7 @@ def test_search_command_group_allows_channel_search_without_query() -> None:
     search_args = build_parser().parse_args(
         [
             "search",
-            "--channels",
+            "--in-channels",
             "@OpenAI",
         ]
     )
@@ -654,26 +661,22 @@ def test_search_command_group_parses_several_queries() -> None:
     assert search_args.queries == ["agents", "agent skills", "tool use"]
 
 
-def test_search_command_group_accepts_plural_filter_aliases() -> None:
+def test_search_command_group_collects_listed_filters() -> None:
     search_args = build_parser().parse_args(
         [
             "search",
             "agents",
-            "--include-channels",
+            "--include-channel-names",
             "OpenAI",
-            "--include-channels",
             "Anthropic",
-            "--exclude-channels",
+            "--exclude-channel-names",
             "shorts",
-            "--exclude-channels",
             "clips",
             "--include-titles",
             "agent",
-            "--include-titles",
             "tools",
             "--exclude-titles",
             "reaction",
-            "--exclude-titles",
             "drama",
         ]
     )
@@ -695,8 +698,7 @@ def test_search_command_builds_default_youtube_request(monkeypatch) -> None:
     payload = commands.search(
         argparse.Namespace(
             queries=["agents", "agent skills", "tool use"],
-            mode="native",
-            return_type=None,
+            semantic=None,
             channels=[],
             limit=None,
             sort="relevance",
@@ -743,8 +745,7 @@ def test_search_command_builds_channel_request(monkeypatch) -> None:
             queries=["agents"],
             uploaded_after=None,
             uploaded_within_days=None,
-            mode="native",
-            return_type=None,
+            semantic=None,
             channels=["@OpenAI", "UC1234567890123456789012"],
             limit=None,
             sort="popularity",
@@ -819,7 +820,7 @@ def test_doctor_reports_local_artifacts_without_creating_them(
     assert not (tmp_path / ".cache").exists()
 
 
-def test_stt_setup_reports_both_routes_and_bills_only_when_asked(monkeypatch) -> None:
+def test_stt_check_reports_both_routes_and_bills_only_when_asked(monkeypatch) -> None:
     local_check = {"model": "example/speech-model", "device": "cpu", "working": True}
     status = {"provider": "xAI", "model": "example-model", "key_set": True}
     monkeypatch.setattr(commands, "cloud_stt_status", lambda: status)
@@ -829,12 +830,12 @@ def test_stt_setup_reports_both_routes_and_bills_only_when_asked(monkeypatch) ->
     monkeypatch.setattr(commands, "check_local_stt", lambda: local_check)
 
     monkeypatch.setattr(commands, "local_stt_installed", lambda: True)
-    plain = commands.stt_setup(build_parser().parse_args(["stt-setup"]))
+    plain = commands.stt_check(build_parser().parse_args(["stt-check"]))
     assert plain == {"cloud": status, "local": local_check}
 
     monkeypatch.setattr(commands, "local_stt_installed", lambda: False)
-    tested = commands.stt_setup(
-        build_parser().parse_args(["stt-setup", "--cloud-test"])
+    tested = commands.stt_check(
+        build_parser().parse_args(["stt-check", "--cloud-test"])
     )
     assert tested == {
         "cloud": {**status, "working": True},

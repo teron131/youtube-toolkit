@@ -131,7 +131,7 @@ def resolve_request(request: SearchRequest) -> ResolvedRequest:
     ):
         raise ValueError("--min-duration cannot be greater than --max-duration")
     if request.uploaded_within_days is not None and request.uploaded_within_days < 0:
-        raise ValueError("uploaded-within-days must be non-negative")
+        raise ValueError("--days cannot be negative")
     upload_cutoff = resolve_upload_cutoff(request)
     if request.return_type == "chunk" and request.mode != "semantic":
         raise ValueError("chunk return requires semantic mode")

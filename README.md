@@ -50,9 +50,31 @@ youtube video URL_OR_ID --transcript --vision --export
 youtube video URL_OR_ID --comments "QUERY"
 youtube video URL_OR_ID
 youtube search "langgraph tutorial" --limit 5 --max-duration 20:00
-youtube search "reasoning models" --channels @OpenAI --uploaded-within-days 30 --sort recency
-youtube search "agent memory" --mode semantic
+youtube search "reasoning models" --in-channels @OpenAI --days 30 --sort recency
+youtube search "agent memory" --semantic chunk
 youtube channel @OpenAI --last 5
+```
+
+Every command and flag; an option nested inside a flag's brackets needs that flag:
+
+```text
+youtube video URL_OR_ID
+        [--transcript [--timestamps] [--refine] [--export [--force]] [--stt] [--translate [LANGUAGE]]]
+        [--summary [LANGUAGE] [--stt] [--translate [LANGUAGE]]]
+        [--vision [--max-frames N] [--min-gap SECONDS] [--min-similarity COSINE] [--local-only] [--no-auto-clean]]
+        [--comments [QUERY] [--comment-limit N]]
+        [--metadata]
+youtube search QUERY ...
+        [--semantic chunk|video] [--in-channels CHANNEL ...]
+        [--limit N] [--sort relevance|recency|popularity]
+        [--days N] [--uploaded-after YYYY-MM-DD]
+        [--min-views N] [--min-duration TIME] [--max-duration TIME]
+        [--include-channel-names TEXT ...] [--exclude-channel-names TEXT ...]
+        [--include-titles TEXT ...] [--exclude-titles TEXT ...]
+youtube channel CHANNEL [--last N] [--days N]
+youtube setup [--embeddings] [--decisions] [--stt] [--llm]
+youtube stt-check [--cloud-test]
+youtube doctor
 ```
 
 Commands print JSON, and `--help` lists each command's options. Responses are archived under `.cache/youtube-toolkit/` in the working directory.
@@ -64,7 +86,7 @@ Commands print JSON, and `--help` lists each command's options. Responses are ar
 - `--vision` picks screenshots and lays them out in collages of six, ranked against the same transcript when `--transcript` is given.
 - `--comments` samples the top 100 comments, or up to 1000 with `--comment-limit`, and keeps those containing the query.
 
-`search` covers YouTube, or the channels named with `--channels`, and by default keeps videos with at least 10,000 views and 3 minutes to 8 hours long. `--mode semantic` ranks caption passages with embeddings.
+`search` covers YouTube, or the channels named with `--in-channels`, and by default keeps videos with at least 10,000 views and 3 minutes to 8 hours long. `--semantic chunk` ranks caption passages with embeddings, and `--semantic video` returns their videos.
 
 `channel` lists a channel's latest uploads: the last 10, `--last N`, or `--days N`.
 

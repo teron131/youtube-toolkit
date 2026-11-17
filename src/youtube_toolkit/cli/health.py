@@ -80,13 +80,13 @@ def decision_health() -> str:
 def stt_health() -> str:
     provider = cloud_provider()
     if cloud_stt_configured():
-        return f"Configured ({provider.label} API); `youtube stt-setup --cloud-test` sends a billed test"
+        return f"Configured ({provider.label} API); `youtube stt-check --cloud-test` sends a billed test"
     if not local_stt_installed():
         return f"Set {provider.api_key_env} with `youtube setup --stt`, or install youtube-toolkit[stt] and ffmpeg for local models"
     model = config.local_stt_model()
     if not local_stt_downloaded(model):
-        return f"Local {model} downloads on first use, or now with `youtube stt-setup`"
-    return f"Configured (local {model}); `youtube stt-setup` checks that it runs"
+        return f"Local {model} downloads on first use, or now with `youtube stt-check`"
+    return f"Configured (local {model}); `youtube stt-check` checks that it runs"
 
 
 def llm_health() -> str:
