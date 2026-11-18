@@ -886,7 +886,7 @@ def test_doctor_names_the_speech_to_text_route_or_the_next_step(
                 "EMBEDDING_API_KEY": "key",
             },
             True,
-            "available; ranks with perplexity/pplx-decider-flash-v1.2 at openrouter.ai",
+            "available; ranks with perplexity/pplx-decider-flash-v1.3 at openrouter.ai",
         ),
         ({"EMBEDDING_API_KEY": "key"}, True, "available; ranks with Gemini embeddings"),
         (
@@ -1001,7 +1001,7 @@ def test_setup_saves_keys_without_echoing_or_exporting_them(
         "Configured (openai/gpt-6-luna at ai-gateway.vercel.sh)"
     )
     assert health.decision_health() == (
-        "Configured (perplexity/pplx-decider-flash-v1.2 at ai-gateway.vercel.sh)"
+        "Configured (perplexity/pplx-decider-flash-v1.3 at ai-gateway.vercel.sh)"
     )
     assert "Configured (Vercel AI Gateway API)" in health.stt_health()
 

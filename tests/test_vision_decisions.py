@@ -102,7 +102,7 @@ def test_speech_lifts_footage_of_what_is_described_and_chooses_within_an_item(
         return [result(illustrative=illustrative[image(item)]) for item in inputs]
 
     monkeypatch.setattr(decisions, "decide_each", decide_each)
-    ranking = decisions.rank_frames(frames, DOCUMENT, CONFIG)
+    ranking = decisions.rank_frames(frames, DOCUMENT, CONFIG, even_gap_seconds=2)
 
     # The picture alone would keep 80 for the item and drop 110.
     assert [(index, round(item.score, 2)) for index, item in ranking.frames] == [
@@ -121,6 +121,43 @@ def test_speech_lifts_footage_of_what_is_described_and_chooses_within_an_item(
     assert ranking.warning is None
 
 
+@pytest.mark.parametrize(
+    ("times", "same_item", "even_gap_seconds"),
+    [((10, 20, 30), 0.5, 1), ((10, 20, 300), 0.0, 100)],
+    ids=["another view of a ranked item", "close in time to a ranked item"],
+)
+def test_a_frame_waits_behind_a_lower_scored_one_that_adds_more(
+    monkeypatch, tmp_path, times, same_item, even_gap_seconds
+) -> None:
+    # The second frame scores above the third, but it likely repeats the first or sits right beside it.
+    frames = [
+        frame(tmp_path, t, shade) for t, shade in zip(times, (0, 100, 200), strict=True)
+    ]
+    data = [decisions._asset(item.image_path)["data_base64"] for item in frames]
+    information = dict(zip(data, (0.9, 0.85, 0.7), strict=True))
+
+    def decide_each(config, *, questions, inputs):
+        if "same_item" in questions:
+            return [
+                result(same_item=same_item if image(item, "first") == data[0] else 0.0)
+                for item in inputs
+            ]
+        return [
+            result(has_information=information[image(item)], visual=0.0, impressive=0.0)
+            for item in inputs
+        ]
+
+    monkeypatch.setattr(decisions, "decide_each", decide_each)
+    ranking = decisions.rank_frames(
+        frames, None, CONFIG, even_gap_seconds=even_gap_seconds
+    )
+    assert [(index, round(item.score, 2)) for index, item in ranking.frames] == [
+        (0, 0.9),
+        (2, 0.7),
+        (1, 0.85),
+    ]
+
+
 def test_a_few_failed_requests_cost_their_frames_but_more_fail_the_ranking(
     monkeypatch, tmp_path
 ) -> None:
@@ -134,7 +171,7 @@ def test_a_few_failed_requests_cost_their_frames_but_more_fail_the_ranking(
         return [failed, *[shown] * (len(inputs) - 1)]
 
     monkeypatch.setattr(decisions, "decide_each", decide_each)
-    ranking = decisions.rank_frames(frames, None, CONFIG)
+    ranking = decisions.rank_frames(frames, None, CONFIG, even_gap_seconds=2)
     assert sorted(index for index, _ in ranking.frames) == list(range(1, 20))
     assert ranking.warning == (
         "1 of 20 frame requests failed after repeated decision host errors, so those frames were left out of the ranking. "
@@ -147,4 +184,4 @@ def test_a_few_failed_requests_cost_their_frames_but_more_fail_the_ranking(
         lambda *_args, **_kwargs: [failed, failed, failed, *[shown] * 17],
     )
     with pytest.raises(DecisionError, match=r"3 of 20 frame requests failed.*HTTP 503"):
-        decisions.rank_frames(frames, None, CONFIG)
+        decisions.rank_frames(frames, None, CONFIG, even_gap_seconds=2)

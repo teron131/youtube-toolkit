@@ -181,6 +181,7 @@ def sample_vision(
                     candidates,
                     document if targets else None,
                     decision,
+                    duration=duration,
                     max_frames=max_frames,
                     min_gap_seconds=min_gap_seconds,
                 )
@@ -260,10 +261,13 @@ def _rank_by_decisions(
     document: TranscriptDocument | None,
     config: DecisionConfig,
     *,
+    duration: float,
     max_frames: int,
     min_gap_seconds: float,
 ) -> tuple[list[_Pick], DecisionRanking]:
-    ranking = rank_frames(candidates, document, config)
+    ranking = rank_frames(
+        candidates, document, config, even_gap_seconds=duration / max_frames
+    )
     decisions = dict(ranking.frames)
     picks = select_ranked_frames(
         candidates,

@@ -15,6 +15,7 @@ from youtube_toolkit.cli.parser import build_parser
 from youtube_toolkit.config import (
     DEFAULT_DECISION_BASE_URL,
     DEFAULT_DECISION_MODEL,
+    DEFAULT_VISION_MAX_FRAMES,
     LOCAL_EMBEDDING_CUTOFFS,
     DecisionConfig,
 )
@@ -542,8 +543,9 @@ def test_decision_model_ranks_first_with_a_decision_key(
 ) -> None:
     warning = "1 of 2 frame requests failed after repeated decision host errors, so those frames were left out of the ranking."
 
-    def rank(frames, document, config):
+    def rank(frames, document, config, *, even_gap_seconds):
         assert config == DECISION
+        assert even_gap_seconds == 120 / DEFAULT_VISION_MAX_FRAMES
         assert document.segments
         assert len(frames) == 2
         return DecisionRanking(
@@ -589,7 +591,7 @@ def test_a_given_transcript_is_ranked_against_without_fetching(
     given = workflow.fetch_transcript(VIDEO_ID)
     ranked_against = []
 
-    def rank(frames, document, config):
+    def rank(frames, document, config, *, even_gap_seconds):
         ranked_against.append(document)
         return DecisionRanking(
             [(0, FrameDecision(0.95, 0.9, 0.3, 0.4, 0.2))],

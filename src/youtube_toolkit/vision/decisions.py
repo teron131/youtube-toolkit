@@ -8,6 +8,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import io
+from itertools import pairwise
 from typing import TYPE_CHECKING
 
 from PIL import Image
@@ -39,6 +40,8 @@ ASSET_WORKERS = 4
 MIN_SCORE = 0.30
 SAME_ITEM = 0.6
 CONTEXT_WEIGHT = 0.25
+# The share of its score an item loses at the same moment as a ranked one. Higher lets a weak frame far from every pick outrank a strong one near a pick.
+NEARNESS_WEIGHT = 0.25
 # Items span several keyframes, so a few failed requests rarely lose content. More than this share failing in any step means the host is failing and the ranking would have holes.
 MAX_FAILED_SHARE = 0.1
 FRAME_QUESTIONS = {
@@ -89,7 +92,7 @@ class DecisionUsage:
 
 @dataclass(frozen=True, slots=True)
 class DecisionRanking:
-    """frames holds one frame per item, best first, keyed by its index among the candidates.
+    """frames holds one frame per item in rank order, keyed by its index among the candidates.
 
     warning names requests that failed after retries and what that cost.
     """
@@ -103,15 +106,18 @@ def rank_frames(
     frames: list[StoredFrame],
     document: TranscriptDocument | None,
     config: DecisionConfig,
+    *,
+    even_gap_seconds: float,
 ) -> DecisionRanking:
-    """Rank frames in four steps:
+    """Rank frames in five steps:
 
     1. Each frame alone: has_information, visual, and impressive.
     2. Each of those frames with speech within CONTEXT_SECONDS: illustrative, shown with that speech.
     3. Score: max(has_information, visual) + CONTEXT_WEIGHT x illustrative; frames under MIN_SCORE drop out.
     4. Each pair of neighbouring frames that both remain: same_item; neighbours at SAME_ITEM or more join one item, which keeps its frame with the highest score plus impressive.
+    5. Items rank one at a time by score, lowered by how surely same_item ties them to an item already ranked and, by up to NEARNESS_WEIGHT, by how near in time they are to one, so things not yet shown and stretches not yet covered come first.
 
-    Items rank by score.
+    even_gap_seconds is the gap that evenly spread picks would leave, and is how far a ranked item's nearness reaches.
     A None document means the video has no speech to show, so step 2 asks nothing.
     A failed request leaves its frame out, scores it by the picture alone, or keeps its pair apart, by step.
     More than MAX_FAILED_SHARE failing in any step raises DecisionError.
@@ -195,14 +201,14 @@ def rank_frames(
         "same-item",
         "so those neighbours were kept as separate items",
     )
-    joined = {
-        second
-        for (_, second), answer in zip(pairs, same_item, strict=True)
-        if answer is not None and answer["same_item"] >= SAME_ITEM
+    ties = {
+        pair: answer["same_item"]
+        for pair, answer in zip(pairs, same_item, strict=True)
+        if answer is not None
     }
     items: list[list[int]] = []
     for index in passing:
-        if index in joined:
+        if ties.get((index - 1, index), 0.0) >= SAME_ITEM:
             items[-1].append(index)
         else:
             items.append([index])
@@ -210,12 +216,15 @@ def rank_frames(
         max(item, key=lambda index: passing[index].score + passing[index].impressive)
         for item in items
     ]
-    kept.sort(
-        key=lambda index: (-passing[index].score, frames[index].timestamp_seconds)
+    order = _rank_items(
+        [passing[index].score for index in kept],
+        [ties.get((before[-1], after[0]), 0.0) for before, after in pairwise(items)],
+        [frames[index].timestamp_seconds for index in kept],
+        even_gap_seconds,
     )
     provider_seconds = _total([result.provider_seconds for result in results])
     return DecisionRanking(
-        [(index, passing[index]) for index in kept],
+        [(kept[item], passing[kept[item]]) for item in order],
         DecisionUsage(
             _total([result.input_tokens for result in results]),
             _total([result.output_tokens for result in results]),
@@ -292,6 +301,41 @@ def _nearby(
         <= timestamp
         <= segment.end_seconds + CONTEXT_SECONDS
     ]
+
+
+def _rank_items(
+    scores: list[float], ties: list[float], times: list[float], even_gap_seconds: float
+) -> list[int]:
+    """Order items, given in time order, so that a likely repeat of a ranked item, or one close to it in time, counts for less.
+
+    ties[n] is the same_item answer between item n and item n + 1, 0.0 where they are not neighbouring frames.
+    A tie across several items is the weakest one on the way, since a repeat needs every step between them to be one.
+    The answer and the gap are the weights, so no cutoff decides what counts as a repeat or as too close.
+    """
+    novelty = [1.0] * len(scores)
+    spread = [1.0] * len(scores)
+    order: list[int] = []
+    unranked = set(range(len(scores)))
+
+    def worth(item: int) -> tuple[float, int]:
+        return scores[item] * novelty[item] * spread[item], -item
+
+    while unranked:
+        best = max(unranked, key=worth)
+        unranked.remove(best)
+        order.append(best)
+        tie = 1.0
+        for item in range(best + 1, len(scores)):
+            tie = min(tie, ties[item - 1])
+            novelty[item] = min(novelty[item], 1 - tie)
+        tie = 1.0
+        for item in range(best - 1, -1, -1):
+            tie = min(tie, ties[item])
+            novelty[item] = min(novelty[item], 1 - tie)
+        for item in unranked:
+            nearness = max(0.0, 1 - abs(times[item] - times[best]) / even_gap_seconds)
+            spread[item] = min(spread[item], 1 - NEARNESS_WEIGHT * nearness)
+    return order
 
 
 def _total[N: (int, float)](values: list[N | None]) -> N | None:

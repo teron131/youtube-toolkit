@@ -40,7 +40,7 @@ MAX_EMBEDDING_CONCURRENCY = 50
 DEFAULT_LOCAL_EMBEDDING_MODEL = "jinaai/jina-embeddings-v5-omni-small-retrieval"
 # The SDK appends /v1/systemone to this root.
 DEFAULT_DECISION_BASE_URL = "https://ai-gateway.vercel.sh/typesafe"
-DEFAULT_DECISION_MODEL = "perplexity/pplx-decider-flash-v1.2"
+DEFAULT_DECISION_MODEL = "perplexity/pplx-decider-flash-v1.3"
 DEFAULT_LLM_BASE_URL = "https://ai-gateway.vercel.sh/v1"
 DEFAULT_LLM_MODEL = "openai/gpt-6-luna"
 # Real keys never look like a variable name.
