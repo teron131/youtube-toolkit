@@ -276,7 +276,11 @@ def _send_to_gemini(
         if part.audio_transcription
         and (part_text := normalize_text(part.audio_transcription.text))
     )
-    return SpeechTranscription(text=text, segments=[]) if text else None
+    return (
+        SpeechTranscription(text=text, segments=[], model=provider.model)
+        if text
+        else None
+    )
 
 
 def _delete_gemini_file(client: genai.Client, name: str | None) -> None:
@@ -308,7 +312,9 @@ def _send_to_vercel(
         "Content-Type": "application/json",
     }
     return parse_transcription(
-        _request(provider, body, headers), language_key=provider.language_key
+        _request(provider, body, headers),
+        language_key=provider.language_key,
+        model=provider.model,
     )
 
 
@@ -324,7 +330,9 @@ def _send_multipart(
         fields += [(vocabulary_field, term) for term in vocabulary]
     body, content_type = encode_multipart_form(fields=fields, file_path=audio_path)
     response = _request(provider, body, {**auth, "Content-Type": content_type})
-    return parse_transcription(response, language_key=provider.language_key)
+    return parse_transcription(
+        response, language_key=provider.language_key, model=provider.model
+    )
 
 
 def audio_content_type(audio_path: Path) -> str:

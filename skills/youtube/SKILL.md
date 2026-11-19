@@ -13,9 +13,10 @@ Every command and flag; an option nested inside a flag's brackets needs that fla
 
 ```text
 youtube video URL_OR_ID
-        [--transcript [--timestamps] [--refine] [--export [--force]] [--stt] [--translate [LANGUAGE]]]
+        [--transcript [--timestamps] [--refine] [--export [--fresh]] [--stt] [--translate [LANGUAGE]]]
         [--summary [LANGUAGE] [--stt] [--translate [LANGUAGE]]]
-        [--vision [--max-frames N] [--rows N] [--columns N] [--resolution 360p|540p|720p] [--min-gap SECONDS] [--min-similarity COSINE] [--local-only] [--no-auto-clean]]
+        [--vision [--max-frames N] [--rows N] [--columns N] [--resolution 360p|540p|720p] [--min-gap SECONDS] [--min-similarity COSINE] [--local-only] [--no-auto-clean] [--fresh]]
+        [--download [video|audio] [--quality 360p|480p|720p|1080p] [--start TIME] [--end TIME] [--fresh]]
         [--comments [QUERY] [--comment-limit N]]
         [--metadata]
 youtube search QUERY ...
@@ -42,7 +43,7 @@ youtube video URL_OR_ID
 | --- | --- | --- | --- |
 | `URL_OR_ID` | Required |  | The video, as its 11-character ID or any YouTube URL. |
 
-`video` prints the parts its flags name, keyed as `transcript`, `summary`, `vision`, `comments`, and `metadata`, or the metadata alone without flags; combine flags to get several parts from one call. Options for a part, such as `--timestamps`, require its flag; `--stt` and `--translate` also work with `--summary`.
+`video` prints the parts its flags name, keyed as `transcript`, `summary`, `vision`, `download`, `comments`, and `metadata`, or the metadata alone without flags; combine flags to get several parts from one call. Options for a part, such as `--timestamps`, require its flag; `--stt` and `--translate` also work with `--summary`.
 
 ### Transcript
 
@@ -60,7 +61,7 @@ youtube video URL_OR_ID --transcript --export
 | `--refine` | Optional | Off | Cleans up recognition errors and filler words. |
 | `--translate [LANGUAGE]` | Optional | Off; English when LANGUAGE is left out | Returns the transcript in LANGUAGE, written any way the model understands, such as `zh-TW` or `Japanese`. A transcript whose language code matches comes back unchanged unless `--refine` is also given. |
 | `--export` | Optional | Off: printed to stdout | Writes a text file to the working directory, and `transcript` holds its path. |
-| `--force` | Optional | Off: an existing file is an error | Replaces an export file that already exists. |
+| `--fresh` | Optional | Off: an existing file is an error | Replaces an export file that already exists. |
 
 `--refine` and `--translate` work line by line on the captions' own timestamps with `--timestamps`, otherwise as paragraphs of complete sentences under the video's chapter titles. Use them when the user wants the full text to read or in another language, since reading a transcript to answer a question needs neither.
 
@@ -99,8 +100,26 @@ youtube video URL_OR_ID --transcript --vision --export --timestamps
 | `--min-similarity COSINE` | Optional | Tuned for the ranking model | Sets how closely a frame must match the speech when embeddings rank, from -1 to 1. |
 | `--local-only` | Optional | Off | Skips the decision model, the embedding API, and speech-to-text, ranking against captions with the local embedding model or else taking evenly spaced frames. |
 | `--no-auto-clean` | Optional | Off: files are deleted | Keeps the downloaded video and candidate frames. |
+| `--fresh` | Optional | Off: matching earlier picks are laid out again | Picks the screenshots afresh. |
 
-Use `--vision` when pictures add context, and read the collages alongside the transcript. A run usually takes a few minutes, mostly the download, and the defaults suit most videos. To change only the layout, rerun with new `--rows`, `--columns`, or a resolution no higher than before, and the same other options: the earlier picks are laid out again, which takes seconds and costs nothing. With `--transcript`, vision ranks against that same transcript, and `--export` writes it as Markdown beside the collages.
+Use `--vision` when pictures add context, and read the collages alongside the transcript. A run usually takes a few minutes, mostly the download, and the defaults suit most videos. To change only the layout, rerun with new `--rows`, `--columns`, or a resolution no higher than before, and the same other options: the earlier picks are laid out again, which takes seconds and costs nothing, and `--fresh` picks again instead. With `--transcript`, vision ranks against that same transcript, and `--export` writes it as Markdown beside the collages.
+
+### Download
+
+```bash
+youtube video URL_OR_ID --download
+youtube video URL_OR_ID --download audio --start 1:15 --end 2:30
+```
+
+| Option | Required | Default | What it does |
+| --- | --- | --- | --- |
+| `--download [video\|audio]` | Optional | Off; `video` when left out | Saves the video with its sound as an mp4, or the sound alone as an m4a, to a file named for the title, channel, video quality, and range in the working directory; `download` holds its `path`, and a `message` when an earlier download of the same request came back instead. |
+| `--quality 360p\|480p\|720p\|1080p` | Optional | 1080p | Caps the video's resolution; the sound is the same at every level. |
+| `--start TIME` | Optional | The beginning | Keeps the video from this time, as seconds, `MM:SS`, or `HH:MM:SS`; a video opens at the keyframe at or before it, up to a few seconds early. |
+| `--end TIME` | Optional | The end | Keeps the video up to this time. |
+| `--fresh` | Optional | Off: an earlier identical download comes back | Downloads again even when the same file is already there. |
+
+Use it when the user wants the file itself, or to hand a video or its sound to another tool, such as a model that watches video: 360p or 480p uploads much faster and loses little for a model. With `--start` and `--end`, only that range is fetched, so take the times from the transcript to clip one moment. With `--vision`, a whole video downloaded at 720p or more is where the screenshots are picked from, so the video downloads once.
 
 ### Comments
 
@@ -164,7 +183,7 @@ youtube channel @OpenAI --days 7
 
 ## Setup
 
-Install from the toolkit's checkout with `uv run python scripts/install.py`, adding `--vision`, `--embeddings`, or `--stt` as needed; vision and speech-to-text also need `ffmpeg`.
+Install from the toolkit's checkout with `uv run python scripts/install.py`, adding `--vision`, `--embeddings`, or `--stt` as needed; vision, speech-to-text, and downloads also need `ffmpeg`.
 
 | Command | What it does |
 | --- | --- |

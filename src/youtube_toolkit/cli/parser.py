@@ -16,6 +16,7 @@ from ..config import (
     MAX_VISION_ROWS,
     VISION_RESOLUTIONS,
 )
+from ..export import DEFAULT_DOWNLOAD_QUALITY, DOWNLOAD_HEIGHTS
 from ..search import DEFAULT_CHANNEL_SEARCH_LIMIT, DEFAULT_YOUTUBE_SEARCH_LIMIT
 from ..youtube import DEFAULT_COMMENT_LIMIT, DEFAULT_LAST_VIDEOS, MAX_COMMENT_LIMIT
 from . import commands
@@ -63,7 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _add_video_command(subparsers: argparse._SubParsersAction) -> None:
     video_parser = subparsers.add_parser(
         "video",
-        help="Fetch a video's metadata, transcript, comments, or screenshots",
+        help="Fetch a video's metadata, transcript, comments, or screenshots, or download it",
         description="Each part flag adds that part to the output, keyed by part; with none, the output holds the metadata alone. Options for a part require its flag; --stt and --translate also work with --summary.",
     )
     video_parser.add_argument(
@@ -105,11 +106,6 @@ def _add_video_command(subparsers: argparse._SubParsersAction) -> None:
         action="store_true",
         default=None,
         help="Write metadata and transcript to a title-and-channel .txt file in the working directory; with --vision, a .md file beside the collages instead",
-    )
-    transcript.add_argument(
-        "--force",
-        action="store_true",
-        help="Replace an existing transcript export; requires --export",
     )
     summary = video_parser.add_argument_group("summary")
     summary.add_argument(
@@ -168,6 +164,29 @@ def _add_video_command(subparsers: argparse._SubParsersAction) -> None:
         action=argparse.BooleanOptionalAction,
         help="Delete the downloaded video and candidate frames after processing (default: on)",
     )
+    download = video_parser.add_argument_group("download")
+    download.add_argument(
+        "--download",
+        nargs="?",
+        const="video",
+        choices=("video", "audio"),
+        help="Save the video with its sound as an mp4, or with audio the sound alone as an m4a, to the working directory under the title, channel, quality, and range; a file already there for the same request comes back as it is",
+    )
+    download.add_argument(
+        "--quality",
+        choices=list(DOWNLOAD_HEIGHTS),
+        help=f"Largest video resolution (default: {DEFAULT_DOWNLOAD_QUALITY}); the sound is the same at every level",
+    )
+    download.add_argument(
+        "--start",
+        metavar="TIME",
+        help="Download from this time, as seconds, MM:SS, or HH:MM:SS; a video opens at the keyframe at or before it, up to a few seconds early",
+    )
+    download.add_argument(
+        "--end",
+        metavar="TIME",
+        help="Download up to this time (default: the end of the video)",
+    )
     comments = video_parser.add_argument_group("comments")
     comments.add_argument(
         "--comments",
@@ -187,6 +206,11 @@ def _add_video_command(subparsers: argparse._SubParsersAction) -> None:
         "--metadata",
         action="store_true",
         help="Video facts, including the description and chapters",
+    )
+    video_parser.add_argument(
+        "--fresh",
+        action="store_true",
+        help="Redo what an earlier run left: replace an existing transcript export, pick screenshots afresh instead of reusing earlier picks, or download again instead of returning the file already there; requires --export, --vision, or --download",
     )
     video_parser.set_defaults(handler=commands.video)
 

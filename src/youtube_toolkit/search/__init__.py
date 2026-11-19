@@ -6,6 +6,7 @@ from .request import (
     DEFAULT_YOUTUBE_SEARCH_LIMIT,
     ChannelTarget,
     SearchRequest,
+    parse_duration,
 )
 from .workflow import search_videos
 
@@ -16,5 +17,6 @@ __all__ = [
     "ChunkResult",
     "SearchRequest",
     "VideoResult",
+    "parse_duration",
     "search_videos",
 ]

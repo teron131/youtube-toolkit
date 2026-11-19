@@ -4,12 +4,13 @@ import argparse
 from dataclasses import replace
 import json
 import os
+from pathlib import Path
 from types import SimpleNamespace
 import warnings
 
 import pytest
 
-from youtube_toolkit import config, summary
+from youtube_toolkit import config, export, summary
 from youtube_toolkit.cli import commands, health, output, setup
 from youtube_toolkit.cli.__main__ import main
 from youtube_toolkit.cli.parser import build_parser
@@ -20,6 +21,7 @@ from youtube_toolkit.schemas import (
     VideoMetadata,
 )
 from youtube_toolkit.search.request import ChannelTarget, SearchRequest
+from youtube_toolkit.youtube import YtDlpClient
 
 
 def test_parser_normalizes_string_arguments_before_handlers() -> None:
@@ -397,8 +399,8 @@ def test_video_transcript_export_writes_metadata_and_plain_transcript(
 
     timed = ["video", "JpSHyEIZ_bo", "--transcript", "--timestamps", "--export"]
     assert main(timed) == 1
-    assert "use --force to replace it" in capsys.readouterr().err
-    assert main([*timed, "--force"]) == 0
+    assert "rerun with --fresh to replace it" in capsys.readouterr().err
+    assert main([*timed, "--fresh"]) == 0
     assert export_path.read_text(encoding="utf-8").endswith(
         "\n[00:00:00] First sentence.\n[00:01:02] Second sentence.\n"
     )
@@ -427,6 +429,32 @@ def test_video_transcript_export_writes_metadata_and_plain_transcript(
         assert f"{header}\n" in path.read_text(encoding="utf-8")
     assert rewrites == [("zh-TW", False, True), (None, True, True)]
     assert export_path.exists()
+
+
+def test_a_speech_to_text_export_names_the_model_that_transcribed_it(
+    capsys, monkeypatch, tmp_path, metadata_calls
+) -> None:
+    document = TranscriptDocument(
+        metadata=VideoMetadata(
+            video_id="JpSHyEIZ_bo", url="https://www.youtube.com/watch?v=JpSHyEIZ_bo"
+        ),
+        language="yue",
+        source="speech-to-text",
+        segments=[TranscriptSegment(0.0, 2.5, "First sentence.")],
+        stt_model="grok-voice-transcribe-2.0",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        commands, "fetch_transcript", lambda _video_ref, **_options: document
+    )
+
+    assert main(["video", "JpSHyEIZ_bo", "--transcript", "--export"]) == 0
+
+    path = Path(json.loads(capsys.readouterr().out)["transcript"]["path"])
+    assert (
+        "Transcript source: speech-to-text\nTranscribed by: grok-voice-transcribe-2.0\n"
+        in path.read_text(encoding="utf-8")
+    )
 
 
 def test_video_parts_share_one_metadata_fetch_and_export_markdown_beside_collages(
@@ -460,7 +488,7 @@ def test_video_parts_share_one_metadata_fetch_and_export_markdown_beside_collage
         received.append(metadata)
         return document
 
-    def sample_vision(_video_ref, *, metadata, document):
+    def sample_vision(_video_ref, *, metadata, document, fresh, video_path):
         received.extend([metadata, document])
         return vision
 
@@ -582,10 +610,14 @@ def test_video_summary_alone_prints_only_the_summary(
         (["--transcript", "--translate"], "and --summary need LLM_API_KEY"),
         (["--summary"], "and --summary need LLM_API_KEY"),
         (["--vision", "--export"], "--export requires --transcript"),
-        (["--transcript", "--force"], "--force requires --export"),
+        (["--transcript", "--fresh"], "--fresh requires --export"),
         (["--comment-limit", "5"], "--comment-limit requires --comments"),
         (["--transcript", "--max-frames", "5"], "--max-frames requires --vision"),
         (["--no-auto-clean"], "--auto-clean requires --vision"),
+        (["--quality", "720p"], "--quality requires --download"),
+        (["--download", "audio", "--quality", "720p"], "only to video downloads"),
+        (["--download", "--start", "1::30"], "Invalid duration: 1::30"),
+        (["--fresh"], "--fresh requires --export, --vision, or --download"),
     ],
 )
 def test_video_part_options_require_their_part_before_any_fetch(
@@ -594,6 +626,161 @@ def test_video_part_options_require_their_part_before_any_fetch(
     assert main(["video", "JpSHyEIZ_bo", *arguments]) == 1
     assert message in capsys.readouterr().err
     assert metadata_calls == []
+
+
+@pytest.fixture
+def downloads(monkeypatch, tmp_path):
+    """The yt-dlp downloads asked for, each as its video, path, and options; the fake writes the file it is given."""
+    calls = []
+
+    class Client:
+        def metadata(self, _video_ref):
+            return {
+                "id": "JpSHyEIZ_bo",
+                "title": "Ray tracing",
+                "channel": "Example Channel",
+                "duration": 300,
+            }
+
+        def download_media(self, video_ref, path, **options):
+            calls.append((video_ref, path, options))
+            path.write_bytes(b"media")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(export.shutil, "which", lambda _name: "ffmpeg")
+    monkeypatch.setattr(commands, "YtDlpClient", Client)
+    return calls
+
+
+def test_a_video_downloads_whole_at_1080p_under_its_title_and_channel(
+    capsys, tmp_path, downloads
+) -> None:
+    assert main(["video", "JpSHyEIZ_bo", "--download"]) == 0
+
+    path = tmp_path / "Ray_tracing_Example_Channel_1080p.mp4"
+    assert json.loads(capsys.readouterr().out) == {
+        "download": {"path": str(path), "message": None}
+    }
+    assert downloads == [
+        (
+            "JpSHyEIZ_bo",
+            path,
+            {
+                "height": 1080,
+                "section": None,
+                "overwrite": False,
+                "timeout_seconds": 600,
+            },
+        )
+    ]
+
+
+def test_a_range_of_sound_downloads_alone_and_stops_at_the_videos_end(
+    capsys, tmp_path, downloads
+) -> None:
+    arguments = ["--download", "audio", "--start", "1:15", "--end", "9:00"]
+
+    assert main(["video", "JpSHyEIZ_bo", *arguments]) == 0
+
+    path = tmp_path / "Ray_tracing_Example_Channel_1m15s_5m0s.m4a"
+    assert json.loads(capsys.readouterr().out) == {
+        "download": {"path": str(path), "message": None}
+    }
+    assert downloads[0][2] == {
+        "height": None,
+        "section": (75.0, 300.0),
+        "overwrite": False,
+        "timeout_seconds": 600,
+    }
+
+
+def test_an_earlier_download_comes_back_with_a_message_unless_forced(
+    capsys, tmp_path, downloads
+) -> None:
+    earlier = tmp_path / "Ray_tracing_Example_Channel_720p_1m0s_2m0s.mp4"
+    earlier.write_bytes(b"earlier")
+    clip = ["video", "JpSHyEIZ_bo", "--download", "--quality", "720p"]
+    clip += ["--start", "1:00", "--end", "2:00"]
+
+    assert main(clip) == 0
+    download = json.loads(capsys.readouterr().out)["download"]
+    assert download["path"] == str(earlier)
+    assert "Already downloaded" in download["message"]
+    assert downloads == []
+    assert main([*clip[:-1], "2:01"]) == 0
+    assert main(["video", "JpSHyEIZ_bo", "--download", "--quality", "360p"]) == 0
+    assert [path.name for _, path, _ in downloads] == [
+        "Ray_tracing_Example_Channel_720p_1m0s_2m1s.mp4",
+        "Ray_tracing_Example_Channel_360p.mp4",
+    ]
+    assert main([*clip, "--fresh"]) == 0
+    assert downloads[-1][1] == earlier
+    assert downloads[-1][2]["overwrite"] is True
+
+
+def test_a_range_downloads_in_bounded_requests_youtube_does_not_throttle(
+    monkeypatch, tmp_path
+) -> None:
+    calls = []
+
+    def fake_run(command, capture_output, text, check, timeout):
+        calls.append(command)
+        Path(command[command.index("--output") + 1]).write_bytes(b"media")
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr("youtube_toolkit.youtube.client.subprocess.run", fake_run)
+
+    YtDlpClient().download_media(
+        "JpSHyEIZ_bo",
+        tmp_path / "clip.mp4",
+        height=1080,
+        section=(75.0, 150.0),
+        overwrite=False,
+        timeout_seconds=600,
+    )
+
+    command = calls[0]
+    assert command[command.index("--download-sections") + 1] == "*75.0-150.0"
+    assert command[command.index("--downloader-args") + 1].startswith(
+        "ffmpeg_i:-request_size "
+    )
+
+
+@pytest.mark.parametrize(
+    "arguments", [["--start", "4:00", "--end", "1:00"], ["--start", "5:00"]]
+)
+def test_a_range_that_holds_nothing_fails_before_downloading(
+    capsys, downloads, arguments
+) -> None:
+    assert main(["video", "JpSHyEIZ_bo", "--download", *arguments]) == 1
+    assert "must start before it ends" in capsys.readouterr().err
+    assert downloads == []
+
+
+@pytest.mark.parametrize(
+    ("arguments", "reused"),
+    [([], True), (["--quality", "480p"], False), (["--end", "1:00"], False)],
+)
+def test_vision_picks_from_a_whole_video_downloaded_at_720p_or_more(
+    monkeypatch, downloads, arguments, reused
+) -> None:
+    from youtube_toolkit import vision as vision_package
+
+    received = []
+
+    def sample_vision(_video_ref, *, video_path, **_options):
+        received.append(video_path)
+        return {"frame_count": 1}
+
+    monkeypatch.setattr(commands, "require_vision", lambda: None)
+    monkeypatch.setattr(vision_package, "sample_vision", sample_vision)
+    args = build_parser().parse_args(
+        ["video", "JpSHyEIZ_bo", "--download", "--vision", *arguments]
+    )
+
+    result = commands.video(args)
+
+    assert received == [Path(result["download"]["path"]) if reused else None]
 
 
 @pytest.mark.parametrize(("flags", "language"), [([], "en"), (["ja"], "ja")])

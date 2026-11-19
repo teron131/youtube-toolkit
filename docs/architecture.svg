@@ -7,14 +7,15 @@ Evidence (re-verify on update):
   Transcript: transcript.py fetch_transcript, captions first, speech-to-text when there are none or when asked (stt/)
   Refine and translate keep each line's timing with timestamps: rewrite/timestamped.py; LLM: llm.py, config.py llm_config
   Summary from sound bites picked out of the transcript: summary.py
+  Download: download.py download_media, youtube/client.py download_media (yt-dlp with ffmpeg, a whole video or a start-to-end range); a whole download at 720p or more feeds vision (cli/commands.py)
   Vision: cli/health.py require_vision (the vision install), ffmpeg in vision/workflow.py; ranking by the decision model, else embeddings, else time slots
   Search: search/workflow.py; semantic mode ranks by transcript embeddings (search/semantic.py text_embedder)
   Channel: youtube/channels.py fetch_channel_videos
   Switches: README overview; cli/setup.py, cli/health.py; config.py for which key or local model turns each on
 -->
-<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="640" viewBox="0 0 1120 640" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="698" viewBox="0 0 1120 698" role="img" aria-labelledby="title desc">
   <title id="title">How the YouTube Toolkit commands fit together</title>
-  <desc id="desc">The toolkit drawn as an editing timeline of one video. On the left, youtube search, natively or semantically with embeddings, and youtube channel find videos, and one is passed on. The youtube video command is a stack of tracks along the video's timeline, one per flag: metadata with its chapters and a sponsor span, comments, and the transcript need no key, with speech-to-text standing in when a video has no captions. Below a divider, refine and translate, the summary, and vision are switched on by a model: the first two by an LLM, vision by the screenshots install, with frames ranked by a decision model or else embeddings. A row at the bottom lists the five things that can be switched on: screenshots, speech-to-text, embeddings, a decision model, and an LLM. A playhead plays across the tracks from left to right, jumps over the sponsor span, and starts again.</desc>
+  <desc id="desc">The toolkit drawn as an editing timeline of one video. On the left, youtube search, natively or semantically with embeddings, and youtube channel find videos, and one is passed on. The youtube video command is a stack of tracks along the video's timeline, one per flag: metadata with its chapters and a sponsor span, comments, the transcript, and the download need no key, with speech-to-text standing in when a video has no captions, and the download saving the picture and its sound whole or as a bracketed range. Below a divider, refine and translate, the summary, and vision are switched on by a model: the first two by an LLM, vision by the screenshots install, with frames ranked by a decision model or else embeddings. A row at the bottom lists the five things that can be switched on: screenshots, speech-to-text, embeddings, a decision model, and an LLM. A playhead plays across the tracks from left to right, jumps over the sponsor span, and starts again.</desc>
   <defs>
     <style>
     .flag { font: 700 15px ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; fill: #F3EFE6; }
@@ -46,8 +47,11 @@ Evidence (re-verify on update):
       <rect width="7" height="7" fill="#2A2A32"/>
       <rect width="3" height="7" fill="#4A4A55"/>
     </pattern>
+    <pattern id="frames" x="455" y="270" width="19" height="18" patternUnits="userSpaceOnUse">
+      <rect width="16" height="18" rx="2" fill="#E8E1CF"/>
+    </pattern>
   </defs>
-  <rect width="1120" height="640" rx="16" fill="#131316"/>
+  <rect width="1120" height="698" rx="16" fill="#131316"/>
   <g id="find">
   <text x="28" y="46" class="cap">FIND A VIDEO</text>
   <rect x="28" y="60" width="232" height="122" rx="10" fill="#1B1B20"/>
@@ -60,7 +64,7 @@ Evidence (re-verify on update):
   <rect x="28" y="190" width="232" height="66" rx="10" fill="#1B1B20"/>
   <text x="44" y="218" class="flag">youtube channel</text>
   <text x="44" y="239" class="note">a channel's latest uploads</text>
-  <rect x="28" y="264" width="232" height="220" rx="10" fill="#1B1B20"/>
+  <rect x="28" y="264" width="232" height="278" rx="10" fill="#1B1B20"/>
   <g transform="translate(42 282)"><rect x="0" y="0" width="55" height="31" rx="2" fill="#3A3E4A"/><circle cx="27.5" cy="12.0312" r="6.30208" fill="#C9B8A4"/><path d="M13.75 30.9375 Q27.5 13.75 41.25 30.9375 Z" fill="#C9B8A4"/><rect x="0" y="0" width="55" height="31" rx="2" fill="none" stroke="#000" stroke-opacity="0.45"/></g>
   <rect x="108" y="286" width="112" height="8" rx="4" fill="#4A4A55"/>
   <rect x="108" y="302" width="92" height="6" rx="3" fill="#35353F"/>
@@ -74,12 +78,15 @@ Evidence (re-verify on update):
   <g transform="translate(42 435)"><rect x="0" y="0" width="55" height="31" rx="2" fill="#161B26"/><rect x="5.72917" y="4.58333" width="20.625" height="2.29167" fill="#A998FF"/><rect x="10.3125" y="9.39583" width="27.5" height="2.29167" fill="#7FA2C9"/><rect x="10.3125" y="14.2083" width="16.0417" height="2.29167" fill="#96DA5E"/><rect x="14.8958" y="19.0208" width="22.9167" height="2.29167" fill="#7FA2C9"/><rect x="5.72917" y="23.8333" width="11.4583" height="2.29167" fill="#A998FF"/><rect x="0" y="0" width="55" height="31" rx="2" fill="none" stroke="#000" stroke-opacity="0.45"/></g>
   <rect x="108" y="439" width="128" height="8" rx="4" fill="#4A4A55"/>
   <rect x="108" y="455" width="78" height="6" rx="3" fill="#35353F"/>
+  <g transform="translate(42 486)"><rect x="0" y="0" width="55" height="31" rx="2" fill="#20222C"/><rect x="8" y="17" width="7" height="9" fill="#40D2BD"/><rect x="18.5" y="11.5" width="7" height="14.5" fill="#40D2BD"/><rect x="29" y="15" width="7" height="11" fill="#40D2BD"/><rect x="39.5" y="5.5" width="7" height="20.5" fill="#FFB54A"/><rect x="0" y="0" width="55" height="31" rx="2" fill="none" stroke="#000" stroke-opacity="0.45"/></g>
+  <rect x="108" y="490" width="112" height="8" rx="4" fill="#4A4A55"/>
+  <rect x="108" y="506" width="92" height="6" rx="3" fill="#35353F"/>
   <path d="M254 348.5 H272 a8 8 0 0 0 8 -8 V91 a8 8 0 0 1 8 -8 H288" fill="none" stroke="#E8E1CF" stroke-width="2"/>
   <path d="M298 83 l-11 -6 v12 z" fill="#E8E1CF"/>
   </g>
   <g id="video">
   <text x="300" y="46" class="cap">TAKE WHAT YOU NEED FROM IT</text>
-  <rect x="300" y="60" width="792" height="424" rx="10" fill="#1B1B20"/>
+  <rect x="300" y="60" width="792" height="482" rx="10" fill="#1B1B20"/>
   <text x="320" y="88" class="flag">youtube video URL</text>
   <text x="1076" y="88" class="note" text-anchor="end">each flag adds a part, all from one fetch of the video</text>
   <g id="track-metadata">
@@ -180,122 +187,133 @@ Evidence (re-verify on update):
   <circle cx="917" cy="223" r="4.25" fill="none" stroke="#7B786F" stroke-width="1.5"/><text x="928" y="227.5" class="note">no key</text>
   <text x="912" y="245" class="note">or</text><circle cx="935.4" cy="241" r="5" fill="#FFB54A"/><text x="946.4" y="245.5" class="note-i">speech-to-text</text>
   </g>
-  <text x="316" y="280.5" class="cap" textLength="176" lengthAdjust="spacing">SWITCHED ON BY A MODEL</text>
-  <line x1="504" y1="276" x2="1076" y2="276" stroke="#30303A" stroke-width="1" stroke-dasharray="2 5"/>
-  <g id="track-rewrite">
-  <rect x="452" y="296" width="444" height="50" rx="6" fill="#23232A"/><line x1="563" y1="296" x2="563" y2="346" stroke="#30303A" stroke-width="1"/><line x1="674" y1="296" x2="674" y2="346" stroke="#30303A" stroke-width="1"/><line x1="785" y1="296" x2="785" y2="346" stroke="#30303A" stroke-width="1"/>
-  <text x="316" y="317" class="flag-s">--refine</text>
-  <text x="316" y="336" class="flag-s">--translate</text>
-  <rect x="455" y="306" width="30" height="30" rx="4" fill="#A998FF"/>
-  <rect x="460" y="319" width="20" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
-  <rect x="488" y="306" width="22" height="30" rx="4" fill="#A998FF"/>
-  <rect x="493" y="319" width="12" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
-  <rect x="513" y="306" width="38" height="30" rx="4" fill="#A998FF"/>
-  <rect x="518" y="319" width="28" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
-  <rect x="554" y="306" width="26" height="30" rx="4" fill="#A998FF"/>
-  <rect x="559" y="319" width="16" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
-  <rect x="583" y="306" width="34" height="30" rx="4" fill="#A998FF"/>
-  <rect x="588" y="319" width="24" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
-  <rect x="620" y="306" width="20" height="30" rx="4" fill="#A998FF"/>
-  <rect x="625" y="319" width="10" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
-  <rect x="643" y="306" width="32" height="30" rx="4" fill="#A998FF"/>
-  <rect x="648" y="319" width="22" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
-  <rect x="678" y="306" width="21" height="30" rx="4" fill="#A998FF"/>
-  <rect x="683" y="319" width="11" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
-  <rect x="761" y="306" width="40" height="30" rx="4" fill="#A998FF"/>
-  <rect x="766" y="319" width="30" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
-  <rect x="804" y="306" width="28" height="30" rx="4" fill="#A998FF"/>
-  <rect x="809" y="319" width="18" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
-  <rect x="835" y="306" width="22" height="30" rx="4" fill="#A998FF"/>
-  <rect x="840" y="319" width="12" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
-  <rect x="860" y="306" width="33" height="30" rx="4" fill="#A998FF"/>
-  <rect x="865" y="319" width="23" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
-  <circle cx="917" cy="321" r="5" fill="#A998FF"/><text x="928" y="325.5" class="note-i">LLM</text>
+  <g id="track-download">
+  <rect x="452" y="264" width="444" height="50" rx="6" fill="#23232A"/><line x1="563" y1="264" x2="563" y2="314" stroke="#30303A" stroke-width="1"/><line x1="674" y1="264" x2="674" y2="314" stroke="#30303A" stroke-width="1"/><line x1="785" y1="264" x2="785" y2="314" stroke="#30303A" stroke-width="1"/>
+  <text x="316" y="294" class="flag-s">--download</text>
+  <rect x="455" y="270" width="434" height="18" fill="url(#frames)"/>
+  <path d="M457 298.8V301.2M461 295.6V304.4M465 293.9V306.1M469 294.2V305.8M473 296.2V303.8M477 298.5V301.5M481 297.6V302.4M485 297.6V302.4M489 298.5V301.5M493 298.2V301.8M497 298.5V301.5M501 297.6V302.4M505 295.7V304.3M509 294.4V305.6M513 295.0V305.0M517 297.3V302.7M521 297.0V303.0M525 294.3V305.7M529 293.4V306.6M533 294.7V305.3M537 297.2V302.8M541 297.9V302.1M545 296.7V303.3M549 296.9V303.1M553 298.1V301.9M557 298.7V301.3M561 298.6V301.4M565 297.2V302.8M569 295.7V304.3M573 295.1V304.9M577 296.4V303.6M581 298.5V301.5M585 295.4V304.6M589 293.4V306.6M593 293.6V306.4M597 295.7V304.3M601 298.7V301.3M605 296.6V303.4M609 295.7V304.3M613 296.5V303.5M617 297.9V302.1M621 298.8V301.2M625 298.5V301.5M629 297.3V302.7M633 296.1V303.9M637 296.2V303.8M641 297.9V302.1M645 296.9V303.1M649 294.3V305.7M653 293.2V306.8M657 294.4V305.6M661 297.2V302.8M665 297.3V302.7M669 295.3V304.7M673 295.0V305.0M677 296.3V303.7M681 298.0V302.0M685 298.6V301.4M689 298.7V301.3M693 297.6V302.4M697 296.8V303.2M701 297.3V302.7M705 298.3V301.7M709 295.7V304.3M713 293.8V306.2M717 293.7V306.3M721 295.7V304.3M725 298.6V301.4M729 295.7V304.3M733 294.3V305.7M737 294.8V305.2M741 296.7V303.3M745 298.6V301.4M749 298.0V302.0M753 298.4V301.6M757 298.2V301.8M761 297.6V302.4M765 298.4V301.6M769 297.2V302.8M773 295.0V305.0M777 293.9V306.1M781 294.8V305.2M785 297.5V302.5M789 296.8V303.2M793 294.3V305.7M797 293.7V306.3M801 295.1V304.9M805 297.5V302.5M809 298.0V302.0M813 297.2V302.8M817 297.8V302.2M821 298.7V301.3M825 298.3V301.7M829 298.4V301.6M833 296.6V303.4M837 295.0V305.0M841 294.6V305.4M845 296.3V303.7M849 298.3V301.7M853 295.2V304.8M857 293.5V306.5M861 293.8V306.2M865 296.0V304.0M869 298.8V301.2M873 296.8V303.2M877 296.4V303.6M881 297.3V302.7M885 298.5V301.5M889 298.7V301.3" fill="none" stroke="#E8E1CF" stroke-width="2" stroke-opacity="0.7"/>
+  <rect x="455" y="268" width="106" height="42" fill="#131316" opacity="0.55"/>
+  <rect x="676" y="268" width="217" height="42" fill="#131316" opacity="0.55"/>
+  <path d="M568 266 H563 V312 H568 M669 266 H674 V312 H669" fill="none" stroke="#F3EFE6" stroke-width="2"/>
+  <circle cx="917" cy="281" r="4.25" fill="none" stroke="#7B786F" stroke-width="1.5"/><text x="928" y="285.5" class="note">no key</text>
+  <text x="912" y="303.5" class="note">whole or a range</text>
   </g>
-  <g id="track-summary">
+  <text x="316" y="338.5" class="cap" textLength="176" lengthAdjust="spacing">SWITCHED ON BY A MODEL</text>
+  <line x1="504" y1="334" x2="1076" y2="334" stroke="#30303A" stroke-width="1" stroke-dasharray="2 5"/>
+  <g id="track-rewrite">
   <rect x="452" y="354" width="444" height="50" rx="6" fill="#23232A"/><line x1="563" y1="354" x2="563" y2="404" stroke="#30303A" stroke-width="1"/><line x1="674" y1="354" x2="674" y2="404" stroke="#30303A" stroke-width="1"/><line x1="785" y1="354" x2="785" y2="404" stroke="#30303A" stroke-width="1"/>
-  <text x="316" y="384" class="flag-s">--summary</text>
-  <rect x="455" y="364" width="30" height="30" rx="4" fill="none" stroke="#3A3A45" stroke-width="1"/>
-  <rect x="488" y="364" width="22" height="30" rx="4" fill="none" stroke="#3A3A45" stroke-width="1"/>
-  <rect x="513" y="364" width="38" height="30" rx="4" fill="none" stroke="#3A3A45" stroke-width="1"/>
-  <rect x="554" y="364" width="26" height="30" rx="4" fill="none" stroke="#3A3A45" stroke-width="1"/>
-  <rect x="583" y="364" width="34" height="30" rx="4" fill="none" stroke="#3A3A45" stroke-width="1"/>
-  <rect x="620" y="364" width="20" height="30" rx="4" fill="none" stroke="#3A3A45" stroke-width="1"/>
-  <rect x="643" y="364" width="32" height="30" rx="4" fill="none" stroke="#3A3A45" stroke-width="1"/>
-  <rect x="678" y="364" width="21" height="30" rx="4" fill="none" stroke="#3A3A45" stroke-width="1"/>
-  <rect x="761" y="364" width="40" height="30" rx="4" fill="none" stroke="#3A3A45" stroke-width="1"/>
-  <rect x="804" y="364" width="28" height="30" rx="4" fill="none" stroke="#3A3A45" stroke-width="1"/>
-  <path d="M499 394 V398M600 394 V398M688.5 394 V398M818 394 V398M499 398 H858" fill="none" stroke="#A998FF" stroke-width="1.5" stroke-opacity="0.55" stroke-linecap="square"/>
+  <text x="316" y="375" class="flag-s">--refine</text>
+  <text x="316" y="394" class="flag-s">--translate</text>
+  <rect x="455" y="364" width="30" height="30" rx="4" fill="#A998FF"/>
+  <rect x="460" y="377" width="20" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
   <rect x="488" y="364" width="22" height="30" rx="4" fill="#A998FF"/>
   <rect x="493" y="377" width="12" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
+  <rect x="513" y="364" width="38" height="30" rx="4" fill="#A998FF"/>
+  <rect x="518" y="377" width="28" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
+  <rect x="554" y="364" width="26" height="30" rx="4" fill="#A998FF"/>
+  <rect x="559" y="377" width="16" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
   <rect x="583" y="364" width="34" height="30" rx="4" fill="#A998FF"/>
   <rect x="588" y="377" width="24" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
+  <rect x="620" y="364" width="20" height="30" rx="4" fill="#A998FF"/>
+  <rect x="625" y="377" width="10" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
+  <rect x="643" y="364" width="32" height="30" rx="4" fill="#A998FF"/>
+  <rect x="648" y="377" width="22" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
   <rect x="678" y="364" width="21" height="30" rx="4" fill="#A998FF"/>
   <rect x="683" y="377" width="11" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
+  <rect x="761" y="364" width="40" height="30" rx="4" fill="#A998FF"/>
+  <rect x="766" y="377" width="30" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
   <rect x="804" y="364" width="28" height="30" rx="4" fill="#A998FF"/>
   <rect x="809" y="377" width="18" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
-  <path d="M858 358 h20 l8 8 v34 h-28 z" fill="#A998FF"/>
-  <path d="M878 358 v8 h8 z" fill="#15151A" opacity="0.35"/>
-  <rect x="863" y="373.5" width="18" height="2.4" rx="1.2" fill="#15151A" opacity="0.6"/>
-  <rect x="863" y="379" width="18" height="2.4" rx="1.2" fill="#15151A" opacity="0.6"/>
-  <rect x="863" y="384.5" width="18" height="2.4" rx="1.2" fill="#15151A" opacity="0.6"/>
-  <rect x="863" y="390" width="12" height="2.4" rx="1.2" fill="#15151A" opacity="0.6"/>
+  <rect x="835" y="364" width="22" height="30" rx="4" fill="#A998FF"/>
+  <rect x="840" y="377" width="12" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
+  <rect x="860" y="364" width="33" height="30" rx="4" fill="#A998FF"/>
+  <rect x="865" y="377" width="23" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
   <circle cx="917" cy="379" r="5" fill="#A998FF"/><text x="928" y="383.5" class="note-i">LLM</text>
   </g>
+  <g id="track-summary">
+  <rect x="452" y="412" width="444" height="50" rx="6" fill="#23232A"/><line x1="563" y1="412" x2="563" y2="462" stroke="#30303A" stroke-width="1"/><line x1="674" y1="412" x2="674" y2="462" stroke="#30303A" stroke-width="1"/><line x1="785" y1="412" x2="785" y2="462" stroke="#30303A" stroke-width="1"/>
+  <text x="316" y="442" class="flag-s">--summary</text>
+  <rect x="455" y="422" width="30" height="30" rx="4" fill="none" stroke="#3A3A45" stroke-width="1"/>
+  <rect x="488" y="422" width="22" height="30" rx="4" fill="none" stroke="#3A3A45" stroke-width="1"/>
+  <rect x="513" y="422" width="38" height="30" rx="4" fill="none" stroke="#3A3A45" stroke-width="1"/>
+  <rect x="554" y="422" width="26" height="30" rx="4" fill="none" stroke="#3A3A45" stroke-width="1"/>
+  <rect x="583" y="422" width="34" height="30" rx="4" fill="none" stroke="#3A3A45" stroke-width="1"/>
+  <rect x="620" y="422" width="20" height="30" rx="4" fill="none" stroke="#3A3A45" stroke-width="1"/>
+  <rect x="643" y="422" width="32" height="30" rx="4" fill="none" stroke="#3A3A45" stroke-width="1"/>
+  <rect x="678" y="422" width="21" height="30" rx="4" fill="none" stroke="#3A3A45" stroke-width="1"/>
+  <rect x="761" y="422" width="40" height="30" rx="4" fill="none" stroke="#3A3A45" stroke-width="1"/>
+  <rect x="804" y="422" width="28" height="30" rx="4" fill="none" stroke="#3A3A45" stroke-width="1"/>
+  <path d="M499 452 V456M600 452 V456M688.5 452 V456M818 452 V456M499 456 H858" fill="none" stroke="#A998FF" stroke-width="1.5" stroke-opacity="0.55" stroke-linecap="square"/>
+  <rect x="488" y="422" width="22" height="30" rx="4" fill="#A998FF"/>
+  <rect x="493" y="435" width="12" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
+  <rect x="583" y="422" width="34" height="30" rx="4" fill="#A998FF"/>
+  <rect x="588" y="435" width="24" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
+  <rect x="678" y="422" width="21" height="30" rx="4" fill="#A998FF"/>
+  <rect x="683" y="435" width="11" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
+  <rect x="804" y="422" width="28" height="30" rx="4" fill="#A998FF"/>
+  <rect x="809" y="435" width="18" height="3" rx="1.5" fill="#15151A" opacity="0.55"/>
+  <path d="M858 416 h20 l8 8 v34 h-28 z" fill="#A998FF"/>
+  <path d="M878 416 v8 h8 z" fill="#15151A" opacity="0.35"/>
+  <rect x="863" y="431.5" width="18" height="2.4" rx="1.2" fill="#15151A" opacity="0.6"/>
+  <rect x="863" y="437" width="18" height="2.4" rx="1.2" fill="#15151A" opacity="0.6"/>
+  <rect x="863" y="442.5" width="18" height="2.4" rx="1.2" fill="#15151A" opacity="0.6"/>
+  <rect x="863" y="448" width="12" height="2.4" rx="1.2" fill="#15151A" opacity="0.6"/>
+  <circle cx="917" cy="437" r="5" fill="#A998FF"/><text x="928" y="441.5" class="note-i">LLM</text>
+  </g>
   <g id="track-vision">
-  <rect x="452" y="412" width="444" height="60" rx="6" fill="#23232A"/><line x1="563" y1="412" x2="563" y2="472" stroke="#30303A" stroke-width="1"/><line x1="674" y1="412" x2="674" y2="472" stroke="#30303A" stroke-width="1"/><line x1="785" y1="412" x2="785" y2="472" stroke="#30303A" stroke-width="1"/>
-  <text x="316" y="447" class="flag-s">--vision</text>
-  <rect x="465" y="424" width="54" height="36" rx="4" fill="#96DA5E"/>
-  <g transform="translate(468 427)"><rect x="0" y="0" width="48" height="27" rx="2" fill="#2B2140"/><rect x="9" y="9" width="30" height="4.5" fill="#F3EFE6"/><rect x="15" y="17" width="18" height="2.2" fill="#A998FF"/><rect x="0" y="0" width="48" height="27" rx="2" fill="none" stroke="#000" stroke-opacity="0.45"/></g>
-  <rect x="482" y="456" width="20" height="2" rx="1" fill="#15151A" opacity="0.55"/>
-  <rect x="537" y="424" width="54" height="36" rx="4" fill="#96DA5E"/>
-  <g transform="translate(540 427)"><rect x="0" y="0" width="48" height="27" rx="2" fill="#DCD6C6"/><rect x="5" y="5" width="22" height="4" fill="#15151A"/><rect x="5" y="13" width="34" height="2" fill="#8C877A"/><rect x="5" y="17.5" width="27" height="2" fill="#8C877A"/><rect x="5" y="22" width="20" height="2" fill="#8C877A"/><rect x="0" y="0" width="48" height="27" rx="2" fill="none" stroke="#000" stroke-opacity="0.45"/></g>
-  <rect x="554" y="456" width="20" height="2" rx="1" fill="#15151A" opacity="0.55"/>
-  <rect x="625" y="424" width="54" height="36" rx="4" fill="#96DA5E"/>
-  <g transform="translate(628 427)"><rect x="0" y="0" width="48" height="27" rx="2" fill="#20222C"/><rect x="7" y="15" width="6" height="8" fill="#40D2BD"/><rect x="16" y="10" width="6" height="13" fill="#40D2BD"/><rect x="25" y="13" width="6" height="10" fill="#40D2BD"/><rect x="34" y="5" width="6" height="18" fill="#FFB54A"/><rect x="0" y="0" width="48" height="27" rx="2" fill="none" stroke="#000" stroke-opacity="0.45"/></g>
-  <rect x="642" y="456" width="20" height="2" rx="1" fill="#15151A" opacity="0.55"/>
-  <rect x="771" y="424" width="54" height="36" rx="4" fill="#96DA5E"/>
-  <g transform="translate(774 427)"><rect x="0" y="0" width="48" height="27" rx="2" fill="#161B26"/><rect x="5" y="4" width="18" height="2" fill="#A998FF"/><rect x="9" y="8.2" width="24" height="2" fill="#7FA2C9"/><rect x="9" y="12.4" width="14" height="2" fill="#96DA5E"/><rect x="13" y="16.6" width="20" height="2" fill="#7FA2C9"/><rect x="5" y="20.8" width="10" height="2" fill="#A998FF"/><rect x="0" y="0" width="48" height="27" rx="2" fill="none" stroke="#000" stroke-opacity="0.45"/></g>
-  <rect x="788" y="456" width="20" height="2" rx="1" fill="#15151A" opacity="0.55"/>
-  <rect x="833" y="424" width="54" height="36" rx="4" fill="#96DA5E"/>
-  <g transform="translate(836 427)"><rect x="0" y="0" width="48" height="27" rx="2" fill="#2A4A6B"/><circle cx="35" cy="8" r="4" fill="#FFB54A"/><path d="M0 27 L14 12 L25 21 L33 15 L48 27 Z" fill="#274B3A"/><rect x="0" y="0" width="48" height="27" rx="2" fill="none" stroke="#000" stroke-opacity="0.45"/></g>
-  <rect x="850" y="456" width="20" height="2" rx="1" fill="#15151A" opacity="0.55"/>
-  <circle cx="917" cy="426" r="5" fill="#96DA5E"/><text x="928" y="430.5" class="note-i">screenshots</text>
-  <text x="912" y="448" class="note">by</text><circle cx="935.4" cy="444" r="5" fill="#FF7CC0"/><text x="946.4" y="448.5" class="note-i">decision model</text>
-  <text x="912" y="466" class="note">or</text><circle cx="935.4" cy="462" r="5" fill="#40D2BD"/><text x="946.4" y="466.5" class="note-i">embeddings</text>
+  <rect x="452" y="470" width="444" height="60" rx="6" fill="#23232A"/><line x1="563" y1="470" x2="563" y2="530" stroke="#30303A" stroke-width="1"/><line x1="674" y1="470" x2="674" y2="530" stroke="#30303A" stroke-width="1"/><line x1="785" y1="470" x2="785" y2="530" stroke="#30303A" stroke-width="1"/>
+  <text x="316" y="505" class="flag-s">--vision</text>
+  <rect x="465" y="482" width="54" height="36" rx="4" fill="#96DA5E"/>
+  <g transform="translate(468 485)"><rect x="0" y="0" width="48" height="27" rx="2" fill="#2B2140"/><rect x="9" y="9" width="30" height="4.5" fill="#F3EFE6"/><rect x="15" y="17" width="18" height="2.2" fill="#A998FF"/><rect x="0" y="0" width="48" height="27" rx="2" fill="none" stroke="#000" stroke-opacity="0.45"/></g>
+  <rect x="482" y="514" width="20" height="2" rx="1" fill="#15151A" opacity="0.55"/>
+  <rect x="537" y="482" width="54" height="36" rx="4" fill="#96DA5E"/>
+  <g transform="translate(540 485)"><rect x="0" y="0" width="48" height="27" rx="2" fill="#DCD6C6"/><rect x="5" y="5" width="22" height="4" fill="#15151A"/><rect x="5" y="13" width="34" height="2" fill="#8C877A"/><rect x="5" y="17.5" width="27" height="2" fill="#8C877A"/><rect x="5" y="22" width="20" height="2" fill="#8C877A"/><rect x="0" y="0" width="48" height="27" rx="2" fill="none" stroke="#000" stroke-opacity="0.45"/></g>
+  <rect x="554" y="514" width="20" height="2" rx="1" fill="#15151A" opacity="0.55"/>
+  <rect x="625" y="482" width="54" height="36" rx="4" fill="#96DA5E"/>
+  <g transform="translate(628 485)"><rect x="0" y="0" width="48" height="27" rx="2" fill="#20222C"/><rect x="7" y="15" width="6" height="8" fill="#40D2BD"/><rect x="16" y="10" width="6" height="13" fill="#40D2BD"/><rect x="25" y="13" width="6" height="10" fill="#40D2BD"/><rect x="34" y="5" width="6" height="18" fill="#FFB54A"/><rect x="0" y="0" width="48" height="27" rx="2" fill="none" stroke="#000" stroke-opacity="0.45"/></g>
+  <rect x="642" y="514" width="20" height="2" rx="1" fill="#15151A" opacity="0.55"/>
+  <rect x="771" y="482" width="54" height="36" rx="4" fill="#96DA5E"/>
+  <g transform="translate(774 485)"><rect x="0" y="0" width="48" height="27" rx="2" fill="#161B26"/><rect x="5" y="4" width="18" height="2" fill="#A998FF"/><rect x="9" y="8.2" width="24" height="2" fill="#7FA2C9"/><rect x="9" y="12.4" width="14" height="2" fill="#96DA5E"/><rect x="13" y="16.6" width="20" height="2" fill="#7FA2C9"/><rect x="5" y="20.8" width="10" height="2" fill="#A998FF"/><rect x="0" y="0" width="48" height="27" rx="2" fill="none" stroke="#000" stroke-opacity="0.45"/></g>
+  <rect x="788" y="514" width="20" height="2" rx="1" fill="#15151A" opacity="0.55"/>
+  <rect x="833" y="482" width="54" height="36" rx="4" fill="#96DA5E"/>
+  <g transform="translate(836 485)"><rect x="0" y="0" width="48" height="27" rx="2" fill="#2A4A6B"/><circle cx="35" cy="8" r="4" fill="#FFB54A"/><path d="M0 27 L14 12 L25 21 L33 15 L48 27 Z" fill="#274B3A"/><rect x="0" y="0" width="48" height="27" rx="2" fill="none" stroke="#000" stroke-opacity="0.45"/></g>
+  <rect x="850" y="514" width="20" height="2" rx="1" fill="#15151A" opacity="0.55"/>
+  <circle cx="917" cy="484" r="5" fill="#96DA5E"/><text x="928" y="488.5" class="note-i">screenshots</text>
+  <text x="912" y="506" class="note">by</text><circle cx="935.4" cy="502" r="5" fill="#FF7CC0"/><text x="946.4" y="506.5" class="note-i">decision model</text>
+  <text x="912" y="524" class="note">or</text><circle cx="935.4" cy="520" r="5" fill="#40D2BD"/><text x="946.4" y="524.5" class="note-i">embeddings</text>
   </g>
   <rect x="702" y="206" width="56" height="50" fill="url(#hatch)" opacity="0.5"/>
-  <rect x="702" y="412" width="56" height="60" fill="url(#hatch)" opacity="0.5"/>
-  <g id="playhead"><line x1="664" y1="100" x2="664" y2="472" stroke="#FF4438" stroke-width="2"/>
+  <rect x="702" y="470" width="56" height="60" fill="url(#hatch)" opacity="0.5"/>
+  <g id="playhead"><line x1="664" y1="100" x2="664" y2="530" stroke="#FF4438" stroke-width="2"/>
   <path d="M657 96 h14 v9 l-7 7 l-7 -7 z" fill="#FF4438"/></g>
   </g>
   <g id="switches">
-  <text x="28" y="520" class="cap">FIVE THINGS YOU CAN SWITCH ON</text>
-  <text x="1092" y="520" class="note" text-anchor="end">youtube setup saves the keys, youtube doctor shows what is on</text>
-  <rect x="28" y="534" width="204.8" height="78" rx="10" fill="#1B1B20"/>
-  <circle cx="50" cy="561" r="11" fill="#96DA5E" opacity="0.22"/>
-  <circle cx="50" cy="561" r="6" fill="#96DA5E"/>
-  <text x="70" y="566" class="cap-i">SCREENSHOTS</text>
-  <text x="44" y="594" class="note">the vision extra, ffmpeg</text>
-  <rect x="242.8" y="534" width="204.8" height="78" rx="10" fill="#1B1B20"/>
-  <circle cx="264.8" cy="561" r="11" fill="#FFB54A" opacity="0.22"/>
-  <circle cx="264.8" cy="561" r="6" fill="#FFB54A"/>
-  <text x="284.8" y="566" class="cap-i">SPEECH-TO-TEXT</text>
-  <text x="258.8" y="594" class="note">a key, or a local model</text>
-  <rect x="457.6" y="534" width="204.8" height="78" rx="10" fill="#1B1B20"/>
-  <circle cx="479.6" cy="561" r="11" fill="#40D2BD" opacity="0.22"/>
-  <circle cx="479.6" cy="561" r="6" fill="#40D2BD"/>
-  <text x="499.6" y="566" class="cap-i">EMBEDDINGS</text>
-  <text x="473.6" y="594" class="note">a key, or a local model</text>
-  <rect x="672.4" y="534" width="204.8" height="78" rx="10" fill="#1B1B20"/>
-  <circle cx="694.4" cy="561" r="11" fill="#FF7CC0" opacity="0.22"/>
-  <circle cx="694.4" cy="561" r="6" fill="#FF7CC0"/>
-  <text x="714.4" y="566" class="cap-i">DECISION MODEL</text>
-  <text x="688.4" y="594" class="note">a key</text>
-  <rect x="887.2" y="534" width="204.8" height="78" rx="10" fill="#1B1B20"/>
-  <circle cx="909.2" cy="561" r="11" fill="#A998FF" opacity="0.22"/>
-  <circle cx="909.2" cy="561" r="6" fill="#A998FF"/>
-  <text x="929.2" y="566" class="cap-i">LLM</text>
-  <text x="903.2" y="594" class="note">a key</text>
+  <text x="28" y="578" class="cap">FIVE THINGS YOU CAN SWITCH ON</text>
+  <text x="1092" y="578" class="note" text-anchor="end">youtube setup saves the keys, youtube doctor shows what is on</text>
+  <rect x="28" y="592" width="204.8" height="78" rx="10" fill="#1B1B20"/>
+  <circle cx="50" cy="619" r="11" fill="#96DA5E" opacity="0.22"/>
+  <circle cx="50" cy="619" r="6" fill="#96DA5E"/>
+  <text x="70" y="624" class="cap-i">SCREENSHOTS</text>
+  <text x="44" y="652" class="note">the vision extra, ffmpeg</text>
+  <rect x="242.8" y="592" width="204.8" height="78" rx="10" fill="#1B1B20"/>
+  <circle cx="264.8" cy="619" r="11" fill="#FFB54A" opacity="0.22"/>
+  <circle cx="264.8" cy="619" r="6" fill="#FFB54A"/>
+  <text x="284.8" y="624" class="cap-i">SPEECH-TO-TEXT</text>
+  <text x="258.8" y="652" class="note">a key, or a local model</text>
+  <rect x="457.6" y="592" width="204.8" height="78" rx="10" fill="#1B1B20"/>
+  <circle cx="479.6" cy="619" r="11" fill="#40D2BD" opacity="0.22"/>
+  <circle cx="479.6" cy="619" r="6" fill="#40D2BD"/>
+  <text x="499.6" y="624" class="cap-i">EMBEDDINGS</text>
+  <text x="473.6" y="652" class="note">a key, or a local model</text>
+  <rect x="672.4" y="592" width="204.8" height="78" rx="10" fill="#1B1B20"/>
+  <circle cx="694.4" cy="619" r="11" fill="#FF7CC0" opacity="0.22"/>
+  <circle cx="694.4" cy="619" r="6" fill="#FF7CC0"/>
+  <text x="714.4" y="624" class="cap-i">DECISION MODEL</text>
+  <text x="688.4" y="652" class="note">a key</text>
+  <rect x="887.2" y="592" width="204.8" height="78" rx="10" fill="#1B1B20"/>
+  <circle cx="909.2" cy="619" r="11" fill="#A998FF" opacity="0.22"/>
+  <circle cx="909.2" cy="619" r="6" fill="#A998FF"/>
+  <text x="929.2" y="624" class="cap-i">LLM</text>
+  <text x="903.2" y="652" class="note">a key</text>
   </g>
 </svg>

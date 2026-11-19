@@ -156,12 +156,12 @@ def normalize_filter_date(value: str) -> str:
 
 
 def parse_duration(value: str | None) -> float | None:
-    """Parse seconds, MM:SS, or HH:MM:SS duration filters into seconds."""
+    """Seconds, MM:SS, or HH:MM:SS into seconds, for search's length filters and download ranges alike."""
     if value is None:
         return None
     stripped = value.strip()
     if not stripped:
-        raise ValueError("duration filters must be non-empty")
+        raise ValueError("durations must be non-empty")
     if stripped.isdigit():
         return float(stripped)
 

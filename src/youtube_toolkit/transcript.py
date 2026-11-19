@@ -135,4 +135,5 @@ def _fetch_stt_transcript(
         source="speech-to-text",
         segments=transcription.segments
         or [TranscriptSegment(start_seconds=0, end_seconds=0, text=transcription.text)],
+        stt_model=transcription.model,
     )

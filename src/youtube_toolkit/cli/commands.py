@@ -8,9 +8,12 @@ from functools import cache, partial
 from pathlib import Path
 from typing import Any
 
-from ..config import llm_config
+from ..config import VISION_RESOLUTIONS, llm_config
 from ..export import (
+    DEFAULT_DOWNLOAD_QUALITY,
+    DOWNLOAD_HEIGHTS,
     TranscriptExportResult,
+    download_media,
     write_markdown_export,
     write_text_export,
 )
@@ -21,6 +24,7 @@ from ..search import (
     ChunkResult,
     SearchRequest,
     VideoResult,
+    parse_duration,
     search_videos,
 )
 from ..stt import (
@@ -54,8 +58,11 @@ PART_OPTIONS = {
     ("transcript",): ("timestamps", "refine", "export"),
     ("transcript", "summary"): ("stt", "translate"),
     ("vision",): tuple(VISION_OPTIONS),
+    ("download",): ("quality", "start", "end"),
     ("comments",): ("comment_limit",),
 }
+# Vision picks from its own download at 720p, its largest screenshot size, so a whole video downloaded at least that tall serves it instead.
+VISION_SOURCE_HEIGHT = max(height for _, height in VISION_RESOLUTIONS.values())
 
 
 def video(args: argparse.Namespace) -> dict[str, Any]:
@@ -67,8 +74,13 @@ def video(args: argparse.Namespace) -> dict[str, Any]:
             if getattr(args, option) is not None:
                 flags = " or ".join(f"--{part}" for part in parts)
                 raise ValueError(f"--{option.replace('_', '-')} requires {flags}")
-    if args.force and not args.export:
-        raise ValueError("--force requires --export")
+    if args.fresh and not (args.export or args.vision or args.download):
+        raise ValueError("--fresh requires --export, --vision, or --download")
+    if args.download == "audio" and args.quality is not None:
+        raise ValueError("--quality applies only to video downloads")
+    start = parse_duration(args.start)
+    end = parse_duration(args.end)
+    quality = args.quality or DEFAULT_DOWNLOAD_QUALITY
     if args.vision:
         require_vision()
     llm = None
@@ -85,6 +97,7 @@ def video(args: argparse.Namespace) -> dict[str, Any]:
         or args.summary is not None
         or args.comments is not None
         or args.vision
+        or args.download
     )
     metadata = (
         asdict(VideoMetadata.from_yt_dlp(payload()))
@@ -120,14 +133,38 @@ def video(args: argparse.Namespace) -> dict[str, Any]:
         summary = summarize_transcript(
             document, llm, language=args.summary or args.translate
         )
+    download = (
+        download_media(
+            VideoMetadata.from_yt_dlp(payload()),
+            args.download,
+            quality=quality,
+            start=start,
+            end=end,
+            fresh=args.fresh,
+            client=client,
+        )
+        if args.download
+        else None
+    )
     vision = None
     if args.vision:
         from ..vision import sample_vision
 
+        downloaded_video = (
+            Path(download["path"])
+            if download is not None
+            and args.download == "video"
+            and start is None
+            and end is None
+            and DOWNLOAD_HEIGHTS[quality] >= VISION_SOURCE_HEIGHT
+            else None
+        )
         vision = sample_vision(
             args.video_ref,
             metadata=payload(),
             document=document,
+            fresh=args.fresh,
+            video_path=downloaded_video,
             **{
                 parameter: getattr(args, option)
                 for option, parameter in VISION_OPTIONS.items()
@@ -150,6 +187,7 @@ def video(args: argparse.Namespace) -> dict[str, Any]:
         else _transcript(document, args, vision),
         "summary": summary,
         "vision": vision,
+        "download": download,
         "comments": comments,
         "metadata": metadata,
     }
@@ -167,7 +205,7 @@ def _transcript(
             document, Path(vision["directory"]), timestamps=timestamps
         )
     if args.export:
-        return write_text_export(document, timestamps=timestamps, force=args.force)
+        return write_text_export(document, timestamps=timestamps, fresh=args.fresh)
     if timestamps:
         return [asdict(segment) for segment in document.segments]
     return document.text

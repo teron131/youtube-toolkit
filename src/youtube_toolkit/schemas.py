@@ -85,6 +85,7 @@ class SpeechTranscription:
 
     text: str
     segments: list[TranscriptSegment]
+    model: str
     language: str | None = None
 
 
@@ -107,6 +108,7 @@ class TranscriptDocument:
     source: TranscriptSource
     segments: list[TranscriptSegment]
     rewrite: TranscriptRewrite | None = None
+    stt_model: str | None = None
 
     @property
     def text(self) -> str:

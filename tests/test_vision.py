@@ -157,6 +157,9 @@ def test_local_selection_reports_its_reason_and_cleans_up(
     third = workflow.sample_vision(VIDEO_ID, local_only=local_only, min_gap_seconds=5)
     assert metadata_calls == [VIDEO_ID, VIDEO_ID]
     assert third["picks_reused_from"] is None
+    fresh = workflow.sample_vision(VIDEO_ID, local_only=local_only, fresh=True)
+    assert metadata_calls == [VIDEO_ID] * 3
+    assert fresh["picks_reused_from"] is None
     decoded = []
 
     def decode_frame(_video, timestamp, _ffmpeg, *, width, height):
@@ -165,7 +168,7 @@ def test_local_selection_reports_its_reason_and_cleans_up(
 
     monkeypatch.setattr(workflow, "decode_frame", decode_frame)
     fourth = workflow.sample_vision(VIDEO_ID, local_only=local_only, resolution="720p")
-    assert metadata_calls == [VIDEO_ID, VIDEO_ID, VIDEO_ID]
+    assert metadata_calls == [VIDEO_ID] * 4
     assert fourth["picks_reused_from"] is None
     assert decoded == [(12, 1280, 720)]
     with Image.open(fourth["frames"][0]["image_path"]) as frame:
@@ -367,7 +370,18 @@ def test_video_vision_passes_only_given_options_to_extraction(
     args = build_parser().parse_args(["video", VIDEO_ID, "--vision", *arguments])
 
     assert commands.video(args) == {"vision": {"frame_count": 1}}
-    assert received == [(VIDEO_ID, {"metadata": payload, "document": None, **options})]
+    assert received == [
+        (
+            VIDEO_ID,
+            {
+                "metadata": payload,
+                "document": None,
+                "fresh": False,
+                "video_path": None,
+                **options,
+            },
+        )
+    ]
 
 
 @pytest.mark.parametrize(
@@ -736,7 +750,10 @@ def test_missing_captions_fall_back_to_speech_to_text_for_ranking(
         "youtube_toolkit.transcript._stt_transcriber",
         lambda: (
             lambda _path, _vocabulary: SpeechTranscription(
-                text=text, segments=segments if timed else [], language="en"
+                text=text,
+                segments=segments if timed else [],
+                model="example-model",
+                language="en",
             )
         ),
     )

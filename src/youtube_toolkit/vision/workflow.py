@@ -92,6 +92,8 @@ def sample_vision(
     auto_clean: bool = True,
     metadata: dict[str, Any] | None = None,
     document: TranscriptDocument | None = None,
+    fresh: bool = False,
+    video_path: Path | None = None,
 ) -> dict[str, Any]:
     """Rank the video's keyframes by the first available route and write the picks as collages in a new directory in the working directory's archive.
 
@@ -101,8 +103,9 @@ def sample_vision(
     Without captions it comes from speech-to-text, which ranks frames only when its route reports timing.
     min_similarity applies to embedding routes, and None means the cutoff tuned for the ranking model.
     max_frames limits the output, never the candidate search.
+    video_path is a downloaded copy of the whole video, at least as tall as the screenshots, to pick from instead of downloading one; vision never deletes it.
     The picked frames are saved, and a later run whose picking options, ranking model, and toolkit version match lays them out again under its rows, columns, and resolution without downloading, fetching a transcript, or ranking, provided the saved frames are at least that resolution; usage is then None and picks_reused_from names the saved run.
-    A given document plays no part in that match, and auto_clean=False always picks afresh because it keeps the downloaded media.
+    A given document plays no part in that match; fresh always picks afresh, and so does auto_clean=False, since it keeps the downloaded media.
     """
     if not 1 <= max_frames <= MAX_VISION_FRAMES:
         raise ValueError(f"max_frames must be between 1 and {MAX_VISION_FRAMES}")
@@ -128,7 +131,11 @@ def sample_vision(
         "ranking_model": _ranking_model(decision, gemini_key),
         "toolkit_version": version("youtube-toolkit"),
     }
-    saved = _find_saved_picks(video_id, pick_options, height) if auto_clean else None
+    saved = (
+        None
+        if fresh or not auto_clean
+        else _find_saved_picks(video_id, pick_options, height)
+    )
     if saved is not None:
         source, saved_result = saved
         return _lay_out_saved_picks(
@@ -204,10 +211,11 @@ def sample_vision(
             prefix="work-", dir=destination, delete=auto_clean
         ) as work_dir_name:
             work_dir = Path(work_dir_name)
-            video_path = work_dir / f"{video_id}.mp4"
-            client.download_video_for_vision(
-                video_ref, video_path, max_bytes=MAX_VIDEO_BYTES
-            )
+            if video_path is None:
+                video_path = work_dir / f"{video_id}.mp4"
+                client.download_video_for_vision(
+                    video_ref, video_path, max_bytes=MAX_VIDEO_BYTES
+                )
             candidates = collect_candidates(
                 video_path,
                 ffmpeg_path,

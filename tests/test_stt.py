@@ -52,10 +52,12 @@ def test_xai_word_timings_become_caption_like_lines() -> None:
             ],
         },
         language_key=http_provider("xai").language_key,
+        model="example-model",
     )
 
     assert result == SpeechTranscription(
         text="Hello world. After a pause next line",
+        model="example-model",
         segments=[
             TranscriptSegment(0.2, 1.0, "Hello world."),
             TranscriptSegment(1.1, 2.0, "After a pause"),
@@ -75,6 +77,7 @@ def test_long_unpunctuated_speech_breaks_into_ten_second_lines_and_cjk_joins_wit
     result = parse_transcription(
         {"text": "數據" * 12, "language": "zh", "words": words},
         language_key=http_provider("xai").language_key,
+        model="example-model",
     )
 
     assert result is not None
@@ -100,19 +103,22 @@ def test_elevenlabs_keeps_only_timed_words_and_multichannel_stays_untimed() -> N
             ],
         },
         language_key=http_provider("elevenlabs").language_key,
+        model="example-model",
     )
     multichannel = parse_transcription(
         {"transcripts": [{"text": "left"}, {"text": "right"}], "language_code": "en"},
         language_key=http_provider("elevenlabs").language_key,
+        model="example-model",
     )
 
     assert single == SpeechTranscription(
         text="transcript text",
         segments=[TranscriptSegment(0.0, 1.5, "transcript text")],
+        model="example-model",
         language="en",
     )
     assert multichannel == SpeechTranscription(
-        text="left right", segments=[], language="en"
+        text="left right", segments=[], model="example-model", language="en"
     )
 
 
@@ -171,7 +177,7 @@ def test_cloud_transcription_follows_the_configured_provider(
     monkeypatch.setattr(cloud, "run_json_request", fake_run_json_request)
 
     assert transcribe_in_cloud(audio_path, ["GPT-6", "Fable"]) == SpeechTranscription(
-        text="数据库", segments=[], language="zh"
+        text="数据库", segments=[], model=sent_model.decode(), language="zh"
     )
     sent = http_provider(provider or "xai")
     assert requests[0].full_url == sent.url
@@ -204,7 +210,10 @@ def test_vercel_gateway_takes_base64_audio_and_the_model_in_a_header(
     monkeypatch.setattr(cloud, "run_json_request", fake_run_json_request)
 
     assert transcribe_in_cloud(audio_path, ["GPT-6"]) == SpeechTranscription(
-        text="hello", segments=[TranscriptSegment(0.5, 1.25, "hello")], language="en"
+        text="hello",
+        segments=[TranscriptSegment(0.5, 1.25, "hello")],
+        model="spacexai/grok-stt",
+        language="en",
     )
     (request,) = requests
     assert request.full_url == http_provider("vercel").url
@@ -274,7 +283,7 @@ def test_gemini_uploads_transcribes_by_reference_and_deletes_the_upload(
 
     # The delete fails, which leaves the transcript intact.
     assert transcribe_in_cloud(audio_path, ["GPT-6"]) == SpeechTranscription(
-        text="first part second part", segments=[]
+        text="first part second part", segments=[], model="gemini-3.5-transcribe"
     )
     client, upload, generate, delete = calls
     assert client[1]["api_key"] == "test-key"
@@ -482,14 +491,18 @@ def test_local_pieces_become_timed_segments_at_their_offsets(
     pieces = [np.zeros(seconds * rate, dtype=np.float32) for seconds in (28, 10, 5)]
     monkeypatch.setattr(local, "decode_audio", lambda _path: np.concatenate(pieces))
     monkeypatch.setattr(local, "split_at_quiet_points", lambda _samples: pieces)
-    monkeypatch.setattr(
-        local,
-        "load_recognizer",
-        lambda: lambda _inputs: [{"text": " first "}, {"text": " "}, {"text": "third"}],
-    )
+
+    class Recognizer:
+        model = type("Model", (), {"name_or_path": "example/speech-model"})()
+
+        def __call__(self, _inputs):
+            return [{"text": " first "}, {"text": " "}, {"text": "third"}]
+
+    monkeypatch.setattr(local, "load_recognizer", Recognizer)
 
     assert local.transcribe_locally(tmp_path / "audio.m4a") == SpeechTranscription(
         text="first third",
+        model="example/speech-model",
         segments=[
             TranscriptSegment(0, 28, "first"),
             TranscriptSegment(38, 43, "third"),

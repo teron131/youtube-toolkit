@@ -66,7 +66,9 @@ def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
     ) -> SpeechTranscription:
         assert path == audio_path
         assert vocabulary == ["Fable", "GPT-6"]
-        return SpeechTranscription(text="数据库", segments=[], language="zh")
+        return SpeechTranscription(
+            text="数据库", segments=[], model="cloud-model", language="zh"
+        )
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("XAI_API_KEY", "test-key")
@@ -111,7 +113,10 @@ def test_timed_speech_to_text_segments_become_document_segments(
     monkeypatch.setattr(
         "youtube_toolkit.transcript.transcribe_in_cloud",
         lambda _path, _vocabulary: SpeechTranscription(
-            text="Hello world. Next line", segments=segments, language="en"
+            text="Hello world. Next line",
+            segments=segments,
+            model="cloud-model",
+            language="en",
         ),
     )
 
@@ -620,7 +625,7 @@ def test_always_policy_transcribes_even_when_captions_exist(
     monkeypatch.setattr(
         "youtube_toolkit.transcript.transcribe_in_cloud",
         lambda _path, _vocabulary: SpeechTranscription(
-            text="spoken", segments=[], language="en"
+            text="spoken", segments=[], model="cloud-model", language="en"
         ),
     )
 
@@ -632,11 +637,14 @@ def test_always_policy_transcribes_even_when_captions_exist(
 
 
 @pytest.mark.parametrize(
-    ("cloud_key", "expected_text", "expected_language"),
-    [(None, "local text", "de"), ("test-key", "cloud text", "en")],
+    ("cloud_key", "expected_text", "expected_language", "expected_model"),
+    [
+        (None, "local text", "de", "local-model"),
+        ("test-key", "cloud text", "en", "cloud-model"),
+    ],
 )
 def test_stt_prefers_cloud_and_falls_back_to_the_local_model(
-    monkeypatch, tmp_path, cloud_key, expected_text, expected_language
+    monkeypatch, tmp_path, cloud_key, expected_text, expected_language, expected_model
 ) -> None:
     audio_path = tmp_path / "JpSHyEIZ_bo.m4a"
     audio_path.write_bytes(b"audio")
@@ -648,12 +656,14 @@ def test_stt_prefers_cloud_and_falls_back_to_the_local_model(
     monkeypatch.setattr("youtube_toolkit.transcript.local_stt_installed", lambda: True)
     monkeypatch.setattr(
         "youtube_toolkit.transcript.transcribe_locally",
-        lambda _path: SpeechTranscription(text="local text", segments=[]),
+        lambda _path: SpeechTranscription(
+            text="local text", segments=[], model="local-model"
+        ),
     )
     monkeypatch.setattr(
         "youtube_toolkit.transcript.transcribe_in_cloud",
         lambda _path, _vocabulary: SpeechTranscription(
-            text="cloud text", segments=[], language="en"
+            text="cloud text", segments=[], model="cloud-model", language="en"
         ),
     )
 
@@ -674,6 +684,7 @@ def test_stt_prefers_cloud_and_falls_back_to_the_local_model(
     assert document.source == "speech-to-text"
     assert document.text == expected_text
     assert document.language == expected_language
+    assert document.stt_model == expected_model
     assert not audio_path.exists()
 
 

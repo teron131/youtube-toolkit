@@ -25,6 +25,10 @@ SEARCH_SORT_PARAMS = {
 }
 STT_AUDIO_FORMAT_SELECTOR = "bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio[ext=aac]"
 VISION_VIDEO_FORMAT_SELECTOR = "bestvideo[height<=720][ext=mp4]/bestvideo[height<=720]"
+# YouTube's sound comes at about 128 kbps AAC and its only other level is about 50 kbps, so the m4a stream is always the best that plays everywhere; plain bestaudio would take the Opus stream instead.
+DOWNLOAD_AUDIO_FORMAT = "bestaudio[ext=m4a]"
+# ffmpeg cuts a range from one open-ended request, which YouTube throttles to about playback speed, so it asks in bounded requests of the size yt-dlp's own YouTube downloads use.
+RANGE_REQUEST_BYTES = 10 * 1024 * 1024
 # A metadata, search, or listing request that takes over a minute is stuck.
 YTDLP_REQUEST_TIMEOUT_SECONDS = 60
 MAX_CONCURRENT_METADATA_FETCHES = 8
@@ -201,6 +205,48 @@ class YtDlpClient:
             )
         return output_path
 
+    def download_media(
+        self,
+        video_ref: VideoRef,
+        path: Path,
+        *,
+        height: int | None,
+        section: tuple[float, float] | None,
+        overwrite: bool,
+        timeout_seconds: int,
+    ) -> None:
+        """Writes an mp4 with sound no taller than `height`, or with None the m4a sound alone, keeping only `section` in seconds when given, cut at the keyframe at or before its start."""
+        command = [
+            *YTDLP_COMMAND,
+            "--no-playlist",
+            "--quiet",
+            "--no-warnings",
+            "--format",
+            DOWNLOAD_AUDIO_FORMAT if height is None else _download_video_format(height),
+            # yt-dlp reads the output as a template, where a literal % is written %%.
+            "--output",
+            str(path).replace("%", "%%"),
+        ]
+        if overwrite:
+            command.append("--force-overwrites")
+        if height is not None:
+            command += ["--merge-output-format", "mp4"]
+        if section is not None:
+            start, end = section
+            command += [
+                "--download-sections",
+                f"*{start}-{end}",
+                "--downloader-args",
+                f"ffmpeg_i:-request_size {RANGE_REQUEST_BYTES}",
+            ]
+        _run(
+            [*command, normalize_youtube_url(video_ref)],
+            action="download",
+            timeout_seconds=timeout_seconds,
+        )
+        if not path.exists():
+            raise RuntimeError(f"yt-dlp completed but did not create {path}")
+
     def _json(
         self,
         command: list[str],
@@ -232,6 +278,15 @@ def _request_json(command: list[str], *, error_message: str) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise RuntimeError("yt-dlp returned a non-object JSON payload")
     return data
+
+
+def _download_video_format(height: int) -> str:
+    """H.264 video, which every player and editor opens, else any mp4 video, joined with the m4a sound; else YouTube's own mp4 with sound."""
+    return (
+        f"bestvideo[height<={height}][vcodec^=avc1]+{DOWNLOAD_AUDIO_FORMAT}"
+        f"/bestvideo[height<={height}][ext=mp4]+{DOWNLOAD_AUDIO_FORMAT}"
+        f"/best[height<={height}][ext=mp4]"
+    )
 
 
 def _drop_translated_captions(metadata: dict[str, Any]) -> dict[str, Any]:

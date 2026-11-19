@@ -17,7 +17,7 @@ CJK = re.compile(r"[\u3000-\u9fff\uff00-\uffef]")
 
 
 def parse_transcription(
-    response: dict[str, Any], *, language_key: str
+    response: dict[str, Any], *, language_key: str, model: str
 ) -> SpeechTranscription | None:
     """Per-channel transcripts are joined when there is no single text, and stay untimed.
 
@@ -43,6 +43,7 @@ def parse_transcription(
         text=text,
         segments=_word_lines(response.get("words"))
         or _gateway_segments(response.get("segments")),
+        model=model,
         language=normalize_text(language),
     )
 

@@ -87,7 +87,9 @@ def transcribe_locally(audio_path: Path) -> SpeechTranscription:
     if not segments:
         raise ValueError("Local speech-to-text found no speech")
     return SpeechTranscription(
-        text=" ".join(segment.text for segment in segments), segments=segments
+        text=" ".join(segment.text for segment in segments),
+        segments=segments,
+        model=recognizer.model.name_or_path,
     )
 
 
