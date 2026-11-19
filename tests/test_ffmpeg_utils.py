@@ -82,9 +82,7 @@ def showinfo_log(*offsets: float) -> bytes:
 def test_decode_keyframes_skips_other_frames_and_keeps_window_timestamps(
     monkeypatch, tmp_path
 ) -> None:
-    pixels = np.zeros(
-        (2, ffmpeg_utils.FRAME_HEIGHT, ffmpeg_utils.FRAME_WIDTH, 3), dtype=np.uint8
-    )
+    pixels = np.zeros((2, 540, 960, 3), dtype=np.uint8)
     calls = []
 
     def run(command, *, capture_output, check, timeout):
@@ -95,7 +93,7 @@ def test_decode_keyframes_skips_other_frames_and_keeps_window_timestamps(
 
     monkeypatch.setattr(ffmpeg_utils.subprocess, "run", run)
     times, frames = ffmpeg_utils.decode_keyframes(
-        tmp_path / "v.mp4", 60, 70, "/resolved/ffmpeg"
+        tmp_path / "v.mp4", 60, 70, "/resolved/ffmpeg", width=960, height=540
     )
     (command,) = calls
     assert command[command.index("-loglevel") + 1] == "info"
@@ -115,9 +113,7 @@ def test_decode_keyframes_skips_other_frames_and_keeps_window_timestamps(
 def test_decode_keyframes_rejects_timestamp_count_mismatch(
     monkeypatch, tmp_path
 ) -> None:
-    pixels = np.zeros(
-        (2, ffmpeg_utils.FRAME_HEIGHT, ffmpeg_utils.FRAME_WIDTH, 3), dtype=np.uint8
-    )
+    pixels = np.zeros((2, 540, 960, 3), dtype=np.uint8)
     monkeypatch.setattr(
         ffmpeg_utils,
         "run_ffmpeg",
@@ -126,7 +122,9 @@ def test_decode_keyframes_rejects_timestamp_count_mismatch(
         ),
     )
     with pytest.raises(ValueError, match="1 keyframe timestamps for 2 frames"):
-        ffmpeg_utils.decode_keyframes(tmp_path / "v.mp4", 0, 10, "ffmpeg")
+        ffmpeg_utils.decode_keyframes(
+            tmp_path / "v.mp4", 0, 10, "ffmpeg", width=960, height=540
+        )
 
 
 def test_decode_keyframes_rejects_truncated_rgb(monkeypatch, tmp_path) -> None:
@@ -136,7 +134,9 @@ def test_decode_keyframes_rejects_truncated_rgb(monkeypatch, tmp_path) -> None:
         lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, b"bad", b""),
     )
     with pytest.raises(ValueError, match="incomplete RGB"):
-        ffmpeg_utils.decode_keyframes(tmp_path / "v.mp4", 0, 10, "ffmpeg")
+        ffmpeg_utils.decode_keyframes(
+            tmp_path / "v.mp4", 0, 10, "ffmpeg", width=960, height=540
+        )
 
 
 @pytest.mark.parametrize(
@@ -157,4 +157,6 @@ def test_decode_keyframes_failures_become_user_facing_runtime_errors(
 
     monkeypatch.setattr(ffmpeg_utils.subprocess, "run", fail)
     with pytest.raises(RuntimeError, match=message):
-        ffmpeg_utils.decode_keyframes(tmp_path / "v.mp4", 0, 10, "ffmpeg")
+        ffmpeg_utils.decode_keyframes(
+            tmp_path / "v.mp4", 0, 10, "ffmpeg", width=960, height=540
+        )

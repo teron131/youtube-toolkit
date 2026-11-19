@@ -92,11 +92,15 @@ def test_parse_duration_accepts_seconds_and_colon_values() -> None:
     assert parse_duration("90") == 90
     assert parse_duration("1:30") == 90
     assert parse_duration("1:02:03") == 3723
+    assert parse_duration("75.25") == 75.25
+    assert parse_duration("1:15.25") == 75.25
 
 
 def test_parse_duration_rejects_invalid_values() -> None:
     with pytest.raises(ValueError, match="Invalid duration"):
         parse_duration("1::30")
+    with pytest.raises(ValueError, match="Invalid duration"):
+        parse_duration("1.5:30")
 
 
 def test_native_youtube_search_does_not_fetch_transcripts(

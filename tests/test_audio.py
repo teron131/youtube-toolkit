@@ -25,6 +25,7 @@ def test_download_transcription_audio_uses_unique_artifact_stem(
 
     def fake_run(
         command,
+        input,
         capture_output,
         text,
         check,
@@ -42,8 +43,8 @@ def test_download_transcription_audio_uses_unique_artifact_stem(
 
     monkeypatch.setattr("youtube_toolkit.youtube.client.subprocess.run", fake_run)
 
-    first_path = YtDlpClient().download_transcription_audio("JpSHyEIZ_bo")
-    second_path = YtDlpClient().download_transcription_audio("JpSHyEIZ_bo")
+    first_path = YtDlpClient().download_transcription_audio({"id": "JpSHyEIZ_bo"})
+    second_path = YtDlpClient().download_transcription_audio({"id": "JpSHyEIZ_bo"})
 
     assert first_path != second_path
     assert first_path.parent == tmp_path / ".cache/youtube-toolkit/audio"
@@ -197,7 +198,7 @@ def test_failed_audio_download_cleans_only_its_own_partial_files(
     with pytest.raises(
         RuntimeError, match="timed out" if timed_out else "download failed"
     ):
-        YtDlpClient().download_transcription_audio("JpSHyEIZ_bo")
+        YtDlpClient().download_transcription_audio({"id": "JpSHyEIZ_bo"})
     assert list(audio_dir.iterdir()) == [unrelated]
     assert unrelated.read_bytes() == b"existing audio"
 
@@ -228,9 +229,11 @@ def test_refused_downloads_are_rerun_after_a_pause(
     monkeypatch.setattr("youtube_toolkit.execution.time.sleep", delays.append)
 
     if refusals < expected_calls:
-        assert YtDlpClient().download_transcription_audio("JpSHyEIZ_bo").is_file()
+        assert (
+            YtDlpClient().download_transcription_audio({"id": "JpSHyEIZ_bo"}).is_file()
+        )
     else:
         with pytest.raises(RuntimeError, match="HTTP Error 403"):
-            YtDlpClient().download_transcription_audio("JpSHyEIZ_bo")
+            YtDlpClient().download_transcription_audio({"id": "JpSHyEIZ_bo"})
     assert len(calls) == expected_calls
     assert delays == expected_delays

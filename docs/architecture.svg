@@ -1,13 +1,13 @@
 <!--
 Evidence (re-verify on update):
   Commands and flags: cli/parser.py (video, search, channel, setup, doctor; video's part flags and their options)
-  One fetch shared by the parts: cli/commands.py video caches client.metadata; parts keyed in its result
+  One fetch shared by the parts: cli/commands.py video caches client.metadata, and downloads start from it (youtube/client.py _download); parts keyed in its result
   Chapters and sponsor span: schemas.py VideoMetadata.chapters; youtube/captions.py extract_sponsorblock_intervals, removed from caption transcripts and excluded from vision frames (vision/workflow.py _excluded_intervals)
   Comments untimed, no key: youtube/comments.py search_comments
   Transcript: transcript.py fetch_transcript, captions first, speech-to-text when there are none or when asked (stt/)
   Refine and translate keep each line's timing with timestamps: rewrite/timestamped.py; LLM: llm.py, config.py llm_config
   Summary from sound bites picked out of the transcript: summary.py
-  Download: download.py download_media, youtube/client.py download_media (yt-dlp with ffmpeg, a whole video or a start-to-end range); a whole download at 720p or more feeds vision (cli/commands.py)
+  Download: download.py download_media, download_frames, download_frames_at; youtube/client.py download_media, download_silent_video, download_silent_clips (yt-dlp with ffmpeg, a whole video or a start-to-end range); frames are its distinct frames or keyframes (vision/candidates.py collect_candidates) or single frames at given times, and need the vision install (cli/commands.py require_vision); a download at 720p or more feeds vision over the same range (cli/commands.py)
   Vision: cli/health.py require_vision (the vision install), ffmpeg in vision/workflow.py; ranking by the decision model, else embeddings, else time slots
   Search: search/workflow.py; semantic mode ranks by transcript embeddings (search/semantic.py text_embedder)
   Channel: youtube/channels.py fetch_channel_videos
@@ -15,7 +15,7 @@ Evidence (re-verify on update):
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="698" viewBox="0 0 1120 698" role="img" aria-labelledby="title desc">
   <title id="title">How the YouTube Toolkit commands fit together</title>
-  <desc id="desc">The toolkit drawn as an editing timeline of one video. On the left, youtube search, natively or semantically with embeddings, and youtube channel find videos, and one is passed on. The youtube video command is a stack of tracks along the video's timeline, one per flag: metadata with its chapters and a sponsor span, comments, the transcript, and the download need no key, with speech-to-text standing in when a video has no captions, and the download saving the picture and its sound whole or as a bracketed range. Below a divider, refine and translate, the summary, and vision are switched on by a model: the first two by an LLM, vision by the screenshots install, with frames ranked by a decision model or else embeddings. A row at the bottom lists the five things that can be switched on: screenshots, speech-to-text, embeddings, a decision model, and an LLM. A playhead plays across the tracks from left to right, jumps over the sponsor span, and starts again.</desc>
+  <desc id="desc">The toolkit drawn as an editing timeline of one video. On the left, youtube search, natively or semantically with embeddings, and youtube channel find videos, and one is passed on. The youtube video command is a stack of tracks along the video's timeline, one per flag: metadata with its chapters and a sponsor span, comments, the transcript, and the download need no key, with speech-to-text standing in when a video has no captions, and the download saving the picture and its sound, or its frames, whole or as a bracketed range. Below a divider, refine and translate, the summary, and vision are switched on by a model: the first two by an LLM, vision by the screenshots install, with frames ranked by a decision model or else embeddings. A row at the bottom lists the five things that can be switched on: screenshots, speech-to-text, embeddings, a decision model, and an LLM. A playhead plays across the tracks from left to right, jumps over the sponsor span, and starts again.</desc>
   <defs>
     <style>
     .flag { font: 700 15px ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; fill: #F3EFE6; }
@@ -196,7 +196,7 @@ Evidence (re-verify on update):
   <rect x="676" y="268" width="217" height="42" fill="#131316" opacity="0.55"/>
   <path d="M568 266 H563 V312 H568 M669 266 H674 V312 H669" fill="none" stroke="#F3EFE6" stroke-width="2"/>
   <circle cx="917" cy="281" r="4.25" fill="none" stroke="#7B786F" stroke-width="1.5"/><text x="928" y="285.5" class="note">no key</text>
-  <text x="912" y="303.5" class="note">whole or a range</text>
+  <text x="912" y="303.5" class="note">whole, a range, or frames</text>
   </g>
   <text x="316" y="338.5" class="cap" textLength="176" lengthAdjust="spacing">SWITCHED ON BY A MODEL</text>
   <line x1="504" y1="334" x2="1076" y2="334" stroke="#30303A" stroke-width="1" stroke-dasharray="2 5"/>

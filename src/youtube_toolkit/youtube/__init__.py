@@ -11,7 +11,11 @@ from .channels import (
     cutoff_date_for_days,
     fetch_channel_videos,
 )
-from .client import MAX_CONCURRENT_METADATA_FETCHES, YtDlpClient
+from .client import (
+    MAX_CONCURRENT_METADATA_FETCHES,
+    YTDLP_DOWNLOAD_TIMEOUT_SECONDS,
+    YtDlpClient,
+)
 from .comments import DEFAULT_COMMENT_LIMIT, MAX_COMMENT_LIMIT, search_comments
 
 __all__ = [
@@ -19,6 +23,7 @@ __all__ = [
     "DEFAULT_LAST_VIDEOS",
     "MAX_COMMENT_LIMIT",
     "MAX_CONCURRENT_METADATA_FETCHES",
+    "YTDLP_DOWNLOAD_TIMEOUT_SECONDS",
     "CaptionTranscriptUnavailable",
     "ChannelOptions",
     "YtDlpClient",

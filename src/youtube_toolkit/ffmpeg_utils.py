@@ -17,8 +17,6 @@ if TYPE_CHECKING:
 # Decoding a two-hour video's keyframes or audio track takes well under a minute, so ten minutes means FFmpeg is stuck.
 FFMPEG_TIMEOUT_SECONDS = 10 * 60
 FFMPEG_THREADS = min(4, os.process_cpu_count() or 1)
-FRAME_WIDTH = 960
-FRAME_HEIGHT = 540
 # showinfo logs one line per frame: `[Parsed_showinfo_0 @ ADDRESS] n:N pts:PTS pts_time:SECONDS ...` → `SECONDS`.
 SHOWINFO_PTS_TIME = re.compile(rb"Parsed_showinfo[^\n]*?pts_time:\s*(-?[0-9.]+)")
 SAMPLE_RATE = 16_000
@@ -37,7 +35,13 @@ def run_ffmpeg(
 
 
 def decode_keyframes(
-    video_path: Path, start: float, stop: float, ffmpeg_path: str
+    video_path: Path,
+    start: float,
+    stop: float,
+    ffmpeg_path: str,
+    *,
+    width: int,
+    height: int,
 ) -> tuple[list[float], np.ndarray]:
     """Decode only keyframes, which need no earlier frames, so cost follows how many there are rather than every frame in the window.
 
@@ -62,7 +66,7 @@ def decode_keyframes(
             "-t",
             str(stop - start),
             "-vf",
-            f"showinfo,{_frame_filter(FRAME_WIDTH, FRAME_HEIGHT)}",
+            f"showinfo,{_frame_filter(width, height)}",
             "-fps_mode",
             "passthrough",
             "-f",
@@ -73,7 +77,7 @@ def decode_keyframes(
         ],
         loglevel="info",
     )
-    frames = _rgb_frames(completed.stdout, FRAME_WIDTH, FRAME_HEIGHT)
+    frames = _rgb_frames(completed.stdout, width, height)
     # showinfo also logs the first keyframe past the window, which -t then drops from the output.
     times = [
         start + offset

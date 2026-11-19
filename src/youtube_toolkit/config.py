@@ -32,6 +32,8 @@ VISION_RESOLUTIONS: dict[VisionResolution, tuple[int, int]] = {
     "720p": (1280, 720),
 }
 DEFAULT_VISION_RESOLUTION: VisionResolution = "540p"
+# Vision downloads the video at its largest screenshot size, so a 720p screenshot is decoded from source rather than enlarged.
+VISION_SOURCE_HEIGHT = max(height for _, height in VISION_RESOLUTIONS.values())
 
 DEFAULT_STT_PROVIDER = "xai"
 DEFAULT_ELEVENLABS_STT_MODEL = "scribe_v2"

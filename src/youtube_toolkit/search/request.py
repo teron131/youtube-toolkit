@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Literal, get_args
+from typing import Literal, get_args, overload
 
 from ..identity import ChannelRef, is_channel_id, parse_channel_ref
 from ..youtube import cutoff_date_for_days
@@ -155,24 +155,29 @@ def normalize_filter_date(value: str) -> str:
         raise ValueError("uploaded-after must be YYYY-MM-DD") from error
 
 
+@overload
+def parse_duration(value: str) -> float: ...
+@overload
+def parse_duration(value: None) -> None: ...
 def parse_duration(value: str | None) -> float | None:
-    """Seconds, MM:SS, or HH:MM:SS into seconds, for search's length filters and download ranges alike."""
+    """Seconds, MM:SS, or HH:MM:SS into seconds, the seconds alone taking a decimal fraction (`1:15.25` → 75.25), for search's length filters and the video command's ranges and frame times alike."""
     if value is None:
         return None
     stripped = value.strip()
     if not stripped:
         raise ValueError("durations must be non-empty")
-    if stripped.isdigit():
-        return float(stripped)
-
-    parts = stripped.split(":")
-    if not 2 <= len(parts) <= 3 or not all(part.isdigit() for part in parts):
+    *larger, seconds = stripped.split(":")
+    if (
+        len(larger) > 2
+        or not all(part.isdigit() for part in larger)
+        or not seconds.replace(".", "", 1).isdigit()
+    ):
         raise ValueError(f"Invalid duration: {value}")
 
-    total_seconds = 0
-    for part in parts:
-        total_seconds = total_seconds * 60 + int(part)
-    return float(total_seconds)
+    minutes = 0
+    for part in larger:
+        minutes = minutes * 60 + int(part)
+    return minutes * 60 + float(seconds)
 
 
 def resolve_limit(request: SearchRequest) -> int:

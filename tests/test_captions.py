@@ -57,8 +57,8 @@ def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
                 "subtitles": {},
             }
 
-        def download_transcription_audio(self, video_id: str) -> Path:
-            assert video_id == "JpSHyEIZ_bo"
+        def download_transcription_audio(self, metadata) -> Path:
+            assert metadata["id"] == "JpSHyEIZ_bo"
             return audio_path
 
     def fake_transcribe_in_cloud(
@@ -105,7 +105,7 @@ def test_timed_speech_to_text_segments_become_document_segments(
         def metadata(self, video_ref: str) -> dict:
             return {"id": video_ref, "automatic_captions": {}, "subtitles": {}}
 
-        def download_transcription_audio(self, _video_id: str) -> Path:
+        def download_transcription_audio(self, _metadata) -> Path:
             return audio_path
 
     monkeypatch.chdir(tmp_path)
@@ -143,7 +143,7 @@ def test_fetch_transcript_fetches_and_archives_captions(monkeypatch, tmp_path) -
                 },
             }
 
-        def download_transcription_audio(self, _video_id: str) -> Path:
+        def download_transcription_audio(self, _metadata) -> Path:
             pytest.fail("caption retrieval should not download STT audio")
 
     monkeypatch.setattr(
@@ -186,7 +186,7 @@ def test_chinese_caption_text_is_converted_to_taiwan_traditional(
                 return {"id": video_ref, "language": "ja", "automatic_captions": tracks}
             return {"id": video_ref, "subtitles": tracks}
 
-        def download_transcription_audio(self, _video_id: str) -> Path:
+        def download_transcription_audio(self, _metadata) -> Path:
             pytest.fail("caption retrieval should not download STT audio")
 
     monkeypatch.setattr(
@@ -225,7 +225,7 @@ def test_stt_fallback_removes_downloaded_audio_after_failure(
                 "subtitles": {},
             }
 
-        def download_transcription_audio(self, _video_id: str) -> Path:
+        def download_transcription_audio(self, _metadata) -> Path:
             return audio_path
 
     def fail_transcription(_path: Path, _vocabulary: list[str]) -> SpeechTranscription:
@@ -576,7 +576,7 @@ def test_caption_only_policy_never_uses_stt(
         def metadata(self, _ref):
             return {"id": video_id, "automatic_captions": {}, "subtitles": {}}
 
-        def download_transcription_audio(self, _ref):
+        def download_transcription_audio(self, _metadata):
             pytest.fail("caption-only policy must not download STT audio")
 
     with pytest.raises(CaptionTranscriptUnavailable):
@@ -594,7 +594,7 @@ def test_stt_without_any_route_keeps_caption_failure_without_audio_work(
         def metadata(self, _ref):
             return {"id": "JpSHyEIZ_bo", "automatic_captions": {}, "subtitles": {}}
 
-        def download_transcription_audio(self, _ref):
+        def download_transcription_audio(self, _metadata):
             pytest.fail("an unconfigured STT fallback must not download audio")
 
     with pytest.raises(CaptionTranscriptUnavailable):
@@ -613,7 +613,7 @@ def test_always_policy_transcribes_even_when_captions_exist(
         def metadata(self, _ref):
             return {"id": "JpSHyEIZ_bo", "subtitles": {"en": [{"ext": "json3"}]}}
 
-        def download_transcription_audio(self, _ref):
+        def download_transcription_audio(self, _metadata):
             return audio_path
 
     monkeypatch.chdir(tmp_path)
@@ -676,7 +676,7 @@ def test_stt_prefers_cloud_and_falls_back_to_the_local_model(
                 "subtitles": {},
             }
 
-        def download_transcription_audio(self, _ref):
+        def download_transcription_audio(self, _metadata):
             return audio_path
 
     document = fetch_transcript("JpSHyEIZ_bo", client=FakeClient())

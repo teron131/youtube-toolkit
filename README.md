@@ -1,12 +1,12 @@
 # YouTube Toolkit
 
-A YouTube CLI for agents: search videos, fetch their metadata, transcripts, comments, and curated screenshots, and download them. It is modular: the core needs no keys, and screenshots, speech-to-text, embeddings, a decision model, and an LLM each switch on once you install or set them up, with a provider you choose or, for embeddings and speech-to-text, a local model.
+A YouTube CLI for agents: search videos, fetch their metadata, transcripts, comments, and curated screenshots, and download them, their sound, or their frames. It is modular: the core needs no keys, and screenshots, speech-to-text, embeddings, a decision model, and an LLM each switch on once you install or set them up, with a provider you choose or, for embeddings and speech-to-text, a local model.
 
 ![The toolkit as an editing timeline of one video: search and channel find a video, and each flag of the video command is a track along it, the plain tracks needing no key and the coloured ones switched on by a model.](docs/architecture.svg)
 
 ## Install
 
-Requires Python 3.13+ and uv. The installer installs `youtube` as a uv tool; rerun it after pulling changes. Add `--vision` for screenshots, `--embeddings` for the local embedding model, or `--stt` for local speech-to-text; vision, speech-to-text, and downloads also need `ffmpeg`.
+Requires Python 3.13+ and uv. The installer installs `youtube` as a uv tool; rerun it after pulling changes. Add `--vision` for screenshots and frame downloads, `--embeddings` for the local embedding model, or `--stt` for local speech-to-text; vision, speech-to-text, and downloads also need `ffmpeg`.
 
 ```bash
 uv run python scripts/install.py --vision
@@ -48,6 +48,7 @@ youtube video URL_OR_ID --transcript --translate zh-TW --export
 youtube video URL_OR_ID --summary
 youtube video URL_OR_ID --transcript --vision --export
 youtube video URL_OR_ID --download --start 1:15 --end 2:30
+youtube video URL_OR_ID --download frames --at 1:15 4:02
 youtube video URL_OR_ID --comments "QUERY"
 youtube video URL_OR_ID
 youtube search "langgraph tutorial" --limit 5 --max-duration 20:00
@@ -62,8 +63,8 @@ Every command and flag; an option nested inside a flag's brackets needs that fla
 youtube video URL_OR_ID
         [--transcript [--timestamps] [--refine] [--export [--fresh]] [--stt] [--translate [LANGUAGE]]]
         [--summary [LANGUAGE] [--stt] [--translate [LANGUAGE]]]
-        [--vision [--max-frames N] [--rows N] [--columns N] [--resolution 360p|540p|720p] [--min-gap SECONDS] [--min-similarity COSINE] [--local-only] [--no-auto-clean] [--fresh]]
-        [--download [video|audio] [--quality 360p|480p|720p|1080p] [--start TIME] [--end TIME] [--fresh]]
+        [--vision [--max-frames N] [--rows N] [--columns N] [--resolution 360p|540p|720p] [--no-timestamp-annotation] [--min-gap SECONDS] [--min-similarity COSINE] [--local-only] [--no-auto-clean] [--start TIME] [--end TIME] [--fresh]]
+        [--download [video|audio|frames|keyframes] [--quality 360p|480p|720p|1080p] [--at TIME ...] [--start TIME] [--end TIME] [--fresh]]
         [--comments [QUERY] [--comment-limit N]]
         [--metadata]
 youtube search QUERY ...
@@ -85,8 +86,8 @@ Commands print JSON, and `--help` lists each command's options. Responses are ar
 
 - `--transcript` prefers manual subtitles, then automatic captions, never machine translations, and falls back to speech-to-text, when configured, if there are none; `--stt` uses speech-to-text even when captions exist. `--refine` cleans it up with an LLM, and `--translate` translates it into English, or `--translate LANGUAGE` into another language. `--export` writes it to a text file, or with `--vision` to a Markdown file beside the collages.
 - `--summary` summarizes the transcript with an LLM, in the transcript's language, the `--translate` language, or `--summary LANGUAGE`; the transcript itself is printed only with `--transcript`.
-- `--vision` picks screenshots, ranked against the same transcript when `--transcript` is given, and lays them out at 540p in collages of three rows of two, or at the `--resolution` and in the grid that `--rows` and `--columns` set.
-- `--download` saves the video with its sound as an mp4 of up to 1080p, or the `--quality` you choose, or with `--download audio` the sound alone as an m4a, named like an export in the working directory; `--start` and `--end` keep a range, which opens at the keyframe at or before the start, and with `--vision` a whole video downloaded at 720p or more is where the frames are picked. Video file names hold the quality and range, so a file already there for the same request comes back as it is, with a message, unless `--fresh` downloads it again.
+- `--vision` picks screenshots, ranked against the same transcript when `--transcript` is given, and lays them out at 540p in collages of three rows of two, each with its time beneath, or at the `--resolution` and in the grid that `--rows` and `--columns` set; `--no-timestamp-annotation` leaves the times out, and `--start` and `--end` limit it to part of the video.
+- `--download` saves the video with its sound as an mp4 of up to 1080p, or the `--quality` you choose, or with `--download audio` the sound alone as an m4a, named like an export in the working directory. `--download frames` saves a folder of JPEGs at that quality, one per visible change, each named by its time in the video, `--download keyframes` saves every keyframe, and `--download frames --at TIME ...` saves the first frame at or after each time as its own JPEG, keyframe or not. `--start` and `--end` keep a range, which opens on the first frame at or after the start, and with `--vision` a video downloaded at 720p or more over the same range is where the screenshots are picked. Names hold the quality and range, so what is already there for the same request comes back as it is, with a message, unless `--fresh` downloads it again.
 - `--comments` samples the top 100 comments, or up to 1000 with `--comment-limit`, and keeps those containing the query.
 
 `search` covers YouTube, or the channels named with `--in-channels`, and by default keeps videos with at least 10,000 views and 3 minutes to 8 hours long. `--semantic chunk` ranks caption passages with embeddings, and `--semantic video` returns their videos.

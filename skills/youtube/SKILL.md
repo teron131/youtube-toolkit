@@ -1,6 +1,6 @@
 ---
 name: youtube
-description: Use the YouTube toolkit to search videos, list channel uploads, search comment text, read transcripts and metadata, and extract visual context, with request archives kept in the working directory.
+description: Use the YouTube toolkit to search videos, list channel uploads, search comment text, read transcripts and metadata, extract visual context, and download videos, their sound, or their frames, with request archives kept in the working directory.
 ---
 
 # YouTube
@@ -15,8 +15,8 @@ Every command and flag; an option nested inside a flag's brackets needs that fla
 youtube video URL_OR_ID
         [--transcript [--timestamps] [--refine] [--export [--fresh]] [--stt] [--translate [LANGUAGE]]]
         [--summary [LANGUAGE] [--stt] [--translate [LANGUAGE]]]
-        [--vision [--max-frames N] [--rows N] [--columns N] [--resolution 360p|540p|720p] [--min-gap SECONDS] [--min-similarity COSINE] [--local-only] [--no-auto-clean] [--fresh]]
-        [--download [video|audio] [--quality 360p|480p|720p|1080p] [--start TIME] [--end TIME] [--fresh]]
+        [--vision [--max-frames N] [--rows N] [--columns N] [--resolution 360p|540p|720p] [--no-timestamp-annotation] [--min-gap SECONDS] [--min-similarity COSINE] [--local-only] [--no-auto-clean] [--start TIME] [--end TIME] [--fresh]]
+        [--download [video|audio|frames|keyframes] [--quality 360p|480p|720p|1080p] [--at TIME ...] [--start TIME] [--end TIME] [--fresh]]
         [--comments [QUERY] [--comment-limit N]]
         [--metadata]
 youtube search QUERY ...
@@ -43,7 +43,7 @@ youtube video URL_OR_ID
 | --- | --- | --- | --- |
 | `URL_OR_ID` | Required |  | The video, as its 11-character ID or any YouTube URL. |
 
-`video` prints the parts its flags name, keyed as `transcript`, `summary`, `vision`, `download`, `comments`, and `metadata`, or the metadata alone without flags; combine flags to get several parts from one call. Options for a part, such as `--timestamps`, require its flag; `--stt` and `--translate` also work with `--summary`.
+`video` prints the parts its flags name, keyed as `transcript`, `summary`, `vision`, `download`, `comments`, and `metadata`, or the metadata alone without flags; combine flags to get several parts from one call. Options for a part, such as `--timestamps`, require its flag; `--stt` and `--translate` also work with `--summary`, and `--start` and `--end` with `--vision`.
 
 ### Transcript
 
@@ -91,35 +91,42 @@ youtube video URL_OR_ID --transcript --vision --export --timestamps
 
 | Option | Required | Default | What it does |
 | --- | --- | --- | --- |
-| `--vision` | Optional | Off | Downloads the video, up to two hours, picks screenshots, and gives their timestamps and paths to collages of them. |
+| `--vision` | Optional | Off | Downloads up to two hours of the video, picks screenshots, and gives their timestamps, each screenshot's own image as `image_path` under `frames`, and paths to collages of them. |
 | `--max-frames N` | Optional | 96 | Returns at most N screenshots, from 1 to 96; the result can be shorter. |
 | `--rows N` | Optional | 3 | Sets the rows of screenshots on each collage page, from 1 to 3. |
 | `--columns N` | Optional | 2 | Sets the screenshots in each row, from 1 to 3. |
 | `--resolution 360p\|540p\|720p` | Optional | 540p | Sets each screenshot's resolution; 360p saves image tokens but loses small text and digits, and 720p shows more detail for small text. |
+| `--no-timestamp-annotation` | Optional | Off: each screenshot shows its time beneath | Leaves the times out of the collages. |
 | `--min-gap SECONDS` | Optional | 10 | Keeps screenshots at least that far apart. |
 | `--min-similarity COSINE` | Optional | Tuned for the ranking model | Sets how closely a frame must match the speech when embeddings rank, from -1 to 1. |
 | `--local-only` | Optional | Off | Skips the decision model, the embedding API, and speech-to-text, ranking against captions with the local embedding model or else taking evenly spaced frames. |
 | `--no-auto-clean` | Optional | Off: files are deleted | Keeps the downloaded video and candidate frames. |
+| `--start TIME`, `--end TIME` | Optional | The whole video | Picks screenshots only from that part, given as seconds, `MM:SS`, or `HH:MM:SS`, with a fraction if needed such as `1:15.25`, and downloads only that part. |
 | `--fresh` | Optional | Off: matching earlier picks are laid out again | Picks the screenshots afresh. |
 
-Use `--vision` when pictures add context, and read the collages alongside the transcript. A run usually takes a few minutes, mostly the download, and the defaults suit most videos. To change only the layout, rerun with new `--rows`, `--columns`, or a resolution no higher than before, and the same other options: the earlier picks are laid out again, which takes seconds and costs nothing, and `--fresh` picks again instead. With `--transcript`, vision ranks against that same transcript, and `--export` writes it as Markdown beside the collages.
+Use `--vision` when pictures add context, and read the collages alongside the transcript, or open the screenshots one by one from `frames` when a collage is too small to read. A run usually takes a few minutes, mostly the download, and the defaults suit most videos; for one part of a long video, `--start` and `--end` make it faster and cheaper. To change only the layout, rerun with new `--rows`, `--columns`, or a resolution no higher than before, and the same other options: the earlier picks are laid out again, which takes seconds and costs nothing, and `--fresh` picks again instead. With `--transcript`, vision ranks against that same transcript, and `--export` writes it as Markdown beside the collages.
 
 ### Download
 
 ```bash
 youtube video URL_OR_ID --download
 youtube video URL_OR_ID --download audio --start 1:15 --end 2:30
+youtube video URL_OR_ID --download frames --start 10:00 --end 15:00
+youtube video URL_OR_ID --download frames --at 1:15 4:02
 ```
 
 | Option | Required | Default | What it does |
 | --- | --- | --- | --- |
-| `--download [video\|audio]` | Optional | Off; `video` when left out | Saves the video with its sound as an mp4, or the sound alone as an m4a, to a file named for the title, channel, video quality, and range in the working directory; `download` holds its `path`, and a `message` when an earlier download of the same request came back instead. |
-| `--quality 360p\|480p\|720p\|1080p` | Optional | 1080p | Caps the video's resolution; the sound is the same at every level. |
-| `--start TIME` | Optional | The beginning | Keeps the video from this time, as seconds, `MM:SS`, or `HH:MM:SS`; a video opens at the keyframe at or before it, up to a few seconds early. |
+| `--download [video\|audio\|frames\|keyframes]` | Optional | Off; `video` when left out | Saves the video with its sound as an mp4, the sound alone as an m4a, a folder of JPEGs with one frame per visible change, or a folder of every keyframe, named for the title, channel, video quality, kind, and range in the working directory; `download` holds the file or folder `path`, and a `message` when an earlier download of the same request came back instead. Frames are named by their time in the video, such as `00h01m02.812s.jpg`, so they list in time order. |
+| `--quality 360p\|480p\|720p\|1080p` | Optional | 1080p | Caps the video's resolution and sets the frames' size; the sound is the same at every level. |
+| `--at TIME ...` | Optional | Off | With `--download frames`, saves the first frame at or after each time, keyframe or not, as its own JPEG named for the time instead of a folder; `download` is then a list with a `path` and `message` per time. |
+| `--start TIME` | Optional | The beginning | Keeps the video from this time, as seconds, `MM:SS`, or `HH:MM:SS`, with a fraction if needed such as `1:15.25`; a video opens on the first frame at or after it. |
 | `--end TIME` | Optional | The end | Keeps the video up to this time. |
 | `--fresh` | Optional | Off: an earlier identical download comes back | Downloads again even when the same file is already there. |
 
-Use it when the user wants the file itself, or to hand a video or its sound to another tool, such as a model that watches video: 360p or 480p uploads much faster and loses little for a model. With `--start` and `--end`, only that range is fetched, so take the times from the transcript to clip one moment. With `--vision`, a whole video downloaded at 720p or more is where the screenshots are picked from, so the video downloads once.
+Use it when the user wants the file itself, or to hand a video or its sound to another tool, such as a model that watches video: 360p or 480p uploads much faster and loses little for a model. With `--start` and `--end`, only that range is fetched, so take the times from the transcript to clip one moment. With `--vision`, a video downloaded at 720p or more over the same range is where the screenshots are picked from, so the video downloads once.
+
+To look through a video yourself, download its frames rather than `--vision`'s curated screenshots: `frames` keeps every visible change at full quality with no model involved, `keyframes` keeps every keyframe, blank and repeated ones included, and `--at` fetches the frames at times the transcript points to in seconds, without downloading the rest. Match frame names to transcript timestamps to see what was on screen as something was said.
 
 ### Comments
 
@@ -183,7 +190,7 @@ youtube channel @OpenAI --days 7
 
 ## Setup
 
-Install from the toolkit's checkout with `uv run python scripts/install.py`, adding `--vision`, `--embeddings`, or `--stt` as needed; vision, speech-to-text, and downloads also need `ffmpeg`.
+Install from the toolkit's checkout with `uv run python scripts/install.py`, adding `--vision` (screenshots and frame downloads), `--embeddings`, or `--stt` as needed; vision, speech-to-text, and downloads also need `ffmpeg`.
 
 | Command | What it does |
 | --- | --- |

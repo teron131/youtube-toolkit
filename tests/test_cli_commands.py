@@ -8,9 +8,11 @@ from pathlib import Path
 from types import SimpleNamespace
 import warnings
 
+import numpy as np
+from PIL import Image
 import pytest
 
-from youtube_toolkit import config, export, summary
+from youtube_toolkit import config, download, summary
 from youtube_toolkit.cli import commands, health, output, setup
 from youtube_toolkit.cli.__main__ import main
 from youtube_toolkit.cli.parser import build_parser
@@ -488,7 +490,7 @@ def test_video_parts_share_one_metadata_fetch_and_export_markdown_beside_collage
         received.append(metadata)
         return document
 
-    def sample_vision(_video_ref, *, metadata, document, fresh, video_path):
+    def sample_vision(_video_ref, *, metadata, document, start, end, fresh, video_path):
         received.extend([metadata, document])
         return vision
 
@@ -615,7 +617,11 @@ def test_video_summary_alone_prints_only_the_summary(
         (["--transcript", "--max-frames", "5"], "--max-frames requires --vision"),
         (["--no-auto-clean"], "--auto-clean requires --vision"),
         (["--quality", "720p"], "--quality requires --download"),
-        (["--download", "audio", "--quality", "720p"], "only to video downloads"),
+        (["--download", "audio", "--quality", "720p"], "only to video and frame"),
+        (["--start", "1:00"], "--start requires --download or --vision"),
+        (["--at", "1:00"], "--at requires --download"),
+        (["--download", "keyframes", "--at", "1:00"], "only to --download frames"),
+        (["--download", "frames", "--at", "1:00", "--end", "2:00"], "--start or --end"),
         (["--download", "--start", "1::30"], "Invalid duration: 1::30"),
         (["--fresh"], "--fresh requires --export, --vision, or --download"),
     ],
@@ -628,26 +634,40 @@ def test_video_part_options_require_their_part_before_any_fetch(
     assert metadata_calls == []
 
 
+DOWNLOAD_METADATA = {
+    "id": "JpSHyEIZ_bo",
+    "title": "Ray tracing",
+    "channel": "Example Channel",
+    "duration": 300,
+}
+
+
 @pytest.fixture
 def downloads(monkeypatch, tmp_path):
-    """The yt-dlp downloads asked for, each as its video, path, and options; the fake writes the file it is given."""
+    """The yt-dlp downloads asked for, each as the metadata it starts from, its path, and options; the fake writes the file it is given."""
     calls = []
 
     class Client:
         def metadata(self, _video_ref):
-            return {
-                "id": "JpSHyEIZ_bo",
-                "title": "Ray tracing",
-                "channel": "Example Channel",
-                "duration": 300,
-            }
+            return DOWNLOAD_METADATA
 
-        def download_media(self, video_ref, path, **options):
-            calls.append((video_ref, path, options))
+        def download_media(self, metadata, path, **options):
+            calls.append((metadata, path, options))
             path.write_bytes(b"media")
 
+        def download_silent_video(self, metadata, path, **options):
+            calls.append((metadata, path, options))
+            path.write_bytes(b"video")
+
+        def download_silent_clips(self, metadata, directory, **options):
+            calls.append((metadata, directory, options))
+            clips = [directory / f"{start}.mp4" for start, _ in options["sections"]]
+            for clip in clips:
+                clip.write_bytes(b"clip")
+            return clips
+
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(export.shutil, "which", lambda _name: "ffmpeg")
+    monkeypatch.setattr(download.shutil, "which", lambda _name: "ffmpeg")
     monkeypatch.setattr(commands, "YtDlpClient", Client)
     return calls
 
@@ -663,7 +683,7 @@ def test_a_video_downloads_whole_at_1080p_under_its_title_and_channel(
     }
     assert downloads == [
         (
-            "JpSHyEIZ_bo",
+            DOWNLOAD_METADATA,
             path,
             {
                 "height": 1080,
@@ -682,7 +702,7 @@ def test_a_range_of_sound_downloads_alone_and_stops_at_the_videos_end(
 
     assert main(["video", "JpSHyEIZ_bo", *arguments]) == 0
 
-    path = tmp_path / "Ray_tracing_Example_Channel_1m15s_5m0s.m4a"
+    path = tmp_path / "Ray_tracing_Example_Channel_00h01m15.000s_00h05m00.000s.m4a"
     assert json.loads(capsys.readouterr().out) == {
         "download": {"path": str(path), "message": None}
     }
@@ -697,7 +717,9 @@ def test_a_range_of_sound_downloads_alone_and_stops_at_the_videos_end(
 def test_an_earlier_download_comes_back_with_a_message_unless_forced(
     capsys, tmp_path, downloads
 ) -> None:
-    earlier = tmp_path / "Ray_tracing_Example_Channel_720p_1m0s_2m0s.mp4"
+    earlier = (
+        tmp_path / "Ray_tracing_Example_Channel_720p_00h01m00.000s_00h02m00.000s.mp4"
+    )
     earlier.write_bytes(b"earlier")
     clip = ["video", "JpSHyEIZ_bo", "--download", "--quality", "720p"]
     clip += ["--start", "1:00", "--end", "2:00"]
@@ -710,7 +732,7 @@ def test_an_earlier_download_comes_back_with_a_message_unless_forced(
     assert main([*clip[:-1], "2:01"]) == 0
     assert main(["video", "JpSHyEIZ_bo", "--download", "--quality", "360p"]) == 0
     assert [path.name for _, path, _ in downloads] == [
-        "Ray_tracing_Example_Channel_720p_1m0s_2m1s.mp4",
+        "Ray_tracing_Example_Channel_720p_00h01m00.000s_00h02m01.000s.mp4",
         "Ray_tracing_Example_Channel_360p.mp4",
     ]
     assert main([*clip, "--fresh"]) == 0
@@ -723,7 +745,7 @@ def test_a_range_downloads_in_bounded_requests_youtube_does_not_throttle(
 ) -> None:
     calls = []
 
-    def fake_run(command, capture_output, text, check, timeout):
+    def fake_run(command, input, capture_output, text, check, timeout):
         calls.append(command)
         Path(command[command.index("--output") + 1]).write_bytes(b"media")
         return SimpleNamespace(returncode=0, stderr="")
@@ -731,7 +753,7 @@ def test_a_range_downloads_in_bounded_requests_youtube_does_not_throttle(
     monkeypatch.setattr("youtube_toolkit.youtube.client.subprocess.run", fake_run)
 
     YtDlpClient().download_media(
-        "JpSHyEIZ_bo",
+        {"id": "JpSHyEIZ_bo"},
         tmp_path / "clip.mp4",
         height=1080,
         section=(75.0, 150.0),
@@ -759,17 +781,18 @@ def test_a_range_that_holds_nothing_fails_before_downloading(
 
 @pytest.mark.parametrize(
     ("arguments", "reused"),
-    [([], True), (["--quality", "480p"], False), (["--end", "1:00"], False)],
+    [([], True), (["--quality", "480p"], False), (["--end", "1:00"], True)],
 )
-def test_vision_picks_from_a_whole_video_downloaded_at_720p_or_more(
+def test_vision_picks_from_a_video_downloaded_at_720p_or_more_over_its_range(
     monkeypatch, downloads, arguments, reused
 ) -> None:
     from youtube_toolkit import vision as vision_package
 
     received = []
 
-    def sample_vision(_video_ref, *, video_path, **_options):
+    def sample_vision(_video_ref, *, video_path, start, end, **_options):
         received.append(video_path)
+        assert (start, end) == (None, 60.0 if "--end" in arguments else None)
         return {"frame_count": 1}
 
     monkeypatch.setattr(commands, "require_vision", lambda: None)
@@ -781,6 +804,146 @@ def test_vision_picks_from_a_whole_video_downloaded_at_720p_or_more(
     result = commands.video(args)
 
     assert received == [Path(result["download"]["path"]) if reused else None]
+
+
+@pytest.fixture
+def frame_extraction(monkeypatch):
+    """Each keyframe extraction asked for, as its start, duration, size, and distinct switch; the fake saves frames at 62.81275 and 70 seconds."""
+    from youtube_toolkit import vision as vision_package
+    from youtube_toolkit.vision.candidates import StoredFrame, VisualScores
+
+    calls = []
+
+    def collect_candidates(
+        _video_path, _ffmpeg, *, start, duration, frame_size, directory, distinct, **_
+    ):
+        calls.append((start, duration, frame_size, distinct))
+        directory.mkdir(parents=True, exist_ok=True)
+        frames = []
+        for time in (62.81275, 70.0):
+            path = directory / f"frame-{round(time * 1000):09d}.jpg"
+            path.write_bytes(b"jpeg")
+            frames.append(StoredFrame(time, path, VisualScores(0.0, 0.0, 0.0)))
+        return frames
+
+    monkeypatch.setattr(commands, "require_vision", lambda: None)
+    monkeypatch.setattr(vision_package, "collect_candidates", collect_candidates)
+    return calls
+
+
+def test_frames_download_into_a_folder_named_by_quality_kind_and_range(
+    capsys, tmp_path, downloads, frame_extraction
+) -> None:
+    clip = ["video", "JpSHyEIZ_bo", "--download", "frames", "--quality", "720p"]
+    clip += ["--start", "1:00", "--end", "2:00"]
+
+    assert main(clip) == 0
+
+    folder = (
+        tmp_path / "Ray_tracing_Example_Channel_720p_frames_00h01m00.000s_00h02m00.000s"
+    )
+    assert json.loads(capsys.readouterr().out) == {
+        "download": {"path": str(folder), "message": None}
+    }
+    # Names round down to the millisecond and list in time order.
+    assert sorted(path.name for path in folder.iterdir()) == [
+        "00h01m02.812s.jpg",
+        "00h01m10.000s.jpg",
+    ]
+    assert downloads[0][2] == {
+        "height": 720,
+        "section": (60.0, 120.0),
+        "max_bytes": None,
+        "timeout_seconds": 600,
+    }
+    assert frame_extraction == [(60.0, 60.0, (1280, 720), True)]
+    assert not list(tmp_path.glob("*.part"))
+    assert not list((tmp_path / ".cache/youtube-toolkit").iterdir())
+    assert main(clip) == 0
+    assert (
+        "Already downloaded"
+        in json.loads(capsys.readouterr().out)["download"]["message"]
+    )
+    assert len(downloads) == 1
+    assert main(["video", "JpSHyEIZ_bo", "--download", "keyframes"]) == 0
+    assert (tmp_path / "Ray_tracing_Example_Channel_1080p_keyframes").is_dir()
+    assert frame_extraction[-1] == (0.0, 300, (1920, 1080), False)
+
+
+def test_frames_at_given_times_download_together_and_come_back_when_present(
+    monkeypatch, capsys, tmp_path, downloads
+) -> None:
+    earlier = tmp_path / "Ray_tracing_Example_Channel_360p_00h01m15.000s.jpg"
+    earlier.write_bytes(b"earlier")
+    monkeypatch.setattr(commands, "require_vision", lambda: None)
+    monkeypatch.setattr(
+        download,
+        "decode_frame",
+        lambda _clip, timestamp, _ffmpeg, *, width, height: np.full(
+            (height, width, 3), timestamp, dtype=np.uint8
+        ),
+    )
+    times = ["--at", "0:30", "1:15", "0:30", "4:59"]
+
+    assert (
+        main(
+            [
+                "video",
+                "JpSHyEIZ_bo",
+                "--download",
+                "frames",
+                *times,
+                "--quality",
+                "360p",
+            ]
+        )
+        == 0
+    )
+
+    results = json.loads(capsys.readouterr().out)["download"]
+    assert [Path(result["path"]).name for result in results] == [
+        "Ray_tracing_Example_Channel_360p_00h00m30.000s.jpg",
+        "Ray_tracing_Example_Channel_360p_00h01m15.000s.jpg",
+        "Ray_tracing_Example_Channel_360p_00h04m59.000s.jpg",
+    ]
+    assert [result["message"] is None for result in results] == [True, False, True]
+    [(_, _, options)] = downloads
+    assert options["sections"] == [(30.0, 31.0), (299.0, 300)]
+    assert options["height"] == 360
+    with Image.open(results[0]["path"]) as image:
+        assert image.size == (640, 360)
+    assert earlier.read_bytes() == b"earlier"
+    assert main(["video", "JpSHyEIZ_bo", "--download", "frames", "--at", "5:00"]) == 1
+    assert "Frame time 300 seconds is outside the video" in capsys.readouterr().err
+
+
+def test_clips_download_in_one_run_from_fetched_metadata_and_come_back_in_order(
+    monkeypatch, tmp_path
+) -> None:
+    calls = []
+    metadata = {"id": "JpSHyEIZ_bo", "formats": []}
+
+    def fake_run(command, input, capture_output, text, check, timeout):
+        calls.append((command, input))
+        stdout = f"75 {tmp_path}/75.mp4\n10 {tmp_path}/10.mp4\n"
+        return SimpleNamespace(returncode=0, stderr="", stdout=stdout)
+
+    monkeypatch.setattr("youtube_toolkit.youtube.client.subprocess.run", fake_run)
+
+    clips = YtDlpClient().download_silent_clips(
+        metadata,
+        tmp_path,
+        height=720,
+        sections=[(10.0, 11.0), (75.0, 76.0)],
+        timeout_seconds=600,
+    )
+
+    assert clips == [tmp_path / "10.mp4", tmp_path / "75.mp4"]
+    [(command, stdin)] = calls
+    assert command.count("--download-sections") == 2
+    assert command.count("--downloader-args") == 1
+    assert command[-2:] == ["--load-info-json", "-"]
+    assert json.loads(stdin) == metadata
 
 
 @pytest.mark.parametrize(("flags", "language"), [([], "en"), (["ja"], "ja")])

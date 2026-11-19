@@ -16,6 +16,9 @@ from PIL import Image
 
 from ..ffmpeg_utils import decode_keyframes
 
+# Picking was tuned on candidates of this size.
+CANDIDATE_WIDTH = 960
+CANDIDATE_HEIGHT = 540
 SLOT_SECONDS = 12
 REPEAT_SIMILARITY = 0.95
 MIN_CONTRAST = 3.0
@@ -73,28 +76,35 @@ def collect_candidates(
     video_path: Path,
     ffmpeg_path: str,
     *,
+    start: float,
     duration: float,
+    frame_size: tuple[int, int],
     directory: Path,
     excluded_intervals: list[tuple[float, float]],
+    distinct: bool,
 ) -> list[StoredFrame]:
-    """Write each usable keyframe to directory as a JPEG, skipping excluded intervals, near-blank frames, near-duplicates of recent candidates, and cross-fades.
+    """Write the keyframes of video_path, which holds `duration` seconds of the video from `start`, to directory as JPEGs timed in the video, skipping excluded intervals.
 
+    distinct also skips near-blank frames, near-duplicates of recent candidates, and cross-fades; otherwise every keyframe is kept.
     YouTube encodes place a keyframe every few seconds, so keyframes alone give an even grid without decoding the frames between them.
     """
     directory.mkdir(parents=True, exist_ok=True)
     candidates: list[tuple[StoredFrame, np.ndarray]] = []
     recent: list[tuple[float, _PixelStats]] = []
-    for times, images in _keyframe_windows(video_path, ffmpeg_path, duration):
+    for offsets, images in _keyframe_windows(
+        video_path, ffmpeg_path, duration, frame_size
+    ):
         previous = None
-        for index, timestamp in enumerate(times):
-            gray = _gray(images[index])
+        for offset, image in zip(offsets, images, strict=True):
+            timestamp = start + offset
+            gray = _gray(image)
             change = (
                 0.0
                 if previous is None
                 else float(cv2.absdiff(previous, gray).mean() / 255)
             )
             previous = gray
-            if gray.std() < MIN_CONTRAST or any(
+            if (distinct and gray.std() < MIN_CONTRAST) or any(
                 left <= timestamp < right for left, right in excluded_intervals
             ):
                 continue
@@ -105,26 +115,30 @@ def collect_candidates(
             ]
             stats = _PixelStats.from_gray(gray)
             similarity = max((stats.ssim(other) for _, other in recent), default=0.0)
-            if similarity >= CANDIDATE_DUPLICATE_SIMILARITY:
+            if distinct and similarity >= CANDIDATE_DUPLICATE_SIMILARITY:
                 continue
             scores = VisualScores(
                 clarity=float(cv2.Laplacian(gray, cv2.CV_64F).var()),
                 neighbor_change=change,
                 similarity_to_previous=similarity,
             )
-            stored = store_frame(
-                directory, DecodedFrame(timestamp, images[index], scores)
-            )
+            stored = store_frame(directory, DecodedFrame(timestamp, image, scores))
             candidates.append((stored, _thumbnail(gray)))
             recent.append((timestamp, stats))
     candidates.sort(key=lambda candidate: candidate[0].timestamp_seconds)
-    cross_fades = {
-        index
-        for index in range(1, len(candidates) - 1)
-        if _is_cross_fade(
-            candidates[index][1], candidates[index - 1][1], candidates[index + 1][1]
-        )
-    }
+    cross_fades = (
+        {
+            index
+            for index in range(1, len(candidates) - 1)
+            if _is_cross_fade(
+                candidates[index][1],
+                candidates[index - 1][1],
+                candidates[index + 1][1],
+            )
+        }
+        if distinct
+        else set()
+    )
     for index in cross_fades:
         candidates[index][0].image_path.unlink()
     return [
@@ -134,18 +148,23 @@ def collect_candidates(
 
 def store_frame(directory: Path, frame: DecodedFrame) -> StoredFrame:
     path = directory / f"frame-{round(frame.timestamp_seconds * 1000):09d}.jpg"
-    Image.fromarray(frame.image).save(path, "JPEG", quality=95)
+    save_frame(frame.image, path)
     return StoredFrame(frame.timestamp_seconds, path, frame.visual_scores)
+
+
+def save_frame(image: np.ndarray, path: Path) -> None:
+    Image.fromarray(image).save(path, "JPEG", quality=95)
 
 
 def select_slot_frames(
     candidates: list[StoredFrame],
     *,
+    start: float,
     duration: float,
     max_frames: int,
     min_gap_seconds: float,
 ) -> list[DecodedFrame]:
-    """Split the video into equal slots of at least SLOT_SECONDS, never more than max_frames, and take the candidate nearest each slot's middle.
+    """Split the `duration` seconds from `start` into equal slots of at least SLOT_SECONDS, never more than max_frames, and take the candidate nearest each slot's middle.
 
     A slot yields nothing when it has no candidates, when its pick falls within min_gap_seconds of the previous pick, or when its pick looks like any earlier pick, so static stretches and screens that return give fewer frames.
     """
@@ -153,8 +172,8 @@ def select_slot_frames(
     width = duration / count
     picks: dict[int, StoredFrame] = {}
     for candidate in candidates:
-        slot = min(count - 1, int(candidate.timestamp_seconds / width))
-        middle = (slot + 0.5) * width
+        slot = min(count - 1, int((candidate.timestamp_seconds - start) / width))
+        middle = start + (slot + 0.5) * width
         best = picks.get(slot)
         if best is None or abs(candidate.timestamp_seconds - middle) < abs(
             best.timestamp_seconds - middle
@@ -208,15 +227,24 @@ def select_ranked_frames(
 
 
 def _keyframe_windows(
-    video_path: Path, ffmpeg_path: str, duration: float
+    video_path: Path, ffmpeg_path: str, duration: float, frame_size: tuple[int, int]
 ) -> Iterator[tuple[list[float], np.ndarray]]:
     """Each DECODE_WINDOW_SECONDS window's keyframes, in time order."""
+    width, height = frame_size
     with ThreadPoolExecutor(DECODE_WORKERS) as executor:
         pending: deque[Future[tuple[list[float], np.ndarray]]] = deque()
         for start in range(0, math.ceil(duration), DECODE_WINDOW_SECONDS):
             stop = min(duration, start + DECODE_WINDOW_SECONDS)
             pending.append(
-                executor.submit(decode_keyframes, video_path, start, stop, ffmpeg_path)
+                executor.submit(
+                    decode_keyframes,
+                    video_path,
+                    start,
+                    stop,
+                    ffmpeg_path,
+                    width=width,
+                    height=height,
+                )
             )
             if len(pending) == DECODE_WORKERS:
                 yield pending.popleft().result()

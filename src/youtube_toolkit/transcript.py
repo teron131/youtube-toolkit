@@ -50,7 +50,7 @@ SUBTITLE_LANGUAGES = (
 class TranscriptClient(Protocol):
     def metadata(self, video_ref: VideoRef, /) -> dict[str, Any]: ...
 
-    def download_transcription_audio(self, video_ref: VideoRef, /) -> Path:
+    def download_transcription_audio(self, metadata: dict[str, Any], /) -> Path:
         """The caller deletes the returned file."""
         ...
 
@@ -122,7 +122,7 @@ def _fetch_stt_transcript(
     transcribe: Callable[[Path, list[str]], SpeechTranscription],
 ) -> TranscriptDocument:
     metadata = VideoMetadata.from_yt_dlp(metadata_payload)
-    audio_path = client.download_transcription_audio(metadata.video_id)
+    audio_path = client.download_transcription_audio(metadata_payload)
     try:
         transcription = transcribe(audio_path, metadata_names(metadata))
     finally:

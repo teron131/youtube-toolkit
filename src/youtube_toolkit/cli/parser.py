@@ -16,7 +16,7 @@ from ..config import (
     MAX_VISION_ROWS,
     VISION_RESOLUTIONS,
 )
-from ..export import DEFAULT_DOWNLOAD_QUALITY, DOWNLOAD_HEIGHTS
+from ..download import DEFAULT_DOWNLOAD_QUALITY, DOWNLOAD_SIZES
 from ..search import DEFAULT_CHANNEL_SEARCH_LIMIT, DEFAULT_YOUTUBE_SEARCH_LIMIT
 from ..youtube import DEFAULT_COMMENT_LIMIT, DEFAULT_LAST_VIDEOS, MAX_COMMENT_LIMIT
 from . import commands
@@ -65,7 +65,7 @@ def _add_video_command(subparsers: argparse._SubParsersAction) -> None:
     video_parser = subparsers.add_parser(
         "video",
         help="Fetch a video's metadata, transcript, comments, or screenshots, or download it",
-        description="Each part flag adds that part to the output, keyed by part; with none, the output holds the metadata alone. Options for a part require its flag; --stt and --translate also work with --summary.",
+        description="Each part flag adds that part to the output, keyed by part; with none, the output holds the metadata alone. Options for a part require its flag; --stt and --translate also work with --summary, and --start and --end with --vision.",
     )
     video_parser.add_argument(
         "video_ref", metavar="url", help="YouTube video URL or ID"
@@ -144,6 +144,11 @@ def _add_video_command(subparsers: argparse._SubParsersAction) -> None:
         help=f"Screenshot resolution (default: {DEFAULT_VISION_RESOLUTION}); 360p saves image tokens but loses small text and digits, and 720p decodes the picked frames again from the 720p download",
     )
     vision.add_argument(
+        "--timestamp-annotation",
+        action=argparse.BooleanOptionalAction,
+        help="Print each screenshot's time beneath it in the collages (default: on); each screenshot is also saved alone, without its time, at the image_path listed under frames in the output",
+    )
+    vision.add_argument(
         "--min-similarity",
         type=float,
         help="Minimum raw cosine for semantic matches (default: the cutoff measured for the ranking embedding model)",
@@ -169,23 +174,31 @@ def _add_video_command(subparsers: argparse._SubParsersAction) -> None:
         "--download",
         nargs="?",
         const="video",
-        choices=("video", "audio"),
-        help="Save the video with its sound as an mp4, or with audio the sound alone as an m4a, to the working directory under the title, channel, quality, and range; a file already there for the same request comes back as it is",
+        choices=("video", "audio", "frames", "keyframes"),
+        help="Save to the working directory, under the title, channel, quality, and range: the video with its sound as an mp4; with audio, the sound alone as an m4a; with frames, a folder of JPEGs, one per visible change, named by time; with keyframes, a folder of every keyframe. What is already there for the same request comes back as it is",
     )
     download.add_argument(
         "--quality",
-        choices=list(DOWNLOAD_HEIGHTS),
-        help=f"Largest video resolution (default: {DEFAULT_DOWNLOAD_QUALITY}); the sound is the same at every level",
+        choices=list(DOWNLOAD_SIZES),
+        help=f"Largest video resolution, and the size of frames (default: {DEFAULT_DOWNLOAD_QUALITY}); the sound is the same at every level",
     )
     download.add_argument(
+        "--at",
+        nargs="+",
+        action="extend",
+        metavar="TIME",
+        help="With --download frames, save the first frame at or after each TIME, keyframe or not, as its own JPEG named by its time, instead of a folder",
+    )
+    span = video_parser.add_argument_group("range")
+    span.add_argument(
         "--start",
         metavar="TIME",
-        help="Download from this time, as seconds, MM:SS, or HH:MM:SS; a video opens at the keyframe at or before it, up to a few seconds early",
+        help="Keep the video only from this time, as seconds, MM:SS, or HH:MM:SS, with a fraction if needed such as 1:15.25, for --download or --vision; a download opens on the first frame at or after it",
     )
-    download.add_argument(
+    span.add_argument(
         "--end",
         metavar="TIME",
-        help="Download up to this time (default: the end of the video)",
+        help="Keep the video only up to this time (default: the end of the video)",
     )
     comments = video_parser.add_argument_group("comments")
     comments.add_argument(
@@ -210,7 +223,7 @@ def _add_video_command(subparsers: argparse._SubParsersAction) -> None:
     video_parser.add_argument(
         "--fresh",
         action="store_true",
-        help="Redo what an earlier run left: replace an existing transcript export, pick screenshots afresh instead of reusing earlier picks, or download again instead of returning the file already there; requires --export, --vision, or --download",
+        help="Redo what an earlier run left: replace an existing transcript export, pick screenshots afresh instead of reusing earlier picks, or download again instead of returning what is already there; requires --export, --vision, or --download",
     )
     video_parser.set_defaults(handler=commands.video)
 

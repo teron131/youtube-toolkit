@@ -24,11 +24,12 @@ SEARCH_SORT_PARAMS = {
     "popularity": "CAMSAhAB",  # videos only, most viewed first
 }
 STT_AUDIO_FORMAT_SELECTOR = "bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio[ext=aac]"
-VISION_VIDEO_FORMAT_SELECTOR = "bestvideo[height<=720][ext=mp4]/bestvideo[height<=720]"
 # YouTube's sound comes at about 128 kbps AAC and its only other level is about 50 kbps, so the m4a stream is always the best that plays everywhere; plain bestaudio would take the Opus stream instead.
 DOWNLOAD_AUDIO_FORMAT = "bestaudio[ext=m4a]"
 # ffmpeg cuts a range from one open-ended request, which YouTube throttles to about playback speed, so it asks in bounded requests of the size yt-dlp's own YouTube downloads use.
 RANGE_REQUEST_BYTES = 10 * 1024 * 1024
+# yt-dlp prints `SECTION_START PATH` for each clip it saves: `75 /DIR/75.mp4`.
+CLIP_PRINT_TEMPLATE = "after_move:%(section_start)s %(filepath)s"
 # A metadata, search, or listing request that takes over a minute is stuck.
 YTDLP_REQUEST_TIMEOUT_SECONDS = 60
 MAX_CONCURRENT_METADATA_FETCHES = 8
@@ -130,25 +131,23 @@ class YtDlpClient:
             error_message="yt-dlp channel query failed",
         )
 
-    def download_transcription_audio(self, video_ref: VideoRef) -> Path:
-        video_id = require_video_id(video_ref)
-        output_stem = artifact_root() / "audio" / f"{video_id}-{uuid4().hex}"
+    def download_transcription_audio(self, metadata: dict[str, Any]) -> Path:
+        output_stem = artifact_root() / "audio" / f"{metadata['id']}-{uuid4().hex}"
         output_stem.parent.mkdir(parents=True, exist_ok=True)
         command = [
             *YTDLP_COMMAND,
-            "--no-playlist",
             "--quiet",
             "--no-warnings",
             "--format",
             STT_AUDIO_FORMAT_SELECTOR,
             "--output",
             str(output_stem.with_suffix(".%(ext)s")),
-            normalize_youtube_url(video_id),
         ]
         downloaded_path: Path | None = None
         try:
-            _run(
+            _download(
                 command,
+                metadata,
                 action="audio download",
                 timeout_seconds=YTDLP_DOWNLOAD_TIMEOUT_SECONDS,
             )
@@ -169,45 +168,9 @@ class YtDlpClient:
                 if path.is_file() and path != downloaded_path:
                     path.unlink(missing_ok=True)
 
-    def download_video_for_vision(
-        self,
-        video_ref: VideoRef,
-        output_path: Path,
-        *,
-        max_bytes: int,
-    ) -> Path:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        _run(
-            [
-                *YTDLP_COMMAND,
-                "--no-playlist",
-                "--quiet",
-                "--no-warnings",
-                "--concurrent-fragments",
-                "1",
-                "--max-filesize",
-                str(max_bytes),
-                "--format",
-                VISION_VIDEO_FORMAT_SELECTOR,
-                "--output",
-                str(output_path),
-                normalize_youtube_url(video_ref),
-            ],
-            action="video download for vision",
-            timeout_seconds=YTDLP_DOWNLOAD_TIMEOUT_SECONDS,
-        )
-        if not output_path.exists():
-            raise RuntimeError(f"yt-dlp completed but did not create {output_path}")
-        if output_path.stat().st_size > max_bytes:
-            output_path.unlink()
-            raise RuntimeError(
-                f"yt-dlp video download for vision exceeded {max_bytes} bytes"
-            )
-        return output_path
-
     def download_media(
         self,
-        video_ref: VideoRef,
+        metadata: dict[str, Any],
         path: Path,
         *,
         height: int | None,
@@ -215,37 +178,108 @@ class YtDlpClient:
         overwrite: bool,
         timeout_seconds: int,
     ) -> None:
-        """Writes an mp4 with sound no taller than `height`, or with None the m4a sound alone, keeping only `section` in seconds when given, cut at the keyframe at or before its start."""
+        """Writes an mp4 with sound no taller than `height`, or with None the m4a sound alone, keeping only `section` in seconds when given, opened on the first frame at or after its start."""
         command = [
             *YTDLP_COMMAND,
-            "--no-playlist",
             "--quiet",
             "--no-warnings",
             "--format",
             DOWNLOAD_AUDIO_FORMAT if height is None else _download_video_format(height),
-            # yt-dlp reads the output as a template, where a literal % is written %%.
             "--output",
-            str(path).replace("%", "%%"),
+            _literal_template(path),
+            *_range_arguments([] if section is None else [section]),
         ]
         if overwrite:
             command.append("--force-overwrites")
         if height is not None:
             command += ["--merge-output-format", "mp4"]
-        if section is not None:
-            start, end = section
-            command += [
-                "--download-sections",
-                f"*{start}-{end}",
-                "--downloader-args",
-                f"ffmpeg_i:-request_size {RANGE_REQUEST_BYTES}",
-            ]
-        _run(
-            [*command, normalize_youtube_url(video_ref)],
+        _download(
+            command,
+            metadata,
             action="download",
             timeout_seconds=timeout_seconds,
         )
         if not path.exists():
             raise RuntimeError(f"yt-dlp completed but did not create {path}")
+
+    def download_silent_video(
+        self,
+        metadata: dict[str, Any],
+        path: Path,
+        *,
+        height: int,
+        section: tuple[float, float] | None,
+        max_bytes: int | None,
+        timeout_seconds: int,
+    ) -> None:
+        """Writes the picture alone no taller than `height`, keeping only `section` in seconds when given, opened on the first frame at or after its start; a file over max_bytes is deleted and raises."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        command = [
+            *YTDLP_COMMAND,
+            "--quiet",
+            "--no-warnings",
+            "--concurrent-fragments",
+            "1",
+            "--format",
+            _silent_video_format(height),
+            "--output",
+            _literal_template(path),
+            *_range_arguments([] if section is None else [section]),
+        ]
+        # yt-dlp judges --max-filesize by the whole stream, which would refuse a short section of a long video, so a section is checked only once saved.
+        if max_bytes is not None and section is None:
+            command += ["--max-filesize", str(max_bytes)]
+        _download(
+            command,
+            metadata,
+            action="video download",
+            timeout_seconds=timeout_seconds,
+        )
+        if not path.exists():
+            raise RuntimeError(f"yt-dlp completed but did not create {path}")
+        if max_bytes is not None and path.stat().st_size > max_bytes:
+            path.unlink()
+            raise RuntimeError(f"yt-dlp video download exceeded {max_bytes} bytes")
+
+    def download_silent_clips(
+        self,
+        metadata: dict[str, Any],
+        directory: Path,
+        *,
+        height: int,
+        sections: list[tuple[float, float]],
+        timeout_seconds: int,
+    ) -> list[Path]:
+        """Writes the picture alone of each section in seconds, no taller than `height`, as its own clip in directory, all in one yt-dlp run; clips come back in sections' order, each opened on the first frame at or after its start."""
+        directory.mkdir(parents=True, exist_ok=True)
+        result = _download(
+            [
+                *YTDLP_COMMAND,
+                "--no-warnings",
+                "--format",
+                _silent_video_format(height),
+                "--output",
+                str(Path(_literal_template(directory)) / "%(section_start)s.%(ext)s"),
+                "--print",
+                CLIP_PRINT_TEMPLATE,
+                *_range_arguments(sections),
+            ],
+            metadata,
+            action="clip download",
+            timeout_seconds=timeout_seconds,
+        )
+        clips = {
+            float(start): Path(path)
+            for start, path in (
+                line.split(" ", 1) for line in result.stdout.splitlines() if line
+            )
+        }
+        missing = [start for start, _ in sections if start not in clips]
+        if missing:
+            raise RuntimeError(
+                f"yt-dlp completed but saved no clip from {missing[0]} seconds"
+            )
+        return [clips[start] for start, _ in sections]
 
     def _json(
         self,
@@ -280,6 +314,22 @@ def _request_json(command: list[str], *, error_message: str) -> dict[str, Any]:
     return data
 
 
+def _download(
+    command: list[str],
+    metadata: dict[str, Any],
+    *,
+    action: str,
+    timeout_seconds: int,
+) -> subprocess.CompletedProcess[str]:
+    """Starts yt-dlp from metadata already fetched rather than the video's address, sparing it a lookup of the video that takes seconds; when the metadata's stream addresses have expired or are refused, yt-dlp looks the video up afresh itself."""
+    return _run(
+        [*command, "--load-info-json", "-"],
+        action=action,
+        timeout_seconds=timeout_seconds,
+        stdin=json.dumps(metadata),
+    )
+
+
 def _download_video_format(height: int) -> str:
     """H.264 video, which every player and editor opens, else any mp4 video, joined with the m4a sound; else YouTube's own mp4 with sound."""
     return (
@@ -287,6 +337,29 @@ def _download_video_format(height: int) -> str:
         f"/bestvideo[height<={height}][ext=mp4]+{DOWNLOAD_AUDIO_FORMAT}"
         f"/best[height<={height}][ext=mp4]"
     )
+
+
+def _silent_video_format(height: int) -> str:
+    return f"bestvideo[height<={height}][ext=mp4]/bestvideo[height<={height}]"
+
+
+def _literal_template(path: Path) -> str:
+    """yt-dlp reads the output as a template, where a literal % is written %%."""
+    return str(path).replace("%", "%%")
+
+
+def _range_arguments(sections: list[tuple[float, float]]) -> list[str]:
+    if not sections:
+        return []
+    return [
+        *(
+            argument
+            for start, end in sections
+            for argument in ("--download-sections", f"*{start}-{end}")
+        ),
+        "--downloader-args",
+        f"ffmpeg_i:-request_size {RANGE_REQUEST_BYTES}",
+    ]
 
 
 def _drop_translated_captions(metadata: dict[str, Any]) -> dict[str, Any]:
@@ -314,6 +387,7 @@ def _run(
     action: str,
     timeout_seconds: int,
     failure_message: str | None = None,
+    stdin: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """A process YouTube refuses with HTTP 403 is rerun after a pause, because a fresh run requests new media URLs."""
 
@@ -321,6 +395,7 @@ def _run(
         try:
             result = subprocess.run(  # noqa: S603 - fixed yt-dlp executable prefix and argument list.
                 command,
+                input=stdin,
                 capture_output=True,
                 text=True,
                 check=False,

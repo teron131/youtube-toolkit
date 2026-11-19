@@ -1,4 +1,4 @@
-"""Lay selected frames out as timestamped JPEG pages in a grid of the requested frame size.
+"""Lay selected frames out as JPEG pages in a grid of the requested frame size, each frame with its time printed beneath unless annotation is off.
 
 A page is deliberately not fitted to vision models' image limits: the frame resolution is the caller's choice, and a model downscales an oversized page itself.
 """
@@ -19,16 +19,17 @@ JPEG_SUBSAMPLING = "4:2:2"
 TIMESTAMP_FONT = ImageFont.load_default(size=16)
 
 
-def render_timestamped_collages(
+def render_collages(
     frames: list[DecodedFrame],
     output_stem: Path,
     *,
     rows: int,
     columns: int,
     frame_size: tuple[int, int],
+    timestamp_annotation: bool,
 ) -> list[Path]:
     width, height = frame_size
-    tile_height = height + TIMESTAMP_FOOTER_HEIGHT
+    tile_height = height + (TIMESTAMP_FOOTER_HEIGHT if timestamp_annotation else 0)
     collage_width = columns * width + COLLAGE_PADDING * (columns + 1)
     collage_height = rows * tile_height + COLLAGE_PADDING * (rows + 1)
     frames_per_page = rows * columns
@@ -38,10 +39,13 @@ def render_timestamped_collages(
             (collage_height, collage_width, 3), (10, 12, 15), dtype=np.uint8
         )
         for index, selected in enumerate(frames[offset : offset + frames_per_page]):
-            image = Image.fromarray(selected.image).resize(
-                frame_size, Image.Resampling.LANCZOS
+            tile = np.asarray(
+                Image.fromarray(selected.image).resize(
+                    frame_size, Image.Resampling.LANCZOS
+                )
             )
-            tile = add_timestamp_footer(np.asarray(image), selected.timestamp_seconds)
+            if timestamp_annotation:
+                tile = add_timestamp_footer(tile, selected.timestamp_seconds)
             row, column = divmod(index, columns)
             x = COLLAGE_PADDING + column * (width + COLLAGE_PADDING)
             y = COLLAGE_PADDING + row * (tile_height + COLLAGE_PADDING)

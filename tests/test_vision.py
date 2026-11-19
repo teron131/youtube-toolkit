@@ -9,7 +9,7 @@ import numpy as np
 from PIL import Image
 import pytest
 
-from youtube_toolkit import ffmpeg_utils, vision
+from youtube_toolkit import vision
 from youtube_toolkit.cli import commands
 from youtube_toolkit.cli.parser import build_parser
 from youtube_toolkit.config import (
@@ -38,7 +38,7 @@ from youtube_toolkit.vision.decisions import (
     FrameDecision,
 )
 from youtube_toolkit.youtube.captions import CaptionTranscriptUnavailable
-from youtube_toolkit.youtube.client import VISION_VIDEO_FORMAT_SELECTOR, YtDlpClient
+from youtube_toolkit.youtube.client import YtDlpClient
 
 VIDEO_ID = "JpSHyEIZ_bo"
 DECISION = DecisionConfig(
@@ -65,7 +65,7 @@ def chart(heights=(20, 30, 40, 50)) -> np.ndarray:
         image[320 - height * 4 : 320, 60 + column * 140 : 140 + column * 140] = 100
     return cv2.resize(
         image,
-        (ffmpeg_utils.FRAME_WIDTH, ffmpeg_utils.FRAME_HEIGHT),
+        (frame_selection.CANDIDATE_WIDTH, frame_selection.CANDIDATE_HEIGHT),
         interpolation=cv2.INTER_NEAREST,
     )
 
@@ -82,21 +82,32 @@ def test_local_selection_reports_its_reason_and_cleans_up(
             metadata_calls.append(_ref)
             return {"id": VIDEO_ID, "duration": 120, "heatmap": [{"value": 1}]}
 
-        def download_video_for_vision(self, _ref, path, *, max_bytes):
-            assert max_bytes == workflow.MAX_VIDEO_BYTES
+        def download_silent_video(
+            self, _metadata, path, *, height, section, max_bytes, timeout_seconds
+        ):
+            assert (height, section, max_bytes) == (720, None, workflow.MAX_VIDEO_BYTES)
             path.write_bytes(b"video")
-            return path
 
-        def download_transcription_audio(self, _ref):
+        def download_transcription_audio(self, _metadata):
             pytest.fail("no speech-to-text route is configured here")
 
     def transcript(metadata, *, languages):
         transcript_calls.append(metadata)
         raise CaptionTranscriptUnavailable("No captions")
 
-    def candidates(path, _ffmpeg, *, duration, directory, excluded_intervals):
+    def candidates(
+        path,
+        _ffmpeg,
+        *,
+        start,
+        duration,
+        frame_size,
+        directory,
+        excluded_intervals,
+        distinct,
+    ):
         assert path.exists()
-        assert duration == 120
+        assert (start, duration, frame_size, distinct) == (0, 120, (960, 540), True)
         return [store_frame(directory, 12, chart())]
 
     local_only = fallback == "local_only"
@@ -198,14 +209,59 @@ def test_sample_vision_rejects_long_video_before_download(
         def metadata(self, _ref):
             return {"id": VIDEO_ID, "duration": workflow.MAX_VIDEO_DURATION_SECONDS + 1}
 
-        def download_video_for_vision(self, *_args, **_kwargs):
+        def download_silent_video(self, *_args, **_kwargs):
             pytest.fail("download should not run")
 
     monkeypatch.setattr(workflow, "YtDlpClient", FakeClient)
     monkeypatch.setattr(workflow.shutil, "which", lambda _: "ffmpeg")
     monkeypatch.chdir(tmp_path)
-    with pytest.raises(ValueError, match="longer than 2 hours"):
+    with pytest.raises(ValueError, match="at most 2 hours"):
         workflow.sample_vision(VIDEO_ID)
+
+
+def test_a_vision_range_downloads_that_section_and_keeps_video_times(
+    monkeypatch, tmp_path
+) -> None:
+    sections, decoded = [], []
+
+    class FakeClient:
+        def metadata(self, _ref):
+            return {"id": VIDEO_ID, "duration": 600}
+
+        def download_silent_video(self, _metadata, path, *, section, **_options):
+            sections.append(section)
+            path.write_bytes(b"video")
+
+    def candidates(_path, _ffmpeg, *, start, duration, directory, **_options):
+        assert (start, duration) == (60, 30)
+        return [
+            store_frame(directory, 65, chart()),
+            store_frame(directory, 80, chart((10, 20, 35, 60))),
+        ]
+
+    def decode_frame(_path, timestamp, _ffmpeg, *, width, height):
+        decoded.append(timestamp)
+        return np.zeros((height, width, 3), dtype=np.uint8)
+
+    monkeypatch.setattr(workflow, "YtDlpClient", FakeClient)
+    monkeypatch.setattr(workflow.shutil, "which", lambda _: "ffmpeg")
+    monkeypatch.setattr(workflow, "local_embedding_installed", lambda: False)
+    monkeypatch.setattr(workflow, "collect_candidates", candidates)
+    monkeypatch.setattr(workflow, "decode_frame", decode_frame)
+    monkeypatch.chdir(tmp_path)
+
+    result = workflow.sample_vision(
+        VIDEO_ID,
+        start=60,
+        end=90,
+        resolution="720p",
+        local_only=True,
+        min_gap_seconds=0,
+    )
+
+    assert sections == [(60, 90)]
+    assert result["timestamps_seconds"] == [65, 80]
+    assert decoded == [5, 20]
 
 
 def test_slot_selection_takes_candidates_nearest_slot_middles(
@@ -220,7 +276,11 @@ def test_slot_selection_takes_candidates_nearest_slot_middles(
 
     def times(max_frames: int) -> list[float]:
         frames = frame_selection.select_slot_frames(
-            candidates, duration=120, max_frames=max_frames, min_gap_seconds=0
+            candidates,
+            start=0,
+            duration=120,
+            max_frames=max_frames,
+            min_gap_seconds=0,
         )
         return [frame.timestamp_seconds for frame in frames]
 
@@ -238,7 +298,7 @@ def test_slot_selection_skips_empty_slots_close_picks_and_repeats(tmp_path) -> N
         store_frame(tmp_path, 54, third),
     ]
     frames = frame_selection.select_slot_frames(
-        candidates, duration=60, max_frames=96, min_gap_seconds=10
+        candidates, start=0, duration=60, max_frames=96, min_gap_seconds=10
     )
     assert [frame.timestamp_seconds for frame in frames] == [6, 30, 54]
 
@@ -262,34 +322,47 @@ def test_ranked_selection_skips_close_picks_and_repeats_of_any_pick(tmp_path) ->
     assert picks(1) == [1]
 
 
-def test_download_video_for_vision_uses_bounded_720p_video_only_preset(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize("section", [None, (60.0, 90.0)])
+def test_silent_video_download_takes_the_picture_alone_within_a_size_cap(
+    monkeypatch, tmp_path, section
 ) -> None:
+    """yt-dlp would refuse a short section of a long video by the whole stream's size, so a section's cap applies only once saved."""
     calls: list[list[str]] = []
 
-    def fake_run(command, capture_output, text, check, timeout):
+    def fake_run(command, input, capture_output, text, check, timeout):
         calls.append(command)
         output_path = Path(command[command.index("--output") + 1])
         output_path.write_bytes(b"video")
         return SimpleNamespace(returncode=0, stderr="")
 
     monkeypatch.setattr("youtube_toolkit.youtube.client.subprocess.run", fake_run)
-    output_path = tmp_path / "video.mp4"
 
-    assert (
-        YtDlpClient().download_video_for_vision(
-            VIDEO_ID, output_path, max_bytes=123_456
-        )
-        == output_path
+    YtDlpClient().download_silent_video(
+        {"id": VIDEO_ID},
+        tmp_path / "video.mp4",
+        height=720,
+        section=section,
+        max_bytes=123_456,
+        timeout_seconds=600,
     )
     command = calls[0]
-    assert command[command.index("--format") + 1] == VISION_VIDEO_FORMAT_SELECTOR
-    assert command[command.index("--max-filesize") + 1] == "123456"
-    assert command[command.index("--concurrent-fragments") + 1] == "1"
-    assert VISION_VIDEO_FORMAT_SELECTOR.count("bestvideo") == 2
-    assert "+bestaudio" not in VISION_VIDEO_FORMAT_SELECTOR
-    assert "--postprocessor-args" not in command
+    assert (
+        command[command.index("--format") + 1]
+        == "bestvideo[height<=720][ext=mp4]/bestvideo[height<=720]"
+    )
+    assert ("--max-filesize" in command) is (section is None)
+    assert ("--download-sections" in command) is (section is not None)
     assert "--merge-output-format" not in command
+    with pytest.raises(RuntimeError, match="exceeded 3 bytes"):
+        YtDlpClient().download_silent_video(
+            {"id": VIDEO_ID},
+            tmp_path / "large.mp4",
+            height=720,
+            section=section,
+            max_bytes=3,
+            timeout_seconds=600,
+        )
+    assert not (tmp_path / "large.mp4").exists()
 
 
 @pytest.mark.parametrize(
@@ -297,9 +370,9 @@ def test_download_video_for_vision_uses_bounded_720p_video_only_preset(
     [
         (
             subprocess.TimeoutExpired(["yt-dlp"], timeout=1),
-            "video download for vision timed out",
+            "video download timed out",
         ),
-        (OSError("cannot execute"), "Could not start yt-dlp video download for vision"),
+        (OSError("cannot execute"), "Could not start yt-dlp video download"),
     ],
 )
 def test_vision_download_failures_become_user_facing_runtime_errors(
@@ -310,8 +383,13 @@ def test_vision_download_failures_become_user_facing_runtime_errors(
 
     monkeypatch.setattr("youtube_toolkit.youtube.client.subprocess.run", fail)
     with pytest.raises(RuntimeError, match=message):
-        YtDlpClient().download_video_for_vision(
-            VIDEO_ID, tmp_path / "video.mp4", max_bytes=123
+        YtDlpClient().download_silent_video(
+            {"id": VIDEO_ID},
+            tmp_path / "video.mp4",
+            height=720,
+            section=None,
+            max_bytes=123,
+            timeout_seconds=600,
         )
 
 
@@ -329,6 +407,11 @@ def test_vision_download_failures_become_user_facing_runtime_errors(
                 "3",
                 "--resolution",
                 "720p",
+                "--no-timestamp-annotation",
+                "--start",
+                "1:00",
+                "--end",
+                "1:30",
                 "--min-similarity",
                 "0.4",
                 "--min-gap",
@@ -341,6 +424,9 @@ def test_vision_download_failures_become_user_facing_runtime_errors(
                 "rows": 2,
                 "columns": 3,
                 "resolution": "720p",
+                "timestamp_annotation": False,
+                "start": 60.0,
+                "end": 90.0,
                 "min_similarity": 0.4,
                 "min_gap_seconds": 5,
                 "local_only": True,
@@ -376,6 +462,8 @@ def test_video_vision_passes_only_given_options_to_extraction(
             {
                 "metadata": payload,
                 "document": None,
+                "start": None,
+                "end": None,
                 "fresh": False,
                 "video_path": None,
                 **options,
@@ -405,7 +493,7 @@ def test_candidate_grid_reaches_video_end_and_respects_exclusions(
     image = chart()
     calls = []
 
-    def decode(_path, start, stop, _ffmpeg):
+    def decode(_path, start, stop, _ffmpeg, *, width, height):
         calls.append((start, stop))
         times = [float(time) for time in np.arange(start + 2.5, stop, 5)]
         return times, np.repeat(image[None], len(times), axis=0)
@@ -414,9 +502,12 @@ def test_candidate_grid_reaches_video_end_and_respects_exclusions(
     candidates = frame_selection.collect_candidates(
         tmp_path / "video.mp4",
         "ffmpeg",
+        start=0,
         duration=125,
+        frame_size=(frame_selection.CANDIDATE_WIDTH, frame_selection.CANDIDATE_HEIGHT),
         directory=tmp_path / "candidates",
         excluded_intervals=[(24, 75)],
+        distinct=True,
     )
     times = [frame.timestamp_seconds for frame in candidates]
     assert sorted(calls) == [(0, 60), (60, 120), (120, 125)]
@@ -427,8 +518,8 @@ def test_candidate_grid_reaches_video_end_and_respects_exclusions(
     assert len({frame.image_path for frame in candidates}) == len(candidates)
     assert all(frame.image_path.is_file() for frame in candidates)
     assert candidates[-1].load().image.shape == (
-        ffmpeg_utils.FRAME_HEIGHT,
-        ffmpeg_utils.FRAME_WIDTH,
+        frame_selection.CANDIDATE_HEIGHT,
+        frame_selection.CANDIDATE_WIDTH,
         3,
     )
 
@@ -439,7 +530,7 @@ def semantic_video(monkeypatch, tmp_path):
         def metadata(self, _ref):
             return {"id": VIDEO_ID, "duration": 120}
 
-        def download_video_for_vision(self, _ref, path, *, max_bytes):
+        def download_silent_video(self, _metadata, path, **_options):
             path.write_bytes(b"video")
 
     document = TranscriptDocument(
@@ -466,8 +557,12 @@ def semantic_video(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(workflow, "gemini_embedding_key", lambda: "test-key")
 
-    def candidates(_path, _ffmpeg, *, duration, directory, excluded_intervals):
-        return [store_frame(directory, timestamp, chart()) for timestamp in [12, 112]]
+    def candidates(_path, _ffmpeg, *, start, directory, **_options):
+        return [
+            store_frame(directory, timestamp, chart())
+            for timestamp in [12, 112]
+            if timestamp >= start
+        ]
 
     monkeypatch.setattr(workflow, "collect_candidates", candidates)
     monkeypatch.chdir(tmp_path)
@@ -542,7 +637,7 @@ def test_embedding_failure_stops_before_download_and_writes_no_artifacts(
     monkeypatch.setattr(workflow, "GeminiEmbeddingClient", Embedder)
     monkeypatch.setattr(
         workflow.YtDlpClient,
-        "download_video_for_vision",
+        "download_silent_video",
         lambda *_args, **_kwargs: pytest.fail("download must wait for text embeddings"),
     )
     with pytest.raises(EmbeddingError, match="503"):
@@ -567,25 +662,36 @@ def test_explicit_local_only_skips_configured_embedding_client(
     assert result["embedding_usage"] is None
 
 
-def test_candidates_drop_a_cross_fade_between_their_neighbours(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize(
+    ("distinct", "times"),
+    [(True, [105.0, 125.0, 145.0]), (False, [105.0, 115.0, 125.0, 135.0, 145.0])],
+)
+def test_distinct_candidates_drop_a_cross_fade_and_a_blank_frame(
+    monkeypatch, tmp_path, distinct, times
 ) -> None:
+    """Times in the file count from where it starts in the video, and without distinct every keyframe stays."""
     before, after, later = chart(), chart((50, 40, 30, 20)), chart((10, 50, 10, 50))
     fade = ((before.astype(np.uint16) + after) // 2).astype(np.uint8)
+    blank = np.zeros_like(before)
 
-    def decode(_path, _start, _stop, _ffmpeg):
-        return [5.0, 15.0, 25.0, 35.0], np.stack([before, fade, after, later])
+    def decode(_path, _start, _stop, _ffmpeg, *, width, height):
+        return [5.0, 15.0, 25.0, 35.0, 45.0], np.stack(
+            [before, fade, after, blank, later]
+        )
 
     monkeypatch.setattr(frame_selection, "decode_keyframes", decode)
     directory = tmp_path / "candidates"
     candidates = frame_selection.collect_candidates(
         tmp_path / "video.mp4",
         "ffmpeg",
-        duration=40,
+        start=100,
+        duration=50,
+        frame_size=(frame_selection.CANDIDATE_WIDTH, frame_selection.CANDIDATE_HEIGHT),
         directory=directory,
         excluded_intervals=[],
+        distinct=distinct,
     )
-    assert [frame.timestamp_seconds for frame in candidates] == [5.0, 25.0, 35.0]
+    assert [frame.timestamp_seconds for frame in candidates] == times
     assert sorted(directory.iterdir()) == [frame.image_path for frame in candidates]
 
 

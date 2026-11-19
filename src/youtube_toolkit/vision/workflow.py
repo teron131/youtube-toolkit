@@ -25,6 +25,7 @@ from ..config import (
     MAX_VISION_FRAMES,
     MAX_VISION_ROWS,
     VISION_RESOLUTIONS,
+    VISION_SOURCE_HEIGHT,
     DecisionConfig,
     EmbeddingCutoffs,
     VisionResolution,
@@ -40,12 +41,18 @@ from ..embeddings import (
     LocalImageEmbeddingClient,
     local_embedding_installed,
 )
-from ..ffmpeg_utils import FRAME_HEIGHT, decode_frame
+from ..ffmpeg_utils import decode_frame
 from ..identity import VideoRef, require_video_id
 from ..schemas import TranscriptDocument, VideoMetadata
 from ..transcript import fetch_transcript
-from ..youtube import YtDlpClient, extract_sponsorblock_intervals
+from ..youtube import (
+    YTDLP_DOWNLOAD_TIMEOUT_SECONDS,
+    YtDlpClient,
+    extract_sponsorblock_intervals,
+)
 from .candidates import (
+    CANDIDATE_HEIGHT,
+    CANDIDATE_WIDTH,
     DecodedFrame,
     StoredFrame,
     VisualScores,
@@ -54,7 +61,7 @@ from .candidates import (
     select_slot_frames,
     store_frame,
 )
-from .collages import render_timestamped_collages
+from .collages import render_collages
 from .decisions import DecisionRanking, rank_frames
 from .reranking import rerank_frames
 from .text import TextTarget, prepare_targets
@@ -86,6 +93,9 @@ def sample_vision(
     rows: int = DEFAULT_VISION_ROWS,
     columns: int = DEFAULT_VISION_COLUMNS,
     resolution: VisionResolution = DEFAULT_VISION_RESOLUTION,
+    timestamp_annotation: bool = True,
+    start: float | None = None,
+    end: float | None = None,
     min_similarity: float | None = None,
     min_gap_seconds: float = DEFAULT_VISION_MIN_GAP_SECONDS,
     local_only: bool = False,
@@ -98,13 +108,14 @@ def sample_vision(
     """Rank the video's keyframes by the first available route and write the picks as collages in a new directory in the working directory's archive.
 
     Routes in order: the decision model with DECISION_API_KEY, Gemini embeddings with EMBEDDING_API_KEY, the local embedding model when installed, then time slots.
+    `start` and `end` in seconds limit the frames, and the speech they are ranked against, to that part of the video; an `end` past the video stops at its end.
     local_only skips both APIs and speech-to-text, so the local model ranks against captions only.
     The transcript is fetched only when a model will rank and no document is given.
     Without captions it comes from speech-to-text, which ranks frames only when its route reports timing.
     min_similarity applies to embedding routes, and None means the cutoff tuned for the ranking model.
     max_frames limits the output, never the candidate search.
-    video_path is a downloaded copy of the whole video, at least as tall as the screenshots, to pick from instead of downloading one; vision never deletes it.
-    The picked frames are saved, and a later run whose picking options, ranking model, and toolkit version match lays them out again under its rows, columns, and resolution without downloading, fetching a transcript, or ranking, provided the saved frames are at least that resolution; usage is then None and picks_reused_from names the saved run.
+    video_path is a downloaded copy of the video from `start` to `end`, at least as tall as the screenshots, to pick from instead of downloading one; vision never deletes it.
+    The picked frames are saved, and a later run whose picking options, range, ranking model, and toolkit version match lays them out again under its rows, columns, resolution, and timestamp annotation without downloading, fetching a transcript, or ranking, provided the saved frames are at least that resolution; usage is then None and picks_reused_from names the saved run.
     A given document plays no part in that match; fresh always picks afresh, and so does auto_clean=False, since it keeps the downloaded media.
     """
     if not 1 <= max_frames <= MAX_VISION_FRAMES:
@@ -128,6 +139,8 @@ def sample_vision(
         "min_similarity": min_similarity,
         "min_gap_seconds": min_gap_seconds,
         "local_only": local_only,
+        "start": start,
+        "end": end,
         "ranking_model": _ranking_model(decision, gemini_key),
         "toolkit_version": version("youtube-toolkit"),
     }
@@ -139,7 +152,12 @@ def sample_vision(
     if saved is not None:
         source, saved_result = saved
         return _lay_out_saved_picks(
-            source, saved_result, rows=rows, columns=columns, frame_size=(width, height)
+            source,
+            saved_result,
+            rows=rows,
+            columns=columns,
+            frame_size=(width, height),
+            timestamp_annotation=timestamp_annotation,
         )
     ffmpeg_path = shutil.which("ffmpeg")
     if ffmpeg_path is None:
@@ -160,9 +178,15 @@ def sample_vision(
     ):
         raise ValueError(f"Missing valid duration for {video_id}")
     duration = float(duration)
-    if duration > MAX_VIDEO_DURATION_SECONDS:
+    first = 0.0 if start is None else start
+    last = duration if end is None else min(end, duration)
+    if not 0 <= first < last:
         raise ValueError(
-            f"Video is longer than {MAX_VIDEO_DURATION_SECONDS // 3600} hours"
+            "A vision range must start before it ends and before the video ends"
+        )
+    if last - first > MAX_VIDEO_DURATION_SECONDS:
+        raise ValueError(
+            f"Vision covers at most {MAX_VIDEO_DURATION_SECONDS // 3600} hours of video; narrow it with --start and --end"
         )
     excluded_intervals = _excluded_intervals(metadata, duration)
     transcript_warning = None
@@ -186,7 +210,12 @@ def sample_vision(
             except (RuntimeError, ValueError) as error:
                 transcript_warning = f"No timed transcript; {fallback}: {error}"
         if document is not None:
-            targets = prepare_targets(document, excluded_intervals)
+            # Speech density is judged over the whole video, so the range applies after targets are prepared.
+            targets = [
+                target
+                for target in prepare_targets(document, excluded_intervals)
+                if target.end_seconds > first and target.start_seconds < last
+            ]
             if not targets:
                 transcript_warning = (
                     f"Too little timed speech to rank against; {fallback}."
@@ -213,22 +242,30 @@ def sample_vision(
             work_dir = Path(work_dir_name)
             if video_path is None:
                 video_path = work_dir / f"{video_id}.mp4"
-                client.download_video_for_vision(
-                    video_ref, video_path, max_bytes=MAX_VIDEO_BYTES
+                client.download_silent_video(
+                    metadata,
+                    video_path,
+                    height=VISION_SOURCE_HEIGHT,
+                    section=None if start is None and end is None else (first, last),
+                    max_bytes=MAX_VIDEO_BYTES,
+                    timeout_seconds=YTDLP_DOWNLOAD_TIMEOUT_SECONDS,
                 )
             candidates = collect_candidates(
                 video_path,
                 ffmpeg_path,
-                duration=duration,
+                start=first,
+                duration=last - first,
+                frame_size=(CANDIDATE_WIDTH, CANDIDATE_HEIGHT),
                 directory=work_dir / "candidates",
                 excluded_intervals=excluded_intervals,
+                distinct=True,
             )
             if decision:
                 picks, decision_ranking = _rank_by_decisions(
                     candidates,
                     document if targets else None,
                     decision,
-                    duration=duration,
+                    duration=last - first,
                     max_frames=max_frames,
                     min_gap_seconds=min_gap_seconds,
                 )
@@ -245,21 +282,22 @@ def sample_vision(
                     (frame, None)
                     for frame in select_slot_frames(
                         candidates,
-                        duration=duration,
+                        start=first,
+                        duration=last - first,
                         max_frames=max_frames,
                         min_gap_seconds=min_gap_seconds,
                     )
                 ]
             picks.sort(key=lambda pick: pick[0].timestamp_seconds)
-            # Candidates stay at 540p, the size picking was tuned on, so only the picks are decoded again above it.
-            if height > FRAME_HEIGHT:
+            # Candidates stay at the size picking was tuned on, so only the picks are decoded again above it.
+            if height > CANDIDATE_HEIGHT:
                 picks = [
                     (
                         replace(
                             frame,
                             image=decode_frame(
                                 video_path,
-                                frame.timestamp_seconds,
+                                frame.timestamp_seconds - first,
                                 ffmpeg_path,
                                 width=width,
                                 height=height,
@@ -272,12 +310,13 @@ def sample_vision(
             frames_directory = destination / "frames"
             frames_directory.mkdir()
             stored = [store_frame(frames_directory, frame) for frame, _ in picks]
-            collage_paths = render_timestamped_collages(
+            collage_paths = render_collages(
                 [frame for frame, _ in picks],
                 destination / f"{video_id}_vision",
                 rows=rows,
                 columns=columns,
                 frame_size=(width, height),
+                timestamp_annotation=timestamp_annotation,
             )
         result = {
             "video_id": video_id,
@@ -319,7 +358,7 @@ def sample_vision(
                 for (frame, relevance), stored_frame in zip(picks, stored, strict=True)
             ],
         }
-        _save_picks(destination, pick_options, max(height, FRAME_HEIGHT), result)
+        _save_picks(destination, pick_options, max(height, CANDIDATE_HEIGHT), result)
     except OSError as error:
         raise RuntimeError(
             f"Vision artifact filesystem error under {destination}: {error}"
@@ -373,6 +412,7 @@ def _lay_out_saved_picks(
     rows: int,
     columns: int,
     frame_size: tuple[int, int],
+    timestamp_annotation: bool,
 ) -> dict[str, Any]:
     destination = None
     try:
@@ -385,12 +425,13 @@ def _lay_out_saved_picks(
             for frame in saved["frames"]
         ]
         destination = create_artifact_directory("vision", saved["video_id"])
-        collage_paths = render_timestamped_collages(
+        collage_paths = render_collages(
             frames,
             destination / f"{saved['video_id']}_vision",
             rows=rows,
             columns=columns,
             frame_size=frame_size,
+            timestamp_annotation=timestamp_annotation,
         )
     except OSError as error:
         raise RuntimeError(

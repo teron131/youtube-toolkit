@@ -114,5 +114,5 @@ def require_vision() -> None:
     if vision_available():
         return
     raise RuntimeError(
-        "vision requires the vision capability. Install youtube-toolkit[vision]."
+        "Screenshots and frame downloads need the vision extra; install youtube-toolkit[vision]"
     )

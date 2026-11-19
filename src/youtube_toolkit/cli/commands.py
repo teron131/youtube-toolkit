@@ -8,12 +8,17 @@ from functools import cache, partial
 from pathlib import Path
 from typing import Any
 
-from ..config import VISION_RESOLUTIONS, llm_config
-from ..export import (
+from ..config import VISION_SOURCE_HEIGHT, llm_config
+from ..download import (
     DEFAULT_DOWNLOAD_QUALITY,
-    DOWNLOAD_HEIGHTS,
-    TranscriptExportResult,
+    DOWNLOAD_SIZES,
+    DownloadResult,
+    download_frames,
+    download_frames_at,
     download_media,
+)
+from ..export import (
+    TranscriptExportResult,
     write_markdown_export,
     write_text_export,
 )
@@ -49,6 +54,7 @@ VISION_OPTIONS = {
     "rows": "rows",
     "columns": "columns",
     "resolution": "resolution",
+    "timestamp_annotation": "timestamp_annotation",
     "min_similarity": "min_similarity",
     "min_gap": "min_gap_seconds",
     "local_only": "local_only",
@@ -58,11 +64,10 @@ PART_OPTIONS = {
     ("transcript",): ("timestamps", "refine", "export"),
     ("transcript", "summary"): ("stt", "translate"),
     ("vision",): tuple(VISION_OPTIONS),
-    ("download",): ("quality", "start", "end"),
+    ("download",): ("quality", "at"),
+    ("download", "vision"): ("start", "end"),
     ("comments",): ("comment_limit",),
 }
-# Vision picks from its own download at 720p, its largest screenshot size, so a whole video downloaded at least that tall serves it instead.
-VISION_SOURCE_HEIGHT = max(height for _, height in VISION_RESOLUTIONS.values())
 
 
 def video(args: argparse.Namespace) -> dict[str, Any]:
@@ -77,11 +82,15 @@ def video(args: argparse.Namespace) -> dict[str, Any]:
     if args.fresh and not (args.export or args.vision or args.download):
         raise ValueError("--fresh requires --export, --vision, or --download")
     if args.download == "audio" and args.quality is not None:
-        raise ValueError("--quality applies only to video downloads")
+        raise ValueError("--quality applies only to video and frame downloads")
+    if args.at is not None and args.download != "frames":
+        raise ValueError("--at applies only to --download frames")
+    if args.at is not None and (args.start is not None or args.end is not None):
+        raise ValueError("--at gives its own times, so it cannot take --start or --end")
     start = parse_duration(args.start)
     end = parse_duration(args.end)
     quality = args.quality or DEFAULT_DOWNLOAD_QUALITY
-    if args.vision:
+    if args.vision or args.download in ("frames", "keyframes"):
         require_vision()
     llm = None
     if args.refine or args.translate is not None or args.summary is not None:
@@ -133,9 +142,11 @@ def video(args: argparse.Namespace) -> dict[str, Any]:
         summary = summarize_transcript(
             document, llm, language=args.summary or args.translate
         )
-    download = (
-        download_media(
-            VideoMetadata.from_yt_dlp(payload()),
+    download: DownloadResult | list[DownloadResult] | None = None
+    downloaded_video = None
+    if args.download in ("video", "audio"):
+        media = download_media(
+            payload(),
             args.download,
             quality=quality,
             start=start,
@@ -143,26 +154,41 @@ def video(args: argparse.Namespace) -> dict[str, Any]:
             fresh=args.fresh,
             client=client,
         )
-        if args.download
-        else None
-    )
+        download = media
+        # Vision downloads its source at VISION_SOURCE_HEIGHT, so a video download at least that tall, over the same range, serves it instead.
+        if (
+            args.download == "video"
+            and DOWNLOAD_SIZES[quality][1] >= VISION_SOURCE_HEIGHT
+        ):
+            downloaded_video = Path(media["path"])
+    elif args.at is not None:
+        download = download_frames_at(
+            payload(),
+            [parse_duration(time) for time in args.at],
+            quality=quality,
+            fresh=args.fresh,
+            client=client,
+        )
+    elif args.download is not None:
+        download = download_frames(
+            payload(),
+            args.download,
+            quality=quality,
+            start=start,
+            end=end,
+            fresh=args.fresh,
+            client=client,
+        )
     vision = None
     if args.vision:
         from ..vision import sample_vision
 
-        downloaded_video = (
-            Path(download["path"])
-            if download is not None
-            and args.download == "video"
-            and start is None
-            and end is None
-            and DOWNLOAD_HEIGHTS[quality] >= VISION_SOURCE_HEIGHT
-            else None
-        )
         vision = sample_vision(
             args.video_ref,
             metadata=payload(),
             document=document,
+            start=start,
+            end=end,
             fresh=args.fresh,
             video_path=downloaded_video,
             **{
