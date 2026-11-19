@@ -6,7 +6,7 @@ from collections.abc import Iterable, Iterator
 from itertools import cycle
 from typing import Any
 
-from ..artifacts import write_artifact
+from ..artifacts import write_record
 from ..identity import VideoRef, normalize_youtube_url, require_video_id
 from .client import YtDlpClient
 
@@ -18,10 +18,10 @@ MAX_COMMENT_LIMIT = 1000
 def search_comments(
     video_ref: VideoRef, query: str = "", *, limit: int = DEFAULT_COMMENT_LIMIT
 ) -> dict[str, Any]:
-    """An omitted or blank query returns the entire fetched sample.
+    """An omitted or blank query returns the entire fetched sample; `sampled` counts the comments fetched.
 
     The limit applies before filtering; sparse matches never trigger additional retrievals.
-    The archive retains the unfiltered sample in Top order using the same lean fields as the output.
+    The record keeps the unfiltered sample in Top order with the same lean fields as the matches.
     """
     if not 1 <= limit <= MAX_COMMENT_LIMIT:
         raise ValueError(f"--comment-limit must be between 1 and {MAX_COMMENT_LIMIT}")
@@ -32,16 +32,20 @@ def search_comments(
         "url": normalize_youtube_url(payload.get("id") or ""),
         "comments": _project(comments),
     }
-    write_artifact(
-        "comments", require_video_id(video_ref), request=None, payload=document
-    )
-    query = query.strip().casefold()
+    write_record("comments", require_video_id(video_ref), None, document)
+    needle = query.strip().casefold()
     matches = [
         comment
         for comment in comments
-        if query in (comment.get("text") or "").casefold()
+        if needle in (comment.get("text") or "").casefold()
     ]
-    return {**document, "comments": _project(_interleave(matches))}
+    return {
+        "title": document["title"],
+        "url": document["url"],
+        "query": query,
+        "sampled": len(comments),
+        "comments": _project(_interleave(matches)),
+    }
 
 
 def _project(comments: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:

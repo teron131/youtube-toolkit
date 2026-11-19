@@ -1,4 +1,4 @@
-"""Lay selected frames out as JPEG pages in a grid of the requested frame size, each frame with its time printed beneath unless annotation is off.
+"""Lay selected frames out as JPEG pages named `pageN.jpg`, in a grid of the requested frame size, each frame with its time printed beneath unless annotation is off.
 
 A page is deliberately not fitted to vision models' image limits: the frame resolution is the caller's choice, and a model downscales an oversized page itself.
 """
@@ -21,7 +21,7 @@ TIMESTAMP_FONT = ImageFont.load_default(size=16)
 
 def render_collages(
     frames: list[DecodedFrame],
-    output_stem: Path,
+    directory: Path,
     *,
     rows: int,
     columns: int,
@@ -33,6 +33,7 @@ def render_collages(
     collage_width = columns * width + COLLAGE_PADDING * (columns + 1)
     collage_height = rows * tile_height + COLLAGE_PADDING * (rows + 1)
     frames_per_page = rows * columns
+    directory.mkdir(parents=True, exist_ok=True)
     output_paths: list[Path] = []
     for page, offset in enumerate(range(0, len(frames), frames_per_page), start=1):
         collage = np.full(
@@ -51,7 +52,7 @@ def render_collages(
             y = COLLAGE_PADDING + row * (tile_height + COLLAGE_PADDING)
             collage[y : y + tile_height, x : x + width] = tile
 
-        output_path = output_stem.with_name(f"{output_stem.name}_page{page}.jpg")
+        output_path = directory / f"page{page}.jpg"
         Image.fromarray(collage).save(
             output_path,
             "JPEG",

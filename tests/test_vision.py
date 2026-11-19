@@ -1,5 +1,6 @@
 """Vision frame sampling, ranking routes, and artifacts."""
 
+import json
 from pathlib import Path
 import subprocess
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ from PIL import Image
 import pytest
 
 from youtube_toolkit import vision
+from youtube_toolkit.artifacts import Cached
 from youtube_toolkit.cli import commands
 from youtube_toolkit.cli.parser import build_parser
 from youtube_toolkit.config import (
@@ -41,12 +43,22 @@ from youtube_toolkit.youtube.captions import CaptionTranscriptUnavailable
 from youtube_toolkit.youtube.client import YtDlpClient
 
 VIDEO_ID = "JpSHyEIZ_bo"
+VIDEOS = Path(".youtube-toolkit/videos")
 DECISION = DecisionConfig(
     DEFAULT_DECISION_BASE_URL, "decision-key", DEFAULT_DECISION_MODEL
 )
 
 
 SCORES = frame_selection.VisualScores(20.0, 0.01, 0.0)
+
+
+@pytest.fixture(autouse=True)
+def working_directory(monkeypatch, tmp_path) -> None:
+    monkeypatch.chdir(tmp_path)
+
+
+def picks(result: dict) -> dict:
+    return json.loads(Path(result["path"]).read_text(encoding="utf-8"))["data"]
 
 
 def store_frame(
@@ -71,11 +83,12 @@ def chart(heights=(20, 30, 40, 50)) -> np.ndarray:
 
 
 @pytest.mark.parametrize("fallback", ["local_only", "no_key", "no_captions"])
-def test_local_selection_reports_its_reason_and_cleans_up(
+def test_local_selection_reports_its_reason_and_lays_saved_picks_out_again(
     monkeypatch, tmp_path, fallback
 ) -> None:
     metadata_calls = []
     transcript_calls = []
+    downloads = []
 
     class FakeClient:
         def metadata(self, _ref):
@@ -86,9 +99,10 @@ def test_local_selection_reports_its_reason_and_cleans_up(
             self, _metadata, path, *, height, section, max_bytes, timeout_seconds
         ):
             assert (height, section, max_bytes) == (720, None, workflow.MAX_VIDEO_BYTES)
+            downloads.append(path)
             path.write_bytes(b"video")
 
-        def download_transcription_audio(self, _metadata):
+        def download_transcription_audio(self, _metadata, _directory):
             pytest.fail("no speech-to-text route is configured here")
 
     def transcript(metadata, *, languages):
@@ -126,17 +140,33 @@ def test_local_selection_reports_its_reason_and_cleans_up(
     monkeypatch.setattr(
         workflow, "GeminiEmbeddingClient", lambda _key: pytest.fail("no embedding call")
     )
-    monkeypatch.chdir(tmp_path)
     result = workflow.sample_vision(VIDEO_ID, local_only=local_only)
+    destination = Path(result["path"]).parent
+    first_collage = destination / "collages" / "3x2_540p" / "page1.jpg"
+    assert result == {
+        "path": str(destination / "picks.json"),
+        "collages": [str(first_collage)],
+        "frames": 1,
+        "selection_mode": "visual",
+        "warnings": result["warnings"],
+        "reused": False,
+    }
+    assert len(result["warnings"]) == (0 if local_only else 1)
+    assert destination.parent == tmp_path / VIDEOS / VIDEO_ID / "vision"
     assert metadata_calls == [VIDEO_ID]
+    assert len(downloads) == 1
     assert bool(transcript_calls) is (fallback == "no_captions")
-    assert result["selection_mode"] == "visual"
-    assert bool(result["transcript_warning"]) is (fallback == "no_captions")
-    assert bool(result["embedding_warning"]) is (fallback == "no_key")
-    assert result["embedding_model"] is None
-    assert result["candidate_count"] == 1
-    [frame] = result["frames"]
-    assert Path(frame.pop("image_path")).is_file()
+    saved = picks(result)
+    assert saved["selection_mode"] == "visual"
+    assert bool(saved["transcript_warning"]) is (fallback == "no_captions")
+    assert bool(saved["embedding_warning"]) is (fallback == "no_key")
+    assert saved["embedding_model"] is None
+    assert saved["candidate_count"] == 1
+    assert saved["frame_height"] == 540
+    [frame] = saved["frames"]
+    image_path = Path(frame.pop("image_path"))
+    assert image_path.parent == destination / "frames"
+    assert image_path.is_file()
     assert frame == {
         "timestamp_seconds": 12,
         "visual_scores": {
@@ -146,31 +176,35 @@ def test_local_selection_reports_its_reason_and_cleans_up(
         },
         "relevance": None,
     }
-    assert result["timestamps_seconds"] == [12]
-    assert result["heatmap_available"] is True
-    assert Path(result["collage_paths"][0]).is_file()
-    assert not list(Path(result["collage_paths"][0]).parent.glob("work-*"))
-    assert result["media_dir"] is None
-    first_collage = Path(result["collage_paths"][0])
+    assert saved["timestamps_seconds"] == [12]
+    assert saved["heatmap_available"] is True
+    assert first_collage.is_file()
+    assert not (destination / "work").exists()
+    assert not list((tmp_path / ".youtube-toolkit" / "tmp").iterdir())
     first_contents = first_collage.read_bytes()
+
     second = workflow.sample_vision(
         VIDEO_ID, local_only=local_only, rows=1, columns=1, resolution="360p"
     )
-    assert metadata_calls == [VIDEO_ID]
-    assert second["picks_reused_from"] == result["directory"]
-    assert second["timestamps_seconds"] == [12]
-    second_collage = Path(second["collage_paths"][0])
-    assert first_collage.parent != second_collage.parent
-    assert VIDEO_ID in second_collage.parent.name
+    assert second["path"] == result["path"]
+    assert second["reused"] is True
+    second_collage = destination / "collages" / "1x1_360p" / "page1.jpg"
+    assert second["collages"] == [str(second_collage)]
+    assert len(downloads) == 1
+    assert len(transcript_calls) == (fallback == "no_captions")
     assert first_collage.read_bytes() == first_contents
     with Image.open(second_collage) as page:
         assert page.size == (652, 396)
+
     third = workflow.sample_vision(VIDEO_ID, local_only=local_only, min_gap_seconds=5)
-    assert metadata_calls == [VIDEO_ID, VIDEO_ID]
-    assert third["picks_reused_from"] is None
+    assert third["reused"] is False
+    assert Path(third["path"]).parent.parent == destination.parent
+    assert Path(third["path"]).parent != destination
+    assert len(downloads) == 2
     fresh = workflow.sample_vision(VIDEO_ID, local_only=local_only, fresh=True)
-    assert metadata_calls == [VIDEO_ID] * 3
-    assert fresh["picks_reused_from"] is None
+    assert fresh["path"] == result["path"]
+    assert fresh["reused"] is False
+    assert len(downloads) == 3
     decoded = []
 
     def decode_frame(_video, timestamp, _ffmpeg, *, width, height):
@@ -178,12 +212,19 @@ def test_local_selection_reports_its_reason_and_cleans_up(
         return np.zeros((height, width, 3), dtype=np.uint8)
 
     monkeypatch.setattr(workflow, "decode_frame", decode_frame)
-    fourth = workflow.sample_vision(VIDEO_ID, local_only=local_only, resolution="720p")
-    assert metadata_calls == [VIDEO_ID] * 4
-    assert fourth["picks_reused_from"] is None
+    higher = workflow.sample_vision(VIDEO_ID, local_only=local_only, resolution="720p")
+    assert higher["path"] == result["path"]
+    assert higher["reused"] is False
+    assert len(downloads) == 4
     assert decoded == [(12, 1280, 720)]
-    with Image.open(fourth["frames"][0]["image_path"]) as frame:
+    assert not second_collage.exists()
+    with Image.open(picks(higher)["frames"][0]["image_path"]) as frame:
         assert frame.size == (1280, 720)
+    lower = workflow.sample_vision(VIDEO_ID, local_only=local_only)
+    assert lower["reused"] is True
+    assert lower["collages"] == [str(first_collage)]
+    assert len(downloads) == 4
+    assert metadata_calls == [VIDEO_ID] * 6
 
 
 @pytest.mark.parametrize("limit", [0, 97, -1])
@@ -202,9 +243,7 @@ def test_invalid_collage_layout_fails_before_fetch(monkeypatch, options) -> None
         workflow.sample_vision(VIDEO_ID, **options)
 
 
-def test_sample_vision_rejects_long_video_before_download(
-    monkeypatch, tmp_path
-) -> None:
+def test_sample_vision_rejects_long_video_before_download(monkeypatch) -> None:
     class FakeClient:
         def metadata(self, _ref):
             return {"id": VIDEO_ID, "duration": workflow.MAX_VIDEO_DURATION_SECONDS + 1}
@@ -214,13 +253,12 @@ def test_sample_vision_rejects_long_video_before_download(
 
     monkeypatch.setattr(workflow, "YtDlpClient", FakeClient)
     monkeypatch.setattr(workflow.shutil, "which", lambda _: "ffmpeg")
-    monkeypatch.chdir(tmp_path)
     with pytest.raises(ValueError, match="at most 2 hours"):
         workflow.sample_vision(VIDEO_ID)
 
 
 def test_a_vision_range_downloads_that_section_and_keeps_video_times(
-    monkeypatch, tmp_path
+    monkeypatch,
 ) -> None:
     sections, decoded = [], []
 
@@ -248,7 +286,6 @@ def test_a_vision_range_downloads_that_section_and_keeps_video_times(
     monkeypatch.setattr(workflow, "local_embedding_installed", lambda: False)
     monkeypatch.setattr(workflow, "collect_candidates", candidates)
     monkeypatch.setattr(workflow, "decode_frame", decode_frame)
-    monkeypatch.chdir(tmp_path)
 
     result = workflow.sample_vision(
         VIDEO_ID,
@@ -260,7 +297,7 @@ def test_a_vision_range_downloads_that_section_and_keeps_video_times(
     )
 
     assert sections == [(60, 90)]
-    assert result["timestamps_seconds"] == [65, 80]
+    assert picks(result)["timestamps_seconds"] == [65, 80]
     assert decoded == [5, 20]
 
 
@@ -553,7 +590,11 @@ def semantic_video(monkeypatch, tmp_path):
     monkeypatch.setattr(workflow, "YtDlpClient", Client)
     monkeypatch.setattr(workflow.shutil, "which", lambda _name: "ffmpeg")
     monkeypatch.setattr(
-        workflow, "fetch_transcript", lambda *_args, **_kwargs: document
+        workflow,
+        "fetch_transcript",
+        lambda *_args, **_kwargs: Cached(
+            document, False, tmp_path / "original_fallback-abc.json"
+        ),
     )
     monkeypatch.setattr(workflow, "gemini_embedding_key", lambda: "test-key")
 
@@ -565,19 +606,18 @@ def semantic_video(monkeypatch, tmp_path):
         ]
 
     monkeypatch.setattr(workflow, "collect_candidates", candidates)
-    monkeypatch.chdir(tmp_path)
     return tmp_path
 
 
 def test_artifact_directory_errors_keep_vision_context(semantic_video) -> None:
-    archive = semantic_video / ".cache" / "youtube-toolkit"
-    archive.mkdir(parents=True)
-    (archive / "vision").write_text("not a directory", encoding="utf-8")
+    folder = semantic_video / VIDEOS / VIDEO_ID
+    folder.mkdir(parents=True)
+    (folder / "vision").write_text("not a directory", encoding="utf-8")
 
     with pytest.raises(RuntimeError, match="Vision artifact filesystem error") as error:
         workflow.sample_vision(VIDEO_ID, local_only=True)
 
-    assert isinstance(error.value.__cause__, FileExistsError)
+    assert isinstance(error.value.__cause__, NotADirectoryError)
 
 
 @pytest.mark.parametrize("empty", [False, True])
@@ -608,18 +648,20 @@ def test_semantic_selection_searches_beyond_output_budget_and_does_not_fill(
     monkeypatch.setattr(workflow, "GeminiEmbeddingClient", Embedder)
     result = workflow.sample_vision(VIDEO_ID, max_frames=1)
     assert result["selection_mode"] == "semantic"
-    assert result["candidate_count"] == 2
-    assert result["timestamps_seconds"] == ([] if empty else [112])
-    assert result["embedding_usage"] == {
+    assert result["frames"] == (0 if empty else 1)
+    saved = picks(result)
+    assert saved["candidate_count"] == 2
+    assert saved["timestamps_seconds"] == ([] if empty else [112])
+    assert saved["embedding_usage"] == {
         "image_tokens": 516,
         "text_tokens": 20,
         "total_tokens": 536,
     }
-    assert len(result["collage_paths"]) == (0 if empty else 1)
+    assert len(result["collages"]) == (0 if empty else 1)
     if not empty:
-        assert result["frames"][0]["relevance"]["selection_rank"] == 1
-        assert result["frames"][0]["relevance"]["matches"][0]["cosine"] == 1
-    assert not list(semantic_video.glob(".cache/youtube-toolkit/vision/*/work-*"))
+        assert saved["frames"][0]["relevance"]["selection_rank"] == 1
+        assert saved["frames"][0]["relevance"]["matches"][0]["cosine"] == 1
+    assert not (Path(result["path"]).parent / "work").exists()
 
 
 def test_embedding_failure_stops_before_download_and_writes_no_artifacts(
@@ -642,7 +684,7 @@ def test_embedding_failure_stops_before_download_and_writes_no_artifacts(
     )
     with pytest.raises(EmbeddingError, match="503"):
         workflow.sample_vision(VIDEO_ID)
-    assert not (semantic_video / ".cache/youtube-toolkit/vision").exists()
+    assert not (semantic_video / VIDEOS / VIDEO_ID / "vision").exists()
 
 
 def test_explicit_local_only_skips_configured_embedding_client(
@@ -658,8 +700,8 @@ def test_explicit_local_only_skips_configured_embedding_client(
     )
     result = workflow.sample_vision(VIDEO_ID, local_only=True)
     assert result["selection_mode"] == "visual"
-    assert result["candidate_count"] == 2
-    assert result["embedding_usage"] is None
+    assert picks(result)["candidate_count"] == 2
+    assert picks(result)["embedding_usage"] is None
 
 
 @pytest.mark.parametrize(
@@ -718,22 +760,24 @@ def test_decision_model_ranks_first_with_a_decision_key(
         workflow, "GeminiEmbeddingClient", lambda _key: pytest.fail("no embeddings")
     )
     result = workflow.sample_vision(VIDEO_ID, local_only=local_only)
+    saved = picks(result)
     if local_only:
         assert result["selection_mode"] == "visual"
-        assert result["decision_model"] is None
+        assert saved["decision_model"] is None
         return
     assert result["selection_mode"] == "decision"
-    assert result["decision_model"] == DEFAULT_DECISION_MODEL
-    assert result["decision_usage"] == {
+    assert result["warnings"] == [warning]
+    assert saved["decision_model"] == DEFAULT_DECISION_MODEL
+    assert saved["decision_usage"] == {
         "input_tokens": 200,
         "output_tokens": 6,
         "cost_usd": 0.00002,
         "provider_seconds": 3.1,
     }
-    assert result["min_similarity"] is None
-    assert result["decision_warning"] == warning
-    assert result["timestamps_seconds"] == [12]
-    assert result["frames"][0]["relevance"] == {
+    assert saved["min_similarity"] is None
+    assert saved["decision_warning"] == warning
+    assert saved["timestamps_seconds"] == [12]
+    assert saved["frames"][0]["relevance"] == {
         "selection_rank": 1,
         "score": 0.95,
         "has_information": 0.9,
@@ -746,7 +790,7 @@ def test_decision_model_ranks_first_with_a_decision_key(
 def test_a_given_transcript_is_ranked_against_without_fetching(
     monkeypatch, semantic_video
 ) -> None:
-    given = workflow.fetch_transcript(VIDEO_ID)
+    given = workflow.fetch_transcript(VIDEO_ID, fresh=False).value
     ranked_against = []
 
     def rank(frames, document, config, *, even_gap_seconds):
@@ -764,8 +808,8 @@ def test_a_given_transcript_is_ranked_against_without_fetching(
     monkeypatch.setattr(workflow, "rank_frames", rank)
     result = workflow.sample_vision(VIDEO_ID, document=given)
     assert ranked_against == [given]
-    assert [Path(path).parent for path in result["collage_paths"]] == [
-        Path(result["directory"])
+    assert result["collages"] == [
+        str(Path(result["path"]).parent / "collages" / "3x2_540p" / "page1.jpg")
     ]
 
 
@@ -795,10 +839,12 @@ def test_local_model_ranks_without_a_key_on_its_own_cutoffs(
     monkeypatch.setattr(workflow, "local_embedding_installed", lambda: True)
     monkeypatch.setattr(workflow, "LocalImageEmbeddingClient", Embedder)
     result = workflow.sample_vision(VIDEO_ID, local_only=local_only)
+    saved = picks(result)
     assert result["selection_mode"] == "semantic"
-    assert result["embedding_model"] == "example/local-model"
-    assert result["min_similarity"] == LOCAL_EMBEDDING_CUTOFFS.vision_match
-    assert "not example/local-model" in result["embedding_warning"]
+    assert saved["embedding_model"] == "example/local-model"
+    assert saved["min_similarity"] == LOCAL_EMBEDDING_CUTOFFS.vision_match
+    assert "not example/local-model" in saved["embedding_warning"]
+    assert result["warnings"] == [saved["embedding_warning"]]
     assert policies == ["never" if local_only else "fallback"]
 
 
@@ -806,10 +852,12 @@ def test_local_model_ranks_without_a_key_on_its_own_cutoffs(
 def test_missing_captions_fall_back_to_speech_to_text_for_ranking(
     monkeypatch, semantic_video, timed
 ) -> None:
-    audio = semantic_video / "audio.m4a"
+    downloaded = []
 
-    def download_audio(_self, _ref):
+    def download_audio(_self, _metadata, directory):
+        audio = directory / "audio.m4a"
         audio.write_bytes(b"audio")
+        downloaded.append(audio)
         return audio
 
     def no_captions(_metadata, *, languages):
@@ -867,19 +915,19 @@ def test_missing_captions_fall_back_to_speech_to_text_for_ranking(
 
     result = workflow.sample_vision(VIDEO_ID)
 
+    [audio] = downloaded
     assert not audio.exists()
     if timed:
         assert result["selection_mode"] == "semantic"
-        assert result["transcript_warning"] is None
+        assert result["warnings"] == []
     else:
         assert result["selection_mode"] == "visual"
-        assert (
-            result["transcript_warning"]
-            == "Speech-to-text gave no timestamps; using visual sampling."
-        )
+        assert result["warnings"] == [
+            "Speech-to-text gave no timestamps; using visual sampling."
+        ]
 
 
-def test_auto_clean_off_leaves_video_and_candidates_beside_collages(
+def test_auto_clean_off_leaves_video_and_candidates_in_a_work_folder(
     monkeypatch, semantic_video
 ) -> None:
     class Embedder:
@@ -897,7 +945,8 @@ def test_auto_clean_off_leaves_video_and_candidates_beside_collages(
 
     monkeypatch.setattr(workflow, "GeminiEmbeddingClient", Embedder)
     result = workflow.sample_vision(VIDEO_ID, auto_clean=False)
-    media = Path(result["media_dir"])
-    assert media.parent == Path(result["collage_paths"][0]).parent
+    media = Path(result["path"]).parent / "work"
     assert (media / f"{VIDEO_ID}.mp4").read_bytes() == b"video"
     assert len(list((media / "candidates").glob("*.jpg"))) == 2
+    assert workflow.sample_vision(VIDEO_ID, auto_clean=False)["reused"] is False
+    assert workflow.sample_vision(VIDEO_ID)["reused"] is True

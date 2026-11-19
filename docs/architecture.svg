@@ -1,7 +1,7 @@
 <!--
 Evidence (re-verify on update):
   Commands and flags: cli/parser.py (video, search, channel, setup, doctor; video's part flags and their options)
-  One fetch shared by the parts: cli/commands.py video caches client.metadata, and downloads start from it (youtube/client.py _download); parts keyed in its result
+  One fetch shared by the parts: cli/commands.py video caches client.metadata, and downloads start from it (youtube/client.py _download); each part saved under .youtube-toolkit/videos/TITLE_ID (artifacts.py) and keyed in its result by path and facts
   Chapters and sponsor span: schemas.py VideoMetadata.chapters; youtube/captions.py extract_sponsorblock_intervals, removed from caption transcripts and excluded from vision frames (vision/workflow.py _excluded_intervals)
   Comments untimed, no key: youtube/comments.py search_comments
   Transcript: transcript.py fetch_transcript, captions first, speech-to-text when there are none or when asked (stt/)

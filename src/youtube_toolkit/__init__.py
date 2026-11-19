@@ -1,4 +1,4 @@
 """Transcript-first YouTube research toolkit behind the `youtube` CLI.
 
-Every retrieval fetches fresh from YouTube, and results are archived under the working directory's `.cache/youtube-toolkit` for inspection and never read back as a cache, except that vision reuses an earlier run's saved frames when the picking options match.
+Metadata, comments, searches, and channel listings are fetched fresh on every call. Everything the toolkit keeps lives under the working directory's `.youtube-toolkit/`, where a video's transcripts, rewrites, summaries, and screenshot picks are saved and reused by later calls with the same options.
 """

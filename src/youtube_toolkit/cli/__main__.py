@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import sys
 
-from . import output
 from .parser import build_parser
 
 
@@ -16,7 +16,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "doctor":
             print(payload)
         else:
-            output.emit_json(payload)
+            json.dump(payload, sys.stdout, indent=2, ensure_ascii=False)
+            print()
         return 0
     except (RuntimeError, ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)

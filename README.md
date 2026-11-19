@@ -44,9 +44,9 @@ Speech-to-text providers are `xai` (`XAI_API_KEY`), `elevenlabs` (`ELEVENLABS_AP
 
 ```bash
 youtube video URL_OR_ID --transcript --timestamps
-youtube video URL_OR_ID --transcript --translate zh-TW --export
+youtube video URL_OR_ID --transcript --translate zh-TW
 youtube video URL_OR_ID --summary
-youtube video URL_OR_ID --transcript --vision --export
+youtube video URL_OR_ID --transcript --vision
 youtube video URL_OR_ID --download --start 1:15 --end 2:30
 youtube video URL_OR_ID --download frames --at 1:15 4:02
 youtube video URL_OR_ID --comments "QUERY"
@@ -61,12 +61,13 @@ Every command and flag; an option nested inside a flag's brackets needs that fla
 
 ```text
 youtube video URL_OR_ID
-        [--transcript [--timestamps] [--refine] [--export [--fresh]] [--stt] [--translate [LANGUAGE]]]
+        [--transcript [--timestamps] [--refine] [--stt] [--translate [LANGUAGE]]]
         [--summary [LANGUAGE] [--stt] [--translate [LANGUAGE]]]
-        [--vision [--max-frames N] [--rows N] [--columns N] [--resolution 360p|540p|720p] [--no-timestamp-annotation] [--min-gap SECONDS] [--min-similarity COSINE] [--local-only] [--no-auto-clean] [--start TIME] [--end TIME] [--fresh]]
-        [--download [video|audio|frames|keyframes] [--quality 360p|480p|720p|1080p] [--at TIME ...] [--start TIME] [--end TIME] [--fresh]]
+        [--vision [--max-frames N] [--rows N] [--columns N] [--resolution 360p|540p|720p] [--no-timestamp-annotation] [--min-gap SECONDS] [--min-similarity COSINE] [--local-only] [--no-auto-clean] [--start TIME] [--end TIME]]
+        [--download [video|audio|frames|keyframes] [--quality 360p|480p|720p|1080p] [--at TIME ...] [--start TIME] [--end TIME]]
         [--comments [QUERY] [--comment-limit N]]
         [--metadata]
+        [--fresh]
 youtube search QUERY ...
         [--semantic chunk|video] [--in-channels CHANNEL ...]
         [--limit N] [--sort relevance|recency|popularity]
@@ -80,14 +81,14 @@ youtube stt-check [--cloud-test]
 youtube doctor
 ```
 
-Commands print JSON, and `--help` lists each command's options. Responses are archived under `.cache/youtube-toolkit/` in the working directory.
+Commands print JSON, and `--help` lists each command's options.
 
-`video` is modular: each part flag adds its part to the output, keyed by part, and any mix of parts shares one metadata fetch; without flags it returns the metadata alone.
+`video` is modular: each part flag saves its part as a file and adds the file's path to the output, keyed by part, with a few facts such as its length in characters, so the output stays short however long the content; any mix of parts shares one metadata fetch, and without flags it returns the metadata alone. The files live under `.youtube-toolkit/` in the working directory, which Git ignores: each video's parts in `videos/TITLE_ID/`, and every raw response from YouTube in `records/`. Transcripts, rewrites, summaries, and screenshot picks made earlier with the same options come back without fetching or paying again, marked `reused`, and `--fresh` makes every part of the call afresh.
 
-- `--transcript` prefers manual subtitles, then automatic captions, never machine translations, and falls back to speech-to-text, when configured, if there are none; `--stt` uses speech-to-text even when captions exist. `--refine` cleans it up with an LLM, and `--translate` translates it into English, or `--translate LANGUAGE` into another language. `--export` writes it to a text file, or with `--vision` to a Markdown file beside the collages.
-- `--summary` summarizes the transcript with an LLM, in the transcript's language, the `--translate` language, or `--summary LANGUAGE`; the transcript itself is printed only with `--transcript`.
+- `--transcript` prefers manual subtitles, then automatic captions, never machine translations, and falls back to speech-to-text, when configured, if there are none; `--stt` uses speech-to-text even when captions exist. `--refine` cleans it up with an LLM, and `--translate` translates it into English, or `--translate LANGUAGE` into another language. It is saved as Markdown under the video's facts, one sentence per line, or with `--timestamps` each caption line after its time.
+- `--summary` summarizes the transcript with an LLM, in the transcript's language, the `--translate` language, or `--summary LANGUAGE`, and saved as Markdown; the transcript itself is given only with `--transcript`.
 - `--vision` picks screenshots, ranked against the same transcript when `--transcript` is given, and lays them out at 540p in collages of three rows of two, each with its time beneath, or at the `--resolution` and in the grid that `--rows` and `--columns` set; `--no-timestamp-annotation` leaves the times out, and `--start` and `--end` limit it to part of the video.
-- `--download` saves the video with its sound as an mp4 of up to 1080p, or the `--quality` you choose, or with `--download audio` the sound alone as an m4a, named like an export in the working directory. `--download frames` saves a folder of JPEGs at that quality, one per visible change, each named by its time in the video, `--download keyframes` saves every keyframe, and `--download frames --at TIME ...` saves the first frame at or after each time as its own JPEG, keyframe or not. `--start` and `--end` keep a range, which opens on the first frame at or after the start, and with `--vision` a video downloaded at 720p or more over the same range is where the screenshots are picked. Names hold the quality and range, so what is already there for the same request comes back as it is, with a message, unless `--fresh` downloads it again.
+- `--download` saves the video with its sound as an mp4 of up to 1080p, or the `--quality` you choose, or with `--download audio` the sound alone as an m4a, named for the title and channel in the working directory. `--download frames` saves a folder of JPEGs at that quality, one per visible change, each named by its time in the video, `--download keyframes` saves every keyframe, and `--download frames --at TIME ...` saves the first frame at or after each time as its own JPEG, keyframe or not. `--start` and `--end` keep a range, which opens on the first frame at or after the start, and with `--vision` a video downloaded at 720p or more over the same range is where the screenshots are picked. Names hold the quality and range, so what is already there for the same request comes back as it is unless `--fresh` downloads it again.
 - `--comments` samples the top 100 comments, or up to 1000 with `--comment-limit`, and keeps those containing the query.
 
 `search` covers YouTube, or the channels named with `--in-channels`, and by default keeps videos with at least 10,000 views and 3 minutes to 8 hours long. `--semantic chunk` ranks caption passages with embeddings, and `--semantic video` returns their videos.
@@ -104,7 +105,7 @@ Without `--timestamps`, the transcript comes back as paragraphs of complete sent
 
 ![How vision picks frames: keyframes off the timeline, without near-copies, cross-fades, blank frames, and sponsor spans, are picked by the decision model, else embeddings, else time slots, and land on collage pages, three rows of two by default.](docs/vision-pipeline.svg)
 
-The first available route picks the frames. With `DECISION_API_KEY`, a decision model judges each frame's picture and, where there is speech, whether it shows what is being said, then keeps one view of each thing shown; a 26-minute video costs about a cent. Otherwise embeddings match frames to nearby speech, and without either, frames are spread over time. The picked frames are saved beside the collages, so rerunning a video with only `--rows`, `--columns`, or a resolution no higher than before changed lays the same frames out again in seconds, without downloading or ranking; any other vision option, a higher resolution, a new ranking model, a new toolkit version, or `--fresh` picks afresh. Frames are always picked from 540p candidates: `--resolution 360p` shrinks the picks to save image tokens at the cost of small text and digits, and `--resolution 720p` decodes them again from the 720p download.
+The first available route picks the frames. With `DECISION_API_KEY`, a decision model judges each frame's picture and, where there is speech, whether it shows what is being said, then keeps one view of each thing shown; a 26-minute video costs about a cent. Otherwise embeddings match frames to nearby speech, and without either, frames are spread over time. The picked frames are saved in the video's folder with `picks.json`, which lists each one's time, image, and why it was picked, so rerunning a video with only `--rows`, `--columns`, or a resolution no higher than before changed lays the same frames out again in seconds, without downloading or ranking; any other vision option, a higher resolution, a new ranking model, a new toolkit version, or `--fresh` picks afresh. Frames are always picked from 540p candidates: `--resolution 360p` shrinks the picks to save image tokens at the cost of small text and digits, and `--resolution 720p` decodes them again from the 720p download.
 
 ## Agent skill
 

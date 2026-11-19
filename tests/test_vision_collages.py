@@ -64,7 +64,7 @@ def test_collage_renderer_uses_six_540p_frames_per_progressive_jpeg(
         frame_size=VISION_RESOLUTIONS[DEFAULT_VISION_RESOLUTION],
         timestamp_annotation=True,
     )
-    assert len(paths) == 2
+    assert paths == [tmp_path / "vision/page1.jpg", tmp_path / "vision/page2.jpg"]
     with Image.open(paths[0]) as image:
         assert image.size == (1938, 1716)
         assert image.info["progressive"] == 1

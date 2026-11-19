@@ -167,12 +167,15 @@ def shortlist_by_title(
 def fetch_semantic_transcripts(
     candidates: list[dict[str, Any]],
 ) -> tuple[dict[str, TranscriptDocument], dict[str, str]]:
-    """Speech-to-text is never used here: a search should stay as cheap to repeat as a YouTube search, and transcribing every uncaptioned candidate would not be."""
+    """Speech-to-text is never used here: a search should stay as cheap to repeat as a YouTube search, and transcribing every uncaptioned candidate would not be. Transcripts saved by earlier fetches are reused."""
 
     def fetch(candidate: dict[str, Any]) -> TranscriptDocument:
         return fetch_transcript(
-            candidate["id"], stt="never", metadata=candidate.get("metadata")
-        )
+            candidate["id"],
+            stt="never",
+            metadata=candidate.get("metadata"),
+            fresh=False,
+        ).value
 
     documents, failures = collect_concurrently(
         {candidate["id"]: candidate for candidate in candidates},

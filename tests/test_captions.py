@@ -1,4 +1,4 @@
-"""Caption selection, transcript archives, and speech-to-text fallback."""
+"""Caption selection, saved transcripts, and speech-to-text fallback."""
 
 from dataclasses import asdict
 from pathlib import Path
@@ -7,7 +7,6 @@ import urllib.error
 
 import pytest
 
-from youtube_toolkit.artifacts import write_artifact
 from youtube_toolkit.schemas import (
     SpeechTranscription,
     TranscriptDocument,
@@ -43,8 +42,7 @@ def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
     monkeypatch,
     tmp_path,
 ) -> None:
-    audio_path = tmp_path / "JpSHyEIZ_bo.m4a"
-    audio_path.write_bytes(b"audio")
+    downloads: list[Path] = []
 
     class FakeClient:
         def metadata(self, video_ref: str) -> dict:
@@ -57,14 +55,14 @@ def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
                 "subtitles": {},
             }
 
-        def download_transcription_audio(self, metadata) -> Path:
+        def download_transcription_audio(self, metadata, directory: Path) -> Path:
             assert metadata["id"] == "JpSHyEIZ_bo"
-            return audio_path
+            return save_audio(directory, downloads)
 
     def fake_transcribe_in_cloud(
         path: Path, vocabulary: list[str]
     ) -> SpeechTranscription:
-        assert path == audio_path
+        assert path == downloads[0]
         assert vocabulary == ["Fable", "GPT-6"]
         return SpeechTranscription(
             text="数据库", segments=[], model="cloud-model", language="zh"
@@ -77,10 +75,7 @@ def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
         fake_transcribe_in_cloud,
     )
 
-    document = fetch_transcript(
-        "JpSHyEIZ_bo",
-        client=FakeClient(),
-    )
+    document = fetch_transcript("JpSHyEIZ_bo", client=FakeClient(), fresh=False).value
 
     assert document.metadata.video_id == "JpSHyEIZ_bo"
     assert document.metadata.title == "No captions"
@@ -88,14 +83,12 @@ def test_fetch_transcript_falls_back_to_stt_when_captions_are_missing(
     assert document.language == "zh"
     assert document.text == "數據庫"
     assert document.segments == [TranscriptSegment(0, 0, "數據庫")]
-    assert not audio_path.exists()
+    assert not downloads[0].parent.exists()
 
 
 def test_timed_speech_to_text_segments_become_document_segments(
     monkeypatch, tmp_path
 ) -> None:
-    audio_path = tmp_path / "JpSHyEIZ_bo.m4a"
-    audio_path.write_bytes(b"audio")
     segments = [
         TranscriptSegment(0.2, 1.0, "Hello world."),
         TranscriptSegment(2.5, 3.2, "Next line"),
@@ -105,8 +98,8 @@ def test_timed_speech_to_text_segments_become_document_segments(
         def metadata(self, video_ref: str) -> dict:
             return {"id": video_ref, "automatic_captions": {}, "subtitles": {}}
 
-        def download_transcription_audio(self, _metadata) -> Path:
-            return audio_path
+        def download_transcription_audio(self, _metadata, directory: Path) -> Path:
+            return save_audio(directory, [])
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("XAI_API_KEY", "test-key")
@@ -120,19 +113,21 @@ def test_timed_speech_to_text_segments_become_document_segments(
         ),
     )
 
-    document = fetch_transcript("JpSHyEIZ_bo", client=FakeClient())
+    document = fetch_transcript("JpSHyEIZ_bo", client=FakeClient(), fresh=False).value
 
     assert document.source == "speech-to-text"
     assert document.segments == segments
     assert document.text == "Hello world. Next line"
 
 
-def test_fetch_transcript_fetches_and_archives_captions(monkeypatch, tmp_path) -> None:
+def test_fetch_transcript_saves_captions_in_the_video_folder(
+    monkeypatch, tmp_path
+) -> None:
     class FakeClient:
         def metadata(self, video_ref: str) -> dict:
             return {
                 "id": video_ref,
-                "title": "Frontier model discussion",
+                "title": "Frontier model [4K] discussion (Q&A)?",
                 "automatic_captions": {
                     "en": [
                         {
@@ -143,7 +138,7 @@ def test_fetch_transcript_fetches_and_archives_captions(monkeypatch, tmp_path) -
                 },
             }
 
-        def download_transcription_audio(self, _metadata) -> Path:
+        def download_transcription_audio(self, _metadata, _directory) -> Path:
             pytest.fail("caption retrieval should not download STT audio")
 
     monkeypatch.setattr(
@@ -160,10 +155,17 @@ def test_fetch_transcript_fetches_and_archives_captions(monkeypatch, tmp_path) -
     )
     monkeypatch.chdir(tmp_path)
 
-    document = fetch_transcript("JpSHyEIZ_bo", client=FakeClient())
+    transcript = fetch_transcript("JpSHyEIZ_bo", client=FakeClient(), fresh=False)
 
-    assert document.metadata.video_id == "JpSHyEIZ_bo"
-    assert document.text == "GPT-5.6 model analysis"
+    assert transcript.value.metadata.video_id == "JpSHyEIZ_bo"
+    assert transcript.value.text == "GPT-5.6 model analysis"
+    assert not transcript.reused
+    assert transcript.path.parent == (
+        tmp_path
+        / ".youtube-toolkit/videos/Frontier_model_4K_discussion_Q_A_JpSHyEIZ_bo/transcripts"
+    )
+    assert transcript.path.name.startswith("original_fallback-")
+    assert (tmp_path / ".youtube-toolkit/.gitignore").read_text() == "*\n"
 
 
 @pytest.mark.parametrize(
@@ -186,7 +188,7 @@ def test_chinese_caption_text_is_converted_to_taiwan_traditional(
                 return {"id": video_ref, "language": "ja", "automatic_captions": tracks}
             return {"id": video_ref, "subtitles": tracks}
 
-        def download_transcription_audio(self, _metadata) -> Path:
+        def download_transcription_audio(self, _metadata, _directory) -> Path:
             pytest.fail("caption retrieval should not download STT audio")
 
     monkeypatch.setattr(
@@ -204,7 +206,7 @@ def test_chinese_caption_text_is_converted_to_taiwan_traditional(
     )
     monkeypatch.chdir(tmp_path)
 
-    document = fetch_transcript("JpSHyEIZ_bo", client=FakeClient())
+    document = fetch_transcript("JpSHyEIZ_bo", client=FakeClient(), fresh=False).value
 
     assert document.language == language
     assert document.text == expected
@@ -214,8 +216,7 @@ def test_stt_fallback_removes_downloaded_audio_after_failure(
     monkeypatch,
     tmp_path,
 ) -> None:
-    audio_path = tmp_path / "JpSHyEIZ_bo.m4a"
-    audio_path.write_bytes(b"audio")
+    downloads: list[Path] = []
 
     class FakeClient:
         def metadata(self, video_ref: str) -> dict:
@@ -225,12 +226,13 @@ def test_stt_fallback_removes_downloaded_audio_after_failure(
                 "subtitles": {},
             }
 
-        def download_transcription_audio(self, _metadata) -> Path:
-            return audio_path
+        def download_transcription_audio(self, _metadata, directory: Path) -> Path:
+            return save_audio(directory, downloads)
 
     def fail_transcription(_path: Path, _vocabulary: list[str]) -> SpeechTranscription:
         raise RuntimeError("STT unavailable")
 
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("XAI_API_KEY", "test-key")
     monkeypatch.setattr(
         "youtube_toolkit.transcript.transcribe_in_cloud",
@@ -238,9 +240,11 @@ def test_stt_fallback_removes_downloaded_audio_after_failure(
     )
 
     with pytest.raises(RuntimeError, match="STT unavailable"):
-        fetch_transcript("JpSHyEIZ_bo", client=FakeClient())
+        fetch_transcript("JpSHyEIZ_bo", client=FakeClient(), fresh=False)
 
-    assert not audio_path.exists()
+    assert len(downloads) == 1
+    assert not downloads[0].parent.exists()
+    assert list((tmp_path / ".youtube-toolkit/tmp").iterdir()) == []
 
 
 def test_fetch_caption_payload_retries_transient_network_failures(monkeypatch) -> None:
@@ -472,21 +476,24 @@ def test_metadata_drops_machine_translated_captions(monkeypatch, tmp_path) -> No
 
     originals = {"en-orig": [caption_track("en")], "en": [caption_track("en")]}
     assert metadata["automatic_captions"] == originals
-    archived = json.loads(
-        next((tmp_path / ".cache/youtube-toolkit/metadata").glob("*.json")).read_text(
+    recorded = json.loads(
+        next((tmp_path / ".youtube-toolkit/records/metadata").glob("*.json")).read_text(
             encoding="utf-8"
         )
     )
-    assert archived["payload"]["automatic_captions"] == originals
+    assert recorded["payload"]["automatic_captions"] == originals
 
 
-def test_transcript_archives_preserve_timing_and_retrieval_policy(
+def test_saved_transcripts_are_reused_per_policy_until_fresh(
     monkeypatch, tmp_path
 ) -> None:
+    import json
+
     from youtube_toolkit.schemas import TranscriptDocument, VideoChapter, VideoMetadata
 
     monkeypatch.chdir(tmp_path)
-    calls = []
+    metadata_calls = []
+    caption_calls = []
     expected = TranscriptDocument(
         metadata=VideoMetadata(
             video_id="JpSHyEIZ_bo",
@@ -507,80 +514,102 @@ def test_transcript_archives_preserve_timing_and_retrieval_policy(
 
     class FakeClient:
         def metadata(self, video_ref):
-            calls.append(video_ref)
-            return {"id": "JpSHyEIZ_bo"}
+            metadata_calls.append(video_ref)
+            return {"id": "JpSHyEIZ_bo", "title": "Example"}
+
+    def fetch_captions(metadata, **_policy):
+        caption_calls.append(metadata["id"])
+        return expected
 
     monkeypatch.setattr("youtube_toolkit.transcript.YtDlpClient", FakeClient)
     monkeypatch.setattr(
-        "youtube_toolkit.transcript.fetch_caption_transcript",
-        lambda _metadata, **_policy: expected,
+        "youtube_toolkit.transcript.fetch_caption_transcript", fetch_captions
     )
-    assert fetch_transcript("JpSHyEIZ_bo") == expected
-    assert fetch_transcript("https://youtu.be/JpSHyEIZ_bo") == expected
-    assert len(calls) == 2
-    assert fetch_transcript("JpSHyEIZ_bo", stt="never") == expected
-    assert len(calls) == 3
-    import json
 
-    paths = list((tmp_path / ".cache/youtube-toolkit/transcripts").glob("*.json"))
-    assert len(paths) == 3
-    assert all("JpSHyEIZ_bo" in path.name for path in paths)
-    entries = [json.loads(path.read_text(encoding="utf-8")) for path in paths]
-    assert all(entry["payload"] == asdict(expected) for entry in entries)
-    assert {
-        "video_id": "JpSHyEIZ_bo",
-        "languages": list(SUBTITLE_LANGUAGES),
-        "stt": "never",
-    } in [entry["request"] for entry in entries]
-    previous = {path: path.read_bytes() for path in paths}
-    old_artifact = paths[0].parent / "old-copy.json"
-    old_artifact.write_text("broken JSON", encoding="utf-8")
-    assert fetch_transcript("JpSHyEIZ_bo") == expected
-    assert len(calls) == 4
-    assert all(path.read_bytes() == content for path, content in previous.items())
-    assert old_artifact.read_text(encoding="utf-8") == "broken JSON"
+    first = fetch_transcript("JpSHyEIZ_bo", fresh=False)
+    assert (first.value, first.reused) == (expected, False)
+    again = fetch_transcript("https://youtu.be/JpSHyEIZ_bo", fresh=False)
+    assert (again.value, again.reused, again.path) == (expected, True, first.path)
+    assert len(metadata_calls) == 2
+    assert len(caption_calls) == 1
+    saved = json.loads(first.path.read_text(encoding="utf-8"))
+    assert saved["data"] == asdict(expected)
+    assert saved["key"]["stt"] == "fallback"
+
+    caption_only = fetch_transcript("JpSHyEIZ_bo", stt="never", fresh=False)
+    assert (caption_only.value, caption_only.reused) == (expected, False)
+    assert caption_only.path != first.path
+    assert caption_only.path.name.startswith("original_never-")
+    assert len(caption_calls) == 2
+
+    refetched = fetch_transcript("JpSHyEIZ_bo", fresh=True)
+    assert (refetched.value, refetched.reused, refetched.path) == (
+        expected,
+        False,
+        first.path,
+    )
+    assert len(caption_calls) == 3
 
     other = tmp_path / "other-task"
     other.mkdir()
     monkeypatch.chdir(other)
-    assert fetch_transcript("JpSHyEIZ_bo") == expected
-    assert len(calls) == 5
-    assert len(list((other / ".cache/youtube-toolkit/transcripts").glob("*.json"))) == 1
+    elsewhere = fetch_transcript("JpSHyEIZ_bo", fresh=False)
+    assert (elsewhere.value, elsewhere.reused) == (expected, False)
+    assert elsewhere.path.is_relative_to(other / ".youtube-toolkit/videos")
+    assert len(caption_calls) == 4
 
 
-@pytest.mark.parametrize("archived_stt", [False, True])
-def test_caption_only_policy_never_uses_stt(
-    monkeypatch, tmp_path, archived_stt
-) -> None:
+def test_a_renamed_video_keeps_its_folder(monkeypatch, tmp_path) -> None:
+    monkeypatch.chdir(tmp_path)
+    titles = iter(["First title", "Second title"])
+
+    class FakeClient:
+        def metadata(self, _ref):
+            return {"id": "JpSHyEIZ_bo", "title": next(titles)}
+
+        def download_transcription_audio(self, _metadata, _directory):
+            raise AssertionError("captions exist, so no audio is downloaded")
+
+    monkeypatch.setattr(
+        "youtube_toolkit.transcript.fetch_caption_transcript",
+        lambda metadata, **_policy: TranscriptDocument(
+            VideoMetadata.from_yt_dlp(metadata), "en", "subtitles", []
+        ),
+    )
+
+    first = fetch_transcript("JpSHyEIZ_bo", client=FakeClient(), fresh=False)
+    second = fetch_transcript("JpSHyEIZ_bo", client=FakeClient(), fresh=False)
+
+    assert first.path.parent.parent.name == "First_title_JpSHyEIZ_bo"
+    assert (second.path, second.reused) == (first.path, True)
+
+
+@pytest.mark.parametrize("saved_stt", [False, True])
+def test_caption_only_policy_never_uses_stt(monkeypatch, tmp_path, saved_stt) -> None:
     video_id = "JpSHyEIZ_bo"
     monkeypatch.chdir(tmp_path)
-    if archived_stt:
-        document = TranscriptDocument(
-            VideoMetadata(video_id=video_id, url="https://youtu.be/" + video_id),
-            "speech-to-text",
-            "speech-to-text",
-            [TranscriptSegment(0, 0, "Untimed speech")],
-        )
-        write_artifact(
-            "transcripts",
-            video_id,
-            {
-                "video_id": video_id,
-                "languages": list(SUBTITLE_LANGUAGES),
-                "stt": "fallback",
-            },
-            asdict(document),
-        )
 
     class FakeClient:
         def metadata(self, _ref):
             return {"id": video_id, "automatic_captions": {}, "subtitles": {}}
 
-        def download_transcription_audio(self, _metadata):
-            pytest.fail("caption-only policy must not download STT audio")
+        def download_transcription_audio(self, _metadata, directory):
+            if not saved_stt:
+                pytest.fail("caption-only policy must not download STT audio")
+            return save_audio(directory, [])
+
+    if saved_stt:
+        monkeypatch.setenv("XAI_API_KEY", "test-key")
+        monkeypatch.setattr(
+            "youtube_toolkit.transcript.transcribe_in_cloud",
+            lambda _path, _vocabulary: SpeechTranscription(
+                text="Untimed speech", segments=[], model="cloud-model"
+            ),
+        )
+        fetch_transcript(video_id, client=FakeClient(), fresh=False)
 
     with pytest.raises(CaptionTranscriptUnavailable):
-        fetch_transcript(video_id, stt="never", client=FakeClient())
+        fetch_transcript(video_id, stt="never", client=FakeClient(), fresh=False)
 
 
 def test_stt_without_any_route_keeps_caption_failure_without_audio_work(
@@ -594,27 +623,26 @@ def test_stt_without_any_route_keeps_caption_failure_without_audio_work(
         def metadata(self, _ref):
             return {"id": "JpSHyEIZ_bo", "automatic_captions": {}, "subtitles": {}}
 
-        def download_transcription_audio(self, _metadata):
+        def download_transcription_audio(self, _metadata, _directory):
             pytest.fail("an unconfigured STT fallback must not download audio")
 
     with pytest.raises(CaptionTranscriptUnavailable):
-        fetch_transcript("JpSHyEIZ_bo", client=FakeClient())
+        fetch_transcript("JpSHyEIZ_bo", client=FakeClient(), fresh=False)
     with pytest.raises(RuntimeError, match="Speech-to-text is not set up"):
-        fetch_transcript("JpSHyEIZ_bo", stt="always", client=FakeClient())
+        fetch_transcript("JpSHyEIZ_bo", stt="always", client=FakeClient(), fresh=False)
 
 
 def test_always_policy_transcribes_even_when_captions_exist(
     monkeypatch, tmp_path
 ) -> None:
-    audio_path = tmp_path / "JpSHyEIZ_bo.m4a"
-    audio_path.write_bytes(b"audio")
+    downloads: list[Path] = []
 
     class FakeClient:
         def metadata(self, _ref):
             return {"id": "JpSHyEIZ_bo", "subtitles": {"en": [{"ext": "json3"}]}}
 
-        def download_transcription_audio(self, _metadata):
-            return audio_path
+        def download_transcription_audio(self, _metadata, directory):
+            return save_audio(directory, downloads)
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("XAI_API_KEY", "test-key")
@@ -629,11 +657,13 @@ def test_always_policy_transcribes_even_when_captions_exist(
         ),
     )
 
-    document = fetch_transcript("JpSHyEIZ_bo", stt="always", client=FakeClient())
+    document = fetch_transcript(
+        "JpSHyEIZ_bo", stt="always", client=FakeClient(), fresh=False
+    ).value
 
     assert document.source == "speech-to-text"
     assert document.text == "spoken"
-    assert not audio_path.exists()
+    assert not downloads[0].parent.exists()
 
 
 @pytest.mark.parametrize(
@@ -646,8 +676,7 @@ def test_always_policy_transcribes_even_when_captions_exist(
 def test_stt_prefers_cloud_and_falls_back_to_the_local_model(
     monkeypatch, tmp_path, cloud_key, expected_text, expected_language, expected_model
 ) -> None:
-    audio_path = tmp_path / "JpSHyEIZ_bo.m4a"
-    audio_path.write_bytes(b"audio")
+    downloads: list[Path] = []
     monkeypatch.chdir(tmp_path)
     if cloud_key is None:
         monkeypatch.delenv("XAI_API_KEY", raising=False)
@@ -676,16 +705,16 @@ def test_stt_prefers_cloud_and_falls_back_to_the_local_model(
                 "subtitles": {},
             }
 
-        def download_transcription_audio(self, _metadata):
-            return audio_path
+        def download_transcription_audio(self, _metadata, directory):
+            return save_audio(directory, downloads)
 
-    document = fetch_transcript("JpSHyEIZ_bo", client=FakeClient())
+    document = fetch_transcript("JpSHyEIZ_bo", client=FakeClient(), fresh=False).value
 
     assert document.source == "speech-to-text"
     assert document.text == expected_text
     assert document.language == expected_language
     assert document.stt_model == expected_model
-    assert not audio_path.exists()
+    assert not downloads[0].parent.exists()
 
 
 def test_supplied_transcript_metadata_must_match_video(monkeypatch, tmp_path) -> None:
@@ -693,5 +722,12 @@ def test_supplied_transcript_metadata_must_match_video(monkeypatch, tmp_path) ->
     with pytest.raises(
         ValueError, match="Supplied metadata does not match requested video"
     ):
-        fetch_transcript("JpSHyEIZ_bo", metadata={"id": "abcdefghijk"})
-    assert not (tmp_path / ".cache/youtube-toolkit/transcripts").exists()
+        fetch_transcript("JpSHyEIZ_bo", metadata={"id": "abcdefghijk"}, fresh=False)
+    assert not (tmp_path / ".youtube-toolkit/videos").exists()
+
+
+def save_audio(directory: Path, downloads: list[Path]) -> Path:
+    audio_path = directory / "audio.m4a"
+    audio_path.write_bytes(b"audio")
+    downloads.append(audio_path)
+    return audio_path

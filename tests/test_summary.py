@@ -2,7 +2,9 @@
 
 import hashlib
 import json
+from pathlib import Path
 
+from youtube_toolkit.artifacts import Cached
 from youtube_toolkit.config import LLMConfig
 from youtube_toolkit.schemas import TranscriptDocument, TranscriptSegment, VideoMetadata
 from youtube_toolkit.summary import Outline, summarize_transcript
@@ -71,7 +73,11 @@ def test_outline_copies_the_sound_bites_its_references_find_after_the_gist(
     monkeypatch.chdir(tmp_path)
     requests = fake_openai(monkeypatch)
 
-    assert summarize_transcript(DOCUMENT, CONFIG, language="zh-TW") == "Summary."
+    summary = summarize_transcript(
+        transcript(tmp_path), CONFIG, language="zh-TW", fresh=False
+    )
+
+    assert (summary.value, summary.reused) == ("Summary.", False)
 
     (gist_system, gist_user, _), (_, outline_user, schema), (system, user, _) = requests
     assert gist_system.startswith("Distill")
@@ -86,6 +92,46 @@ def test_outline_copies_the_sound_bites_its_references_find_after_the_gist(
         in user
     )
     assert "GPT Soul costs half as much." in user
-    (archive,) = (tmp_path / ".cache/youtube-toolkit/summaries").iterdir()
-    payload = json.loads(archive.read_text())["payload"]
-    assert list(payload) == ["gist", "outline", "summary"]
+    assert (
+        summary.path.parent
+        == tmp_path / ".youtube-toolkit/videos/JpSHyEIZ_bo/summaries"
+    )
+    saved = json.loads(summary.path.read_text())["data"]
+    assert saved == {
+        "gist": "Soul undercuts its rivals.",
+        "outline": "## Soul's price\nGPT Soul costs half as much.\nSubscribe now.",
+        "summary": "Summary.",
+    }
+
+
+def test_a_summary_with_the_same_settings_is_reused_until_fresh(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    requests = fake_openai(monkeypatch)
+
+    first = summarize_transcript(
+        transcript(tmp_path), CONFIG, language=None, fresh=False
+    )
+    again = summarize_transcript(
+        transcript(tmp_path), CONFIG, language=None, fresh=False
+    )
+
+    assert (again.value, again.reused, again.path) == ("Summary.", True, first.path)
+    assert len(requests) == 3
+    redone = summarize_transcript(
+        transcript(tmp_path), CONFIG, language=None, fresh=True
+    )
+    assert (redone.reused, redone.path) == (False, first.path)
+    assert len(requests) == 6
+    other = summarize_transcript(
+        transcript(tmp_path), CONFIG, language="ja", fresh=False
+    )
+    assert other.path != first.path
+    assert len(requests) == 9
+
+
+def transcript(tmp_path: Path) -> Cached[TranscriptDocument]:
+    return Cached(
+        DOCUMENT, False, tmp_path / "video/transcripts/original_fallback.json"
+    )

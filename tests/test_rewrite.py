@@ -1,11 +1,13 @@
 """Transcript rewrites on each route, and sentence splitting."""
 
+from pathlib import Path
 import re
 
 import httpx2
 import openai
 import pytest
 
+from youtube_toolkit.artifacts import Cached
 from youtube_toolkit.config import LLMConfig
 from youtube_toolkit.rewrite import RewriteError, article, rewrite_transcript
 from youtube_toolkit.rewrite.requests import ATTEMPTS
@@ -58,10 +60,27 @@ def fake_openai(monkeypatch, answer, starts=lambda _lines: "NONE"):
     return requests
 
 
-def translate(document: TranscriptDocument, language: str) -> TranscriptDocument:
-    return rewrite_transcript(
-        document, CONFIG, language=language, refine=False, article=False
+def saved(document: TranscriptDocument) -> Cached[TranscriptDocument]:
+    return Cached(
+        document, False, Path.cwd() / "transcripts" / "original_fallback.json"
     )
+
+
+def rewrite(
+    document: TranscriptDocument, *, language: str | None, refine: bool, article: bool
+) -> TranscriptDocument:
+    return rewrite_transcript(
+        saved(document),
+        CONFIG,
+        language=language,
+        refine=refine,
+        article=article,
+        fresh=False,
+    ).value
+
+
+def translate(document: TranscriptDocument, language: str) -> TranscriptDocument:
+    return rewrite(document, language=language, refine=False, article=False)
 
 
 def numbered(texts) -> str:
@@ -81,15 +100,58 @@ def test_transcripts_already_in_the_target_language_come_back_unchanged(
         METADATA, "en-orig", "automatic_captions", [TranscriptSegment(0, 1, "Hi")]
     )
 
-    assert translate(document, "en") is document
+    original = saved(document)
+    for language in ("en", "EN-us"):
+        assert (
+            rewrite_transcript(
+                original,
+                CONFIG,
+                language=language,
+                refine=False,
+                article=False,
+                fresh=False,
+            )
+            is original
+        )
     assert requests == []
-    assert translate(document, "EN-us") is document
-    refined = rewrite_transcript(
-        document, CONFIG, language="en", refine=True, article=False
-    )
+    refined = rewrite(document, language="en", refine=True, article=False)
     assert refined.segments == [TranscriptSegment(0, 1, "T Hi")]
     assert refined.rewrite == TranscriptRewrite("example/model", translated=False)
     assert "Correct YouTube transcript lines" in requests[0]["system"]
+
+
+def test_a_rewrite_with_the_same_settings_is_reused_until_fresh(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    requests = fake_openai(monkeypatch, prefixed)
+    original = saved(
+        TranscriptDocument(
+            METADATA, "es", "subtitles", [TranscriptSegment(0, 1, "Hola")]
+        )
+    )
+
+    def run(*, article: bool, fresh: bool) -> Cached[TranscriptDocument]:
+        return rewrite_transcript(
+            original, CONFIG, language="en", refine=False, article=article, fresh=fresh
+        )
+
+    first = run(article=False, fresh=False)
+    assert first.value.segments == [TranscriptSegment(0, 1, "T Hola")]
+    assert first.value.rewrite == TranscriptRewrite("example/model", translated=True)
+    assert not first.reused
+    assert first.path.parent == tmp_path / "transcripts"
+    asked = len(requests)
+
+    again = run(article=False, fresh=False)
+    assert (again.value, again.reused, again.path) == (first.value, True, first.path)
+    assert len(requests) == asked
+
+    redone = run(article=False, fresh=True)
+    assert (redone.reused, redone.path) == (False, first.path)
+    assert len(requests) == 2 * asked
+
+    assert run(article=True, fresh=False).path != first.path
 
 
 def test_requests_list_the_names_said_more_than_once(monkeypatch, tmp_path) -> None:
@@ -283,9 +345,7 @@ def test_a_cleaned_up_line_missing_from_the_reply_merges_or_keeps_its_original(
     ]
     document = TranscriptDocument(METADATA, "en", "automatic_captions", segments)
 
-    result = rewrite_transcript(
-        document, CONFIG, language=None, refine=True, article=False
-    )
+    result = rewrite(document, language=None, refine=True, article=False)
 
     assert result.segments == expected
 
@@ -304,9 +364,7 @@ def test_a_corrected_line_unlike_its_source_keeps_the_original(
     ]
     document = TranscriptDocument(METADATA, "en", "automatic_captions", segments)
 
-    result = rewrite_transcript(
-        document, CONFIG, language=None, refine=True, article=False
-    )
+    result = rewrite(document, language=None, refine=True, article=False)
 
     assert [segment.text for segment in result.segments] == [
         "The cat sat down.",
@@ -328,9 +386,7 @@ def test_an_article_rewrites_paragraphs_under_translated_chapter_titles(
     segments = [TranscriptSegment(index, index + 1, f"S{index}.") for index in range(5)]
     document = TranscriptDocument(metadata, "es", "subtitles", segments)
 
-    result = rewrite_transcript(
-        document, CONFIG, language="ja", refine=False, article=True
-    )
+    result = rewrite(document, language="ja", refine=False, article=True)
 
     # Chapter starts open paragraphs at S0 and S2, and the model's turning point opens one at S3.
     assert result.segments == [
@@ -369,9 +425,7 @@ def test_a_chapter_heading_moves_to_the_sentence_the_model_says_opens_it(
     segments = [TranscriptSegment(index, index + 1, f"S{index}.") for index in range(6)]
     document = TranscriptDocument(metadata, "es", "subtitles", segments)
 
-    result = rewrite_transcript(
-        document, CONFIG, language="ja", refine=False, article=True
-    )
+    result = rewrite(document, language="ja", refine=False, article=True)
 
     window = next(
         request for request in requests if "turning points" in request["system"]
@@ -395,9 +449,7 @@ def test_each_paragraph_window_rules_only_on_its_own_sentences(
     segments = [TranscriptSegment(index, index + 1, f"S{index}.") for index in range(6)]
     document = TranscriptDocument(METADATA, "en", "automatic_captions", segments)
 
-    result = rewrite_transcript(
-        document, CONFIG, language=None, refine=True, article=True
-    )
+    result = rewrite(document, language=None, refine=True, article=True)
 
     windows = [
         request["lines"]
@@ -422,9 +474,7 @@ def test_a_refined_article_batch_that_shrinks_keeps_its_source(
     ]
     document = TranscriptDocument(METADATA, "en", "automatic_captions", segments)
 
-    result = rewrite_transcript(
-        document, CONFIG, language=None, refine=True, article=True
-    )
+    result = rewrite(document, language=None, refine=True, article=True)
 
     assert result.segments[0].text == " ".join(segment.text for segment in segments)
     assert len(requests) == 1 + ATTEMPTS
@@ -468,4 +518,4 @@ def test_a_failed_request_raises_a_runtime_error_naming_the_host(
     document = TranscriptDocument(metadata, "en", "subtitles", segments)
 
     with pytest.raises(RuntimeError, match=r"gateway\.example chat request failed"):
-        rewrite_transcript(document, CONFIG, language="ja", refine=False, article=True)
+        rewrite(document, language="ja", refine=False, article=True)

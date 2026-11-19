@@ -1,4 +1,4 @@
-"""The video and transcript shapes every workflow shares, with yt-dlp payloads normalized on the way in."""
+"""The video and transcript shapes every workflow shares, with yt-dlp payloads normalized on the way in and saved transcripts read back from `asdict` form."""
 
 from __future__ import annotations
 
@@ -52,6 +52,14 @@ class VideoMetadata:
                 VideoChapter.from_yt_dlp(chapter)
                 for chapter in metadata.get("chapters") or []
             ],
+        )
+
+    @classmethod
+    def from_dict(cls, saved: dict[str, Any]) -> VideoMetadata:
+        fields = {name: value for name, value in saved.items() if name != "chapters"}
+        return cls(
+            **fields,
+            chapters=[VideoChapter(**chapter) for chapter in saved["chapters"]],
         )
 
 
@@ -109,6 +117,19 @@ class TranscriptDocument:
     segments: list[TranscriptSegment]
     rewrite: TranscriptRewrite | None = None
     stt_model: str | None = None
+
+    @classmethod
+    def from_dict(cls, saved: dict[str, Any]) -> TranscriptDocument:
+        return cls(
+            metadata=VideoMetadata.from_dict(saved["metadata"]),
+            language=saved["language"],
+            source=saved["source"],
+            segments=[TranscriptSegment(**segment) for segment in saved["segments"]],
+            rewrite=None
+            if saved["rewrite"] is None
+            else TranscriptRewrite(**saved["rewrite"]),
+            stt_model=saved["stt_model"],
+        )
 
     @property
     def text(self) -> str:

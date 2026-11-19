@@ -65,7 +65,7 @@ def _add_video_command(subparsers: argparse._SubParsersAction) -> None:
     video_parser = subparsers.add_parser(
         "video",
         help="Fetch a video's metadata, transcript, comments, or screenshots, or download it",
-        description="Each part flag adds that part to the output, keyed by part; with none, the output holds the metadata alone. Options for a part require its flag; --stt and --translate also work with --summary, and --start and --end with --vision.",
+        description="Each part flag saves that part under .youtube-toolkit/videos/TITLE_ID/ in the working directory and adds its path and a few facts to the output, keyed by part; with none, the output holds the metadata alone. Transcripts, summaries, and screenshots made earlier with the same options are reused, which `reused` reports. Options for a part require its flag; --stt and --translate also work with --summary, and --start and --end with --vision.",
     )
     video_parser.add_argument(
         "video_ref", metavar="url", help="YouTube video URL or ID"
@@ -80,7 +80,7 @@ def _add_video_command(subparsers: argparse._SubParsersAction) -> None:
         "--timestamps",
         action="store_true",
         default=None,
-        help="Timed transcript segments instead of one text string",
+        help="Start each caption line with its time instead of giving each sentence its own line",
     )
     transcript.add_argument(
         "--stt",
@@ -101,19 +101,13 @@ def _add_video_command(subparsers: argparse._SubParsersAction) -> None:
         metavar="LANGUAGE",
         help="Translate the transcript into English, or into LANGUAGE in any wording the model understands, such as zh-TW or Japanese, with the model saved by `youtube setup --llm`: each caption line translated on its own timestamps with --timestamps, otherwise paragraphs of complete sentences; a transcript whose language code matches comes back as it is unless --refine is given",
     )
-    transcript.add_argument(
-        "--export",
-        action="store_true",
-        default=None,
-        help="Write metadata and transcript to a title-and-channel .txt file in the working directory; with --vision, a .md file beside the collages instead",
-    )
     summary = video_parser.add_argument_group("summary")
     summary.add_argument(
         "--summary",
         nargs="?",
         const="",
         metavar="LANGUAGE",
-        help="A Markdown summary of the transcript by the model saved by `youtube setup --llm`, written in LANGUAGE, else the --translate language, else the transcript's own; the transcript itself is printed only with --transcript",
+        help="A Markdown summary of the transcript by the model saved by `youtube setup --llm`, written in LANGUAGE, else the --translate language, else the transcript's own; the transcript itself is given only with --transcript",
     )
     vision = video_parser.add_argument_group("vision")
     vision.add_argument(
@@ -146,7 +140,7 @@ def _add_video_command(subparsers: argparse._SubParsersAction) -> None:
     vision.add_argument(
         "--timestamp-annotation",
         action=argparse.BooleanOptionalAction,
-        help="Print each screenshot's time beneath it in the collages (default: on); each screenshot is also saved alone, without its time, at the image_path listed under frames in the output",
+        help="Print each screenshot's time beneath it in the collages (default: on); each screenshot is also saved alone, without its time, at the image_path listed under frames in picks.json",
     )
     vision.add_argument(
         "--min-similarity",
@@ -167,7 +161,7 @@ def _add_video_command(subparsers: argparse._SubParsersAction) -> None:
     vision.add_argument(
         "--auto-clean",
         action=argparse.BooleanOptionalAction,
-        help="Delete the downloaded video and candidate frames after processing (default: on)",
+        help="Delete the downloaded video and candidate frames after processing (default: on); with --no-auto-clean they stay in a work folder beside picks.json",
     )
     download = video_parser.add_argument_group("download")
     download.add_argument(
@@ -175,7 +169,7 @@ def _add_video_command(subparsers: argparse._SubParsersAction) -> None:
         nargs="?",
         const="video",
         choices=("video", "audio", "frames", "keyframes"),
-        help="Save to the working directory, under the title, channel, quality, and range: the video with its sound as an mp4; with audio, the sound alone as an m4a; with frames, a folder of JPEGs, one per visible change, named by time; with keyframes, a folder of every keyframe. What is already there for the same request comes back as it is",
+        help="Save to the working directory, under the title, channel, quality, and range: the video with its sound as an mp4; with audio, the sound alone as an m4a; with frames, a folder of JPEGs, one per visible change, named by time; with keyframes, a folder of every keyframe. What is already there for the same request comes back as it is, which `reused` reports",
     )
     download.add_argument(
         "--quality",
@@ -223,7 +217,7 @@ def _add_video_command(subparsers: argparse._SubParsersAction) -> None:
     video_parser.add_argument(
         "--fresh",
         action="store_true",
-        help="Redo what an earlier run left: replace an existing transcript export, pick screenshots afresh instead of reusing earlier picks, or download again instead of returning what is already there; requires --export, --vision, or --download",
+        help="Make every part of this call afresh instead of reusing what an earlier run saved: fetch the transcript again, rewrite and summarize it again, pick screenshots again, and download again; requires --transcript, --summary, --vision, or --download",
     )
     video_parser.set_defaults(handler=commands.video)
 

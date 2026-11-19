@@ -1,18 +1,21 @@
-"""Vision's entry point, which picks a ranking route for a video's keyframes, or reuses the frames a matching earlier run saved, and writes them as collages."""
+"""Vision's entry point, which picks a ranking route for a video's keyframes, or reuses the frames a matching earlier run saved, and writes them as collages.
+
+A set of picks lives in the video's folder under `vision/HASH/`, the hash of its picking options: `picks.json` describes every frame, `frames/` holds them alone, `collages/ROWSxCOLUMNS_RESOLUTION/` holds each layout's pages, with `_plain` for pages without times, and `work/` the downloaded media when it is kept.
+"""
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
+from datetime import UTC, datetime
 from importlib.metadata import version
 import json
 import math
 from pathlib import Path
 import re
 import shutil
-from tempfile import TemporaryDirectory
 from typing import Any
 
-from ..artifacts import artifact_directories, create_artifact_directory
+from ..artifacts import key_hash, save_json, temporary_directory, video_directory
 from ..config import (
     API_EMBEDDING_CUTOFFS,
     DEFAULT_VISION_COLUMNS,
@@ -105,7 +108,7 @@ def sample_vision(
     fresh: bool = False,
     video_path: Path | None = None,
 ) -> dict[str, Any]:
-    """Rank the video's keyframes by the first available route and write the picks as collages in a new directory in the working directory's archive.
+    """Rank the video's keyframes by the first available route and lay the picks out as collages in the video's folder.
 
     Routes in order: the decision model with DECISION_API_KEY, Gemini embeddings with EMBEDDING_API_KEY, the local embedding model when installed, then time slots.
     `start` and `end` in seconds limit the frames, and the speech they are ranked against, to that part of the video; an `end` past the video stops at its end.
@@ -115,8 +118,9 @@ def sample_vision(
     min_similarity applies to embedding routes, and None means the cutoff tuned for the ranking model.
     max_frames limits the output, never the candidate search.
     video_path is a downloaded copy of the video from `start` to `end`, at least as tall as the screenshots, to pick from instead of downloading one; vision never deletes it.
-    The picked frames are saved, and a later run whose picking options, range, ranking model, and toolkit version match lays them out again under its rows, columns, resolution, and timestamp annotation without downloading, fetching a transcript, or ranking, provided the saved frames are at least that resolution; usage is then None and picks_reused_from names the saved run.
-    A given document plays no part in that match; fresh always picks afresh, and so does auto_clean=False, since it keeps the downloaded media.
+    The picked frames are saved, and a later run whose picking options, range, ranking model, and toolkit version match lays them out again under its rows, columns, resolution, and timestamp annotation without downloading, fetching a transcript, or ranking, provided the saved frames are at least that resolution, and `reused` says so.
+    A given document plays no part in that match; fresh always picks afresh, and so does auto_clean=False, since it keeps the downloaded media; picking afresh replaces the saved picks and every layout of them.
+    The result names `picks.json` and this layout's pages, with the frame count, route, and any warnings.
     """
     if not 1 <= max_frames <= MAX_VISION_FRAMES:
         raise ValueError(f"max_frames must be between 1 and {MAX_VISION_FRAMES}")
@@ -132,6 +136,14 @@ def sample_vision(
     if not math.isfinite(min_gap_seconds) or min_gap_seconds < 0:
         raise ValueError("min_gap_seconds must be finite and non-negative")
     video_id = require_video_id(video_ref)
+    client = YtDlpClient()
+    if metadata is None:
+        metadata = client.metadata(video_ref)
+    fetched_video_id = require_video_id(str(metadata.get("id") or ""))
+    if fetched_video_id != video_id:
+        raise ValueError(
+            f"yt-dlp returned video {fetched_video_id} for requested video {video_id}"
+        )
     decision = None if local_only else decision_config()
     gemini_key = None if local_only else gemini_embedding_key()
     pick_options = {
@@ -144,32 +156,43 @@ def sample_vision(
         "ranking_model": _ranking_model(decision, gemini_key),
         "toolkit_version": version("youtube-toolkit"),
     }
-    saved = (
-        None
-        if fresh or not auto_clean
-        else _find_saved_picks(video_id, pick_options, height)
+    destination = (
+        video_directory(video_id, metadata.get("title"))
+        / "vision"
+        / key_hash(pick_options)
     )
+    layout = (
+        destination
+        / "collages"
+        / f"{rows}x{columns}_{resolution}{'' if timestamp_annotation else '_plain'}"
+    )
+    saved = None if fresh or not auto_clean else _saved_picks(destination, height)
     if saved is not None:
-        source, saved_result = saved
-        return _lay_out_saved_picks(
-            source,
-            saved_result,
-            rows=rows,
-            columns=columns,
-            frame_size=(width, height),
-            timestamp_annotation=timestamp_annotation,
-        )
+        try:
+            frames = [
+                StoredFrame(
+                    frame["timestamp_seconds"],
+                    Path(frame["image_path"]),
+                    VisualScores(**frame["visual_scores"]),
+                ).load()
+                for frame in saved["frames"]
+            ]
+            collage_paths = render_collages(
+                frames,
+                layout,
+                rows=rows,
+                columns=columns,
+                frame_size=(width, height),
+                timestamp_annotation=timestamp_annotation,
+            )
+        except OSError as error:
+            raise RuntimeError(
+                f"Vision artifact filesystem error under {destination}: {error}"
+            ) from error
+        return _output(destination, saved, collage_paths, reused=True)
     ffmpeg_path = shutil.which("ffmpeg")
     if ffmpeg_path is None:
         raise RuntimeError("ffmpeg is required for video vision extraction")
-    client = YtDlpClient()
-    if metadata is None:
-        metadata = client.metadata(video_ref)
-    fetched_video_id = require_video_id(str(metadata.get("id") or ""))
-    if fetched_video_id != video_id:
-        raise ValueError(
-            f"yt-dlp returned video {fetched_video_id} for requested video {video_id}"
-        )
     duration = metadata.get("duration")
     if (
         not isinstance(duration, int | float)
@@ -205,7 +228,8 @@ def sample_vision(
                     stt="never" if local_only else "fallback",
                     client=client,
                     metadata=metadata,
-                )
+                    fresh=fresh,
+                ).value
             # Speech-to-text reports a recording without speech as ValueError, which leaves no speech context, as missing captions do.
             except (RuntimeError, ValueError) as error:
                 transcript_warning = f"No timed transcript; {fallback}: {error}"
@@ -233,13 +257,13 @@ def sample_vision(
     match_floor = cutoffs.vision_match if min_similarity is None else min_similarity
     decision_ranking = None
     embedding_usage = None
-    destination = None
     try:
-        destination = create_artifact_directory("vision", video_id)
-        with TemporaryDirectory(
-            prefix="work-", dir=destination, delete=auto_clean
-        ) as work_dir_name:
-            work_dir = Path(work_dir_name)
+        # picks.json goes in last, so a run cut short leaves a folder that the next run replaces.
+        shutil.rmtree(destination, ignore_errors=True)
+        destination.mkdir(parents=True)
+        with temporary_directory("vision-") as scratch:
+            work_dir = scratch if auto_clean else destination / "work"
+            work_dir.mkdir(exist_ok=True)
             if video_path is None:
                 video_path = work_dir / f"{video_id}.mp4"
                 client.download_silent_video(
@@ -312,7 +336,7 @@ def sample_vision(
             stored = [store_frame(frames_directory, frame) for frame, _ in picks]
             collage_paths = render_collages(
                 [frame for frame, _ in picks],
-                destination / f"{video_id}_vision",
+                layout,
                 rows=rows,
                 columns=columns,
                 frame_size=(width, height),
@@ -344,11 +368,8 @@ def sample_vision(
             "min_similarity": None if decision else match_floor,
             "min_gap_seconds": min_gap_seconds,
             "frame_count": len(picks),
+            "frame_height": max(height, CANDIDATE_HEIGHT),
             "timestamps_seconds": [frame.timestamp_seconds for frame, _ in picks],
-            "directory": str(destination),
-            "collage_paths": [str(path) for path in collage_paths],
-            "media_dir": None if auto_clean else str(work_dir),
-            "picks_reused_from": None,
             "frames": [
                 {
                     **frame.to_dict(),
@@ -358,12 +379,19 @@ def sample_vision(
                 for (frame, relevance), stored_frame in zip(picks, stored, strict=True)
             ],
         }
-        _save_picks(destination, pick_options, max(height, CANDIDATE_HEIGHT), result)
+        save_json(
+            destination / PICKS_FILE,
+            {
+                "key": pick_options,
+                "saved_at": datetime.now(UTC).isoformat(),
+                "data": result,
+            },
+        )
     except OSError as error:
         raise RuntimeError(
             f"Vision artifact filesystem error under {destination}: {error}"
         ) from error
-    return result
+    return _output(destination, result, collage_paths, reused=False)
 
 
 def _ranking_model(
@@ -379,72 +407,34 @@ def _ranking_model(
     return None
 
 
-def _find_saved_picks(
-    video_id: str, options: dict[str, Any], height: int
-) -> tuple[Path, dict[str, Any]] | None:
-    """The newest saved run whose options match and whose frames are at least height tall, with its result."""
-    for directory in artifact_directories("vision", video_id):
-        path = directory / PICKS_FILE
-        if not path.is_file():
-            continue
-        saved = json.loads(path.read_text(encoding="utf-8"))
-        if saved["options"] == options and saved["frame_height"] >= height:
-            return directory, saved["result"]
-    return None
+def _saved_picks(destination: Path, height: int) -> dict[str, Any] | None:
+    """The saved result when its frames are at least height tall."""
+    path = destination / PICKS_FILE
+    if not path.is_file():
+        return None
+    saved = json.loads(path.read_text(encoding="utf-8"))["data"]
+    return saved if saved["frame_height"] >= height else None
 
 
-def _save_picks(
+def _output(
     destination: Path,
-    options: dict[str, Any],
-    frame_height: int,
     result: dict[str, Any],
-) -> None:
-    document = {"options": options, "frame_height": frame_height, "result": result}
-    (destination / PICKS_FILE).write_text(
-        json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-
-
-def _lay_out_saved_picks(
-    source: Path,
-    saved: dict[str, Any],
+    collage_paths: list[Path],
     *,
-    rows: int,
-    columns: int,
-    frame_size: tuple[int, int],
-    timestamp_annotation: bool,
+    reused: bool,
 ) -> dict[str, Any]:
-    destination = None
-    try:
-        frames = [
-            StoredFrame(
-                frame["timestamp_seconds"],
-                Path(frame["image_path"]),
-                VisualScores(**frame["visual_scores"]),
-            ).load()
-            for frame in saved["frames"]
-        ]
-        destination = create_artifact_directory("vision", saved["video_id"])
-        collage_paths = render_collages(
-            frames,
-            destination / f"{saved['video_id']}_vision",
-            rows=rows,
-            columns=columns,
-            frame_size=frame_size,
-            timestamp_annotation=timestamp_annotation,
-        )
-    except OSError as error:
-        raise RuntimeError(
-            f"Vision artifact filesystem error under {destination or source}: {error}"
-        ) from error
+    warnings = [
+        result[name]
+        for name in ("transcript_warning", "embedding_warning", "decision_warning")
+        if result[name]
+    ]
     return {
-        **saved,
-        "embedding_usage": None,
-        "decision_usage": None,
-        "directory": str(destination),
-        "collage_paths": [str(path) for path in collage_paths],
-        "media_dir": None,
-        "picks_reused_from": str(source),
+        "path": str(destination / PICKS_FILE),
+        "collages": [str(path) for path in collage_paths],
+        "frames": result["frame_count"],
+        "selection_mode": result["selection_mode"],
+        "warnings": warnings,
+        "reused": reused,
     }
 
 

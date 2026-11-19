@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Generator
-from contextlib import contextmanager
 from math import ceil, floor
 from pathlib import Path
 import shutil
-from tempfile import TemporaryDirectory
 from typing import Any, Literal, TypedDict
 
-from .artifacts import artifact_root
+from .artifacts import temporary_directory
 from .ffmpeg_utils import decode_frame
 from .filename_utils import filename_stem
 from .schemas import VideoMetadata
@@ -28,16 +25,27 @@ DOWNLOAD_SIZES: dict[DownloadQuality, tuple[int, int]] = {
     "1080p": (1920, 1080),
 }
 DEFAULT_DOWNLOAD_QUALITY: DownloadQuality = "1080p"
-EXISTING_DOWNLOAD_MESSAGE = "Already downloaded, so this is the earlier download; rerun with --fresh to replace it with a fresh download"
 # A clip opens on the first frame at or after its start, and one second holds a frame at any frame rate.
 FRAME_CLIP_SECONDS = 1
 # A download counts as stuck after twice its span's playing time, and never sooner than vision's ten minutes: at the rate vision's download is sized for, a two-hour 720p video in ten minutes, even 1080p with sound arrives in well under half its playing time.
 MIN_DOWNLOAD_TIMEOUT_SECONDS = 10 * 60
 
 
-class DownloadResult(TypedDict):
+class MediaDownload(TypedDict):
     path: str
-    message: str | None
+    bytes: int
+    reused: bool
+
+
+class FrameFolderDownload(TypedDict):
+    path: str
+    frames: int
+    reused: bool
+
+
+class FrameDownload(TypedDict):
+    path: str
+    reused: bool
 
 
 def download_media(
@@ -49,10 +57,10 @@ def download_media(
     end: float | None,
     fresh: bool,
     client: YtDlpClient,
-) -> DownloadResult:
+) -> MediaDownload:
     """`start` and `end` in seconds keep only that span, which opens on the first frame at or after `start`; an `end` past the video stops at its end.
 
-    The file name holds the kind, the video's quality, and the range, so a file already there is that same download and comes back without downloading, with a message saying so, unless `fresh` downloads it again.
+    The file name holds the kind, the video's quality, and the range, so a file already there is that same download and comes back without downloading, with `reused` set, unless `fresh` downloads it again.
     The quality names the requested cap, so a video smaller than it is downloaded again under each larger cap.
     A failed download can leave yt-dlp's .part files beside the target, which a rerun resumes, or for a range overwrites.
     """
@@ -62,7 +70,7 @@ def download_media(
     extension = "m4a" if kind == "audio" else "mp4"
     path = Path.cwd() / f"{filename_stem(metadata, '_'.join(labels))}.{extension}"
     if path.exists() and not fresh:
-        return {"path": str(path), "message": EXISTING_DOWNLOAD_MESSAGE}
+        return {"path": str(path), "bytes": path.stat().st_size, "reused": True}
     _require_ffmpeg()
     client.download_media(
         payload,
@@ -72,7 +80,7 @@ def download_media(
         overwrite=fresh,
         timeout_seconds=_download_timeout(first, last),
     )
-    return {"path": str(path), "message": None}
+    return {"path": str(path), "bytes": path.stat().st_size, "reused": False}
 
 
 def download_frames(
@@ -84,7 +92,7 @@ def download_frames(
     end: float | None,
     fresh: bool,
     client: YtDlpClient,
-) -> DownloadResult:
+) -> FrameFolderDownload:
     """Save the video's keyframes from `start` to `end` in seconds, each a `TIME.jpg` at the quality's size named by its time in the video (`00h01m02.812s.jpg`), in a folder named like a video download plus the kind.
 
     keyframes keeps every keyframe; frames drops near-blank frames, near-duplicates of the last few seconds, and cross-fades, leaving one frame per visible change.
@@ -96,7 +104,11 @@ def download_frames(
         metadata, "_".join([quality, kind, *_range_labels(section)])
     )
     if directory.exists() and not fresh:
-        return {"path": str(directory), "message": EXISTING_DOWNLOAD_MESSAGE}
+        return {
+            "path": str(directory),
+            "frames": len(list(directory.glob("*.jpg"))),
+            "reused": True,
+        }
     ffmpeg_path = _require_ffmpeg()
     from .vision import collect_candidates
 
@@ -104,7 +116,7 @@ def download_frames(
     partial = directory.with_name(f"{directory.name}.part")
     shutil.rmtree(partial, ignore_errors=True)
     try:
-        with _clip_directory() as clips:
+        with temporary_directory("clips-") as clips:
             video_path = clips / "video.mp4"
             client.download_silent_video(
                 payload,
@@ -132,7 +144,7 @@ def download_frames(
         partial.rename(directory)
     finally:
         shutil.rmtree(partial, ignore_errors=True)
-    return {"path": str(directory), "message": None}
+    return {"path": str(directory), "frames": len(frames), "reused": False}
 
 
 def download_frames_at(
@@ -142,7 +154,7 @@ def download_frames_at(
     quality: DownloadQuality,
     fresh: bool,
     client: YtDlpClient,
-) -> list[DownloadResult]:
+) -> list[FrameDownload]:
     """Save the first frame at or after each time in seconds, keyframe or not, as a JPEG at the quality's size named like a video download with the time for its range (`TITLE_CHANNEL_720p_00h01m15.000s.jpg`), one result per distinct time in the order given.
 
     A frame already there comes back as it is unless `fresh`; the rest download together as one-second clips.
@@ -165,7 +177,7 @@ def download_frames_at(
         from .vision import save_frame
 
         width, height = DOWNLOAD_SIZES[quality]
-        with _clip_directory() as directory:
+        with temporary_directory("clips-") as directory:
             clips = client.download_silent_clips(
                 payload,
                 directory,
@@ -183,10 +195,7 @@ def download_frames_at(
                 )
                 partial.replace(paths[time])
     return [
-        {
-            "path": str(path),
-            "message": None if time in missing else EXISTING_DOWNLOAD_MESSAGE,
-        }
+        {"path": str(path), "reused": time not in missing}
         for time, path in paths.items()
     ]
 
@@ -224,15 +233,6 @@ def _require_ffmpeg() -> str:
 
 def _download_timeout(first: float, last: float) -> int:
     return max(MIN_DOWNLOAD_TIMEOUT_SECONDS, ceil(2 * (last - first)))
-
-
-@contextmanager
-def _clip_directory() -> Generator[Path]:
-    """Downloaded clips are only read for frames, so they live in the archive and go when done."""
-    root = artifact_root()
-    root.mkdir(parents=True, exist_ok=True)
-    with TemporaryDirectory(prefix="clips-", dir=root) as directory:
-        yield Path(directory)
 
 
 def _range_labels(section: tuple[float, float] | None) -> list[str]:

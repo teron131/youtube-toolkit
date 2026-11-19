@@ -8,20 +8,20 @@ from functools import cache, partial
 from pathlib import Path
 from typing import Any
 
+from ..artifacts import Cached, save_json, save_text, video_directory
 from ..config import VISION_SOURCE_HEIGHT, llm_config
 from ..download import (
     DEFAULT_DOWNLOAD_QUALITY,
     DOWNLOAD_SIZES,
-    DownloadResult,
+    FrameDownload,
+    FrameFolderDownload,
+    MediaDownload,
     download_frames,
     download_frames_at,
     download_media,
 )
-from ..export import (
-    TranscriptExportResult,
-    write_markdown_export,
-    write_text_export,
-)
+from ..identity import VideoRef, require_video_id
+from ..markdown import TranscriptLayout, summary_markdown, transcript_markdown
 from ..rewrite import rewrite_transcript
 from ..schemas import TranscriptDocument, VideoMetadata
 from ..search import (
@@ -61,7 +61,7 @@ VISION_OPTIONS = {
     "auto_clean": "auto_clean",
 }
 PART_OPTIONS = {
-    ("transcript",): ("timestamps", "refine", "export"),
+    ("transcript",): ("timestamps", "refine"),
     ("transcript", "summary"): ("stt", "translate"),
     ("vision",): tuple(VISION_OPTIONS),
     ("download",): ("quality", "at"),
@@ -71,7 +71,10 @@ PART_OPTIONS = {
 
 
 def video(args: argparse.Namespace) -> dict[str, Any]:
-    """Parts share one metadata fetch, which comments alone skip since their own request carries the title."""
+    """Each part is saved in the video's folder, and the output gives its path with a few facts, so its size never depends on the content's.
+
+    Parts share one metadata fetch, which comments alone skip since their own request carries the title.
+    """
     for parts, options in PART_OPTIONS.items():
         if any(getattr(args, part) not in (None, False) for part in parts):
             continue
@@ -79,8 +82,12 @@ def video(args: argparse.Namespace) -> dict[str, Any]:
             if getattr(args, option) is not None:
                 flags = " or ".join(f"--{part}" for part in parts)
                 raise ValueError(f"--{option.replace('_', '-')} requires {flags}")
-    if args.fresh and not (args.export or args.vision or args.download):
-        raise ValueError("--fresh requires --export, --vision, or --download")
+    if args.fresh and not (
+        args.transcript or args.summary is not None or args.vision or args.download
+    ):
+        raise ValueError(
+            "--fresh requires --transcript, --summary, --vision, or --download"
+        )
     if args.download == "audio" and args.quality is not None:
         raise ValueError("--quality applies only to video and frame downloads")
     if args.at is not None and args.download != "frames":
@@ -108,23 +115,20 @@ def video(args: argparse.Namespace) -> dict[str, Any]:
         or args.vision
         or args.download
     )
-    metadata = (
-        asdict(VideoMetadata.from_yt_dlp(payload()))
-        if args.metadata or shown_alone
-        else None
-    )
-    document = (
+    metadata = _metadata(payload()) if args.metadata or shown_alone else None
+    transcript = (
         fetch_transcript(
             args.video_ref,
             stt="always" if args.stt else "fallback",
             client=client,
             metadata=payload(),
+            fresh=args.fresh,
         )
         if args.transcript or args.summary is not None
         else None
     )
     comments = (
-        search_comments(
+        _comments(
             args.video_ref,
             args.comments,
             limit=DEFAULT_COMMENT_LIMIT
@@ -135,14 +139,18 @@ def video(args: argparse.Namespace) -> dict[str, Any]:
         else None
     )
     summary = None
-    if args.summary is not None and document is not None and llm is not None:
+    if args.summary is not None and transcript is not None and llm is not None:
         from ..summary import summarize_transcript
 
         # The summary reads the transcript as fetched rather than a translation of it, and writes in the --translate language itself.
-        summary = summarize_transcript(
-            document, llm, language=args.summary or args.translate
+        language = args.summary or args.translate
+        summary = _summary(
+            summarize_transcript(transcript, llm, language=language, fresh=args.fresh),
+            transcript.value,
+            language,
+            model=llm.model,
         )
-    download: DownloadResult | list[DownloadResult] | None = None
+    download: MediaDownload | FrameFolderDownload | list[FrameDownload] | None = None
     downloaded_video = None
     if args.download in ("video", "audio"):
         media = download_media(
@@ -186,7 +194,7 @@ def video(args: argparse.Namespace) -> dict[str, Any]:
         vision = sample_vision(
             args.video_ref,
             metadata=payload(),
-            document=document,
+            document=None if transcript is None else transcript.value,
             start=start,
             end=end,
             fresh=args.fresh,
@@ -198,19 +206,20 @@ def video(args: argparse.Namespace) -> dict[str, Any]:
             },
         )
     # Rewriting waits for vision, which matches frames to timed caption lines that an article replaces with one block of paragraphs.
-    # A summary alone prints no transcript, so its --translate language must not buy a translation nobody reads.
-    if args.transcript and document is not None and llm is not None:
-        document = rewrite_transcript(
-            document,
+    # A summary alone shows no transcript, so its --translate language must not buy a translation nobody reads.
+    if args.transcript and transcript is not None and llm is not None:
+        transcript = rewrite_transcript(
+            transcript,
             llm,
             language=args.translate,
             refine=bool(args.refine),
             article=not args.timestamps,
+            fresh=args.fresh,
         )
     parts = {
         "transcript": None
-        if document is None or not args.transcript
-        else _transcript(document, args, vision),
+        if transcript is None or not args.transcript
+        else _transcript(transcript, timestamps=bool(args.timestamps)),
         "summary": summary,
         "vision": vision,
         "download": download,
@@ -220,21 +229,76 @@ def video(args: argparse.Namespace) -> dict[str, Any]:
     return {name: part for name, part in parts.items() if part is not None}
 
 
+def _metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    metadata = VideoMetadata.from_yt_dlp(payload)
+    path = video_directory(metadata.video_id, metadata.title) / "metadata.json"
+    save_json(path, asdict(metadata))
+    return {
+        "path": str(path),
+        "title": metadata.title,
+        "channel": metadata.channel,
+        "duration_seconds": metadata.duration_seconds,
+    }
+
+
 def _transcript(
+    transcript: Cached[TranscriptDocument], *, timestamps: bool
+) -> dict[str, Any]:
+    """The timed reading copy ends in `.timed.md`, so a transcript read both ways keeps both copies."""
+    document = transcript.value
+    layout: TranscriptLayout = (
+        "timed"
+        if timestamps and document.timed
+        # Without --timestamps, a rewrite takes the article route.
+        else "article"
+        if document.rewrite is not None and not timestamps
+        else "sentences"
+    )
+    suffix = ".timed.md" if layout == "timed" else ".md"
+    return {
+        **_reading_copy(
+            transcript.path.with_name(transcript.path.stem + suffix),
+            transcript_markdown(document, layout),
+        ),
+        "language": document.language,
+        "source": document.source,
+        "reused": transcript.reused,
+    }
+
+
+def _summary(
+    summary: Cached[str],
     document: TranscriptDocument,
-    args: argparse.Namespace,
-    vision: dict[str, Any] | None,
-) -> str | list[dict[str, Any]] | TranscriptExportResult:
-    timestamps = bool(args.timestamps)
-    if args.export and vision is not None:
-        return write_markdown_export(
-            document, Path(vision["directory"]), timestamps=timestamps
-        )
-    if args.export:
-        return write_text_export(document, timestamps=timestamps, fresh=args.fresh)
-    if timestamps:
-        return [asdict(segment) for segment in document.segments]
-    return document.text
+    language: str | None,
+    *,
+    model: str,
+) -> dict[str, Any]:
+    return {
+        **_reading_copy(
+            summary.path.with_suffix(".md"),
+            summary_markdown(document.metadata, summary.value, model=model),
+        ),
+        "language": language or document.language,
+        "reused": summary.reused,
+    }
+
+
+def _comments(video_ref: VideoRef, query: str, *, limit: int) -> dict[str, Any]:
+    result = search_comments(video_ref, query, limit=limit)
+    path = (
+        video_directory(require_video_id(video_ref), result["title"]) / "comments.json"
+    )
+    save_json(path, result)
+    return {
+        "path": str(path),
+        "matches": len(result["comments"]),
+        "sampled": result["sampled"],
+    }
+
+
+def _reading_copy(path: Path, text: str) -> dict[str, Any]:
+    save_text(path, text)
+    return {"path": str(path), "characters": len(text)}
 
 
 def channel(args: argparse.Namespace) -> dict[str, Any]:

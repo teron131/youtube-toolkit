@@ -1,6 +1,6 @@
 """Subprocess adapter that owns every yt-dlp command.
 
-Metadata, search, and listing responses are archived as fetched; archives are never read back as a cache.
+Metadata, search, and listing responses are saved as records when fetched; records are never read back.
 """
 
 from __future__ import annotations
@@ -13,9 +13,8 @@ import subprocess
 import sys
 from typing import Any
 from urllib.parse import unquote, urlencode, urlparse
-from uuid import uuid4
 
-from ..artifacts import artifact_root, write_artifact
+from ..artifacts import write_record
 from ..execution import retry_transient
 from ..identity import VideoRef, normalize_youtube_url, require_video_id
 
@@ -30,6 +29,7 @@ DOWNLOAD_AUDIO_FORMAT = "bestaudio[ext=m4a]"
 RANGE_REQUEST_BYTES = 10 * 1024 * 1024
 # yt-dlp prints `SECTION_START PATH` for each clip it saves: `75 /DIR/75.mp4`.
 CLIP_PRINT_TEMPLATE = "after_move:%(section_start)s %(filepath)s"
+AUDIO_PRINT_TEMPLATE = "after_move:%(filepath)s"
 # A metadata, search, or listing request that takes over a minute is stuck.
 YTDLP_REQUEST_TIMEOUT_SECONDS = 60
 MAX_CONCURRENT_METADATA_FETCHES = 8
@@ -49,7 +49,7 @@ class YtDlpForbidden(RuntimeError): ...
 
 class YtDlpClient:
     def metadata(self, video_ref: VideoRef) -> dict[str, Any]:
-        """Machine-translated caption tracks are dropped before the response is returned or archived."""
+        """Machine-translated caption tracks are dropped before the response is returned or recorded."""
         return self._json(
             [
                 *YTDLP_COMMAND,
@@ -68,7 +68,7 @@ class YtDlpClient:
     def comments(self, video_ref: VideoRef, *, limit: int) -> dict[str, Any]:
         """The extractor arguments fetch up to `limit` Top-sorted comments and no replies.
 
-        The response is not archived here; the comment workflow archives a lean copy.
+        The response is not recorded here; the comment workflow records a lean copy.
         """
         return _request_json(
             [
@@ -131,42 +131,29 @@ class YtDlpClient:
             error_message="yt-dlp channel query failed",
         )
 
-    def download_transcription_audio(self, metadata: dict[str, Any]) -> Path:
-        output_stem = artifact_root() / "audio" / f"{metadata['id']}-{uuid4().hex}"
-        output_stem.parent.mkdir(parents=True, exist_ok=True)
-        command = [
-            *YTDLP_COMMAND,
-            "--quiet",
-            "--no-warnings",
-            "--format",
-            STT_AUDIO_FORMAT_SELECTOR,
-            "--output",
-            str(output_stem.with_suffix(".%(ext)s")),
-        ]
-        downloaded_path: Path | None = None
-        try:
-            _download(
-                command,
-                metadata,
-                action="audio download",
-                timeout_seconds=YTDLP_DOWNLOAD_TIMEOUT_SECONDS,
-            )
-            candidates = [
-                path
-                for path in output_stem.parent.glob(f"{output_stem.name}.*")
-                if path.is_file()
-            ]
-            if not candidates:
-                raise RuntimeError(
-                    f"yt-dlp completed but did not create {output_stem}.*"
-                )
-            downloaded_path = max(candidates, key=lambda path: path.stat().st_mtime)
-            return downloaded_path
-        finally:
-            # The caller owns the returned audio; this invocation owns all partial files.
-            for path in output_stem.parent.glob(f"{output_stem.name}.*"):
-                if path.is_file() and path != downloaded_path:
-                    path.unlink(missing_ok=True)
+    def download_transcription_audio(
+        self, metadata: dict[str, Any], directory: Path
+    ) -> Path:
+        """Saves the sound in directory, which the caller removes along with any partial files."""
+        result = _download(
+            [
+                *YTDLP_COMMAND,
+                "--no-warnings",
+                "--format",
+                STT_AUDIO_FORMAT_SELECTOR,
+                "--output",
+                str(Path(_literal_template(directory)) / "audio.%(ext)s"),
+                "--print",
+                AUDIO_PRINT_TEMPLATE,
+            ],
+            metadata,
+            action="audio download",
+            timeout_seconds=YTDLP_DOWNLOAD_TIMEOUT_SECONDS,
+        )
+        audio = Path(result.stdout.strip())
+        if not audio.is_file():
+            raise RuntimeError(f"yt-dlp completed but saved no audio in {directory}")
+        return audio
 
     def download_media(
         self,
@@ -294,7 +281,7 @@ class YtDlpClient:
         data = _request_json(command, error_message=error_message)
         if prepare is not None:
             data = prepare(data)
-        write_artifact(namespace, identifier, request, data)
+        write_record(namespace, identifier, request, data)
         return data
 
 

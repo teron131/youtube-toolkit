@@ -1,12 +1,14 @@
 """Search discovery, filtering, and semantic ranking."""
 
 from collections.abc import Callable
+from pathlib import Path
 from threading import Barrier
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 
+from youtube_toolkit.artifacts import Cached
 from youtube_toolkit.config import (
     API_EMBEDDING_CUTOFFS,
     LOCAL_EMBEDDING_CUTOFFS,
@@ -55,11 +57,13 @@ def search_transcript_side_effects(monkeypatch) -> dict[str, Any]:
         *,
         stt: str,
         metadata: dict | None = None,
-    ) -> TranscriptDocument:
+        fresh: bool,
+    ) -> Cached[TranscriptDocument]:
         assert stt == "never"
+        assert not fresh
         fetched_video_ids.append(video_id)
         supplied_metadata[video_id] = metadata
-        return TranscriptDocument(
+        document = TranscriptDocument(
             metadata=VideoMetadata(
                 video_id=video_id,
                 url=f"https://www.youtube.com/watch?v={video_id}",
@@ -74,6 +78,7 @@ def search_transcript_side_effects(monkeypatch) -> dict[str, Any]:
                 )
             ],
         )
+        return cached_transcript(document)
 
     monkeypatch.setattr(search_semantic, "fetch_transcript", fake_fetch_live_transcript)
     use_embeddings(monkeypatch, lambda _text: [1.0, 0.0])
@@ -1229,8 +1234,9 @@ def test_semantic_video_results_include_partial_transcript_warnings(
         *,
         stt: str,
         metadata: dict | None = None,
-    ) -> TranscriptDocument:
-        return fake_fetch_live_transcript(video_id)
+        fresh: bool,
+    ) -> Cached[TranscriptDocument]:
+        return cached_transcript(fake_fetch_live_transcript(video_id))
 
     monkeypatch.setattr(
         search_discovery, "fetch_channel_videos", fake_fetch_channel_videos
@@ -1304,8 +1310,9 @@ def test_semantic_search_defaults_to_chunk_results(
         *,
         stt: str,
         metadata: dict | None = None,
-    ) -> TranscriptDocument:
-        return fake_fetch_live_transcript(video_id)
+        fresh: bool,
+    ) -> Cached[TranscriptDocument]:
+        return cached_transcript(fake_fetch_live_transcript(video_id))
 
     monkeypatch.setattr(
         search_discovery, "fetch_channel_videos", fake_fetch_channel_videos
@@ -1365,10 +1372,10 @@ def test_live_semantic_search_fetches_transcripts_concurrently(
         }
 
     def fake_fetch_live_transcript(
-        video_id: str, *, stt: str, metadata: dict | None = None
-    ) -> TranscriptDocument:
+        video_id: str, *, stt: str, metadata: dict | None = None, fresh: bool
+    ) -> Cached[TranscriptDocument]:
         all_fetches_started.wait(timeout=1)
-        return TranscriptDocument(
+        document = TranscriptDocument(
             metadata=VideoMetadata(
                 video_id=video_id,
                 url=f"https://www.youtube.com/watch?v={video_id}",
@@ -1377,6 +1384,7 @@ def test_live_semantic_search_fetches_transcripts_concurrently(
             source="automatic_captions",
             segments=[TranscriptSegment(start_seconds=0, end_seconds=1, text=video_id)],
         )
+        return cached_transcript(document)
 
     monkeypatch.setattr(
         search_discovery, "fetch_channel_videos", fake_fetch_channel_videos
@@ -1658,7 +1666,8 @@ def test_semantic_search_reports_when_no_transcripts_can_be_prepared(
         *,
         stt: str,
         metadata: dict | None = None,
-    ) -> TranscriptDocument:
+        fresh: bool,
+    ) -> Cached[TranscriptDocument]:
         raise RuntimeError("captions unavailable")
 
     monkeypatch.setattr(
@@ -1776,7 +1785,8 @@ def test_search_result_keeps_raw_metadata_when_transcript_fetch_fails(
         *,
         stt: str,
         metadata: dict | None = None,
-    ) -> TranscriptDocument:
+        fresh: bool,
+    ) -> Cached[TranscriptDocument]:
         raise RuntimeError("captions unavailable")
 
     monkeypatch.setattr(search_discovery, "search_youtube", fake_search_youtube)
@@ -1854,3 +1864,7 @@ def test_semantic_search_embeds_locally_only_without_an_api_key(monkeypatch) -> 
         API_EMBEDDING_CUTOFFS,
         None,
     )
+
+
+def cached_transcript(document: TranscriptDocument) -> Cached[TranscriptDocument]:
+    return Cached(document, False, Path("transcripts/original_never.json"))

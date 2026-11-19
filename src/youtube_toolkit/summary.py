@@ -10,7 +10,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
 from pydantic import BaseModel, Field
 
-from .artifacts import write_artifact
+from .artifacts import Cached, reuse, video_directory
 from .config import LLMConfig
 from .llm import ChatModel
 from .prompts import (
@@ -81,9 +81,35 @@ class _Context:
 
 
 def summarize_transcript(
+    transcript: Cached[TranscriptDocument],
+    config: LLMConfig,
+    *,
+    language: str | None,
+    fresh: bool,
+) -> Cached[str]:
+    """Written in the transcript's own language when `language` is None; raises RuntimeError when a request fails or returns no text.
+
+    The summary is saved in the video's `summaries` folder with its gist and outline, and a later call on the same transcript with the same language and model reuses it unless `fresh`.
+    """
+    document = transcript.value
+    metadata = document.metadata
+    entry = reuse(
+        video_directory(metadata.video_id, metadata.title) / "summaries",
+        language or document.language,
+        {
+            "transcript": transcript.path.stem,
+            "language": language,
+            "model": config.model,
+        },
+        fresh=fresh,
+        compute=lambda: _summarize(document, config, language=language),
+    )
+    return Cached(entry.value["summary"], entry.reused, entry.path)
+
+
+def _summarize(
     document: TranscriptDocument, config: LLMConfig, *, language: str | None
-) -> str:
-    """Written in the transcript's own language when `language` is None; raises RuntimeError when a request fails or returns no text."""
+) -> dict[str, str]:
     metadata = document.metadata
     video = SUMMARY_VIDEO.format(
         title=metadata.title or "",
@@ -108,18 +134,7 @@ def summarize_transcript(
             context=_Context(llm),
         )
     )
-    request = {
-        "video_id": metadata.video_id,
-        "language": language,
-        "model": config.model,
-    }
-    write_artifact(
-        "summaries",
-        metadata.video_id,
-        request,
-        {name: state[name] for name in ("gist", "outline", "summary")},
-    )
-    return state["summary"]
+    return {name: state[name] for name in ("gist", "outline", "summary")}
 
 
 async def _gist(state: _State, runtime: Runtime[_Context]) -> dict[str, str]:

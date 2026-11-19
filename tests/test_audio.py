@@ -1,4 +1,4 @@
-"""Media download commands and directory-local retrieval archives."""
+"""Media download commands and directory-local retrieval records."""
 
 from pathlib import Path
 import subprocess
@@ -16,11 +16,10 @@ def test_stt_audio_format_prefers_xai_and_elevenlabs_compatible_containers() -> 
     )
 
 
-def test_download_transcription_audio_uses_unique_artifact_stem(
+def test_download_transcription_audio_saves_into_the_given_directory(
     monkeypatch,
     tmp_path,
 ) -> None:
-    monkeypatch.chdir(tmp_path)
     commands = []
 
     def fake_run(
@@ -37,24 +36,28 @@ def test_download_transcription_audio_uses_unique_artifact_stem(
         audio_path = output_pattern.with_name(
             output_pattern.name.replace("%(ext)s", "m4a")
         )
-        audio_path.parent.mkdir(parents=True, exist_ok=True)
         audio_path.write_bytes(b"audio")
-        return SimpleNamespace(returncode=0, stderr="")
+        return SimpleNamespace(returncode=0, stdout=f"{audio_path}\n", stderr="")
 
     monkeypatch.setattr("youtube_toolkit.youtube.client.subprocess.run", fake_run)
 
-    first_path = YtDlpClient().download_transcription_audio({"id": "JpSHyEIZ_bo"})
-    second_path = YtDlpClient().download_transcription_audio({"id": "JpSHyEIZ_bo"})
+    path = YtDlpClient().download_transcription_audio({"id": "JpSHyEIZ_bo"}, tmp_path)
 
-    assert first_path != second_path
-    assert first_path.parent == tmp_path / ".cache/youtube-toolkit/audio"
-    assert first_path.name.startswith("JpSHyEIZ_bo-")
-    assert first_path.suffix == ".m4a"
+    assert path == tmp_path / "audio.m4a"
+    assert path.read_bytes() == b"audio"
     assert commands[0][commands[0].index("--format") + 1] == STT_AUDIO_FORMAT_SELECTOR
-    assert commands[0][commands[0].index("--output") + 1].startswith(
-        str(tmp_path / ".cache/youtube-toolkit/audio/JpSHyEIZ_bo-")
+
+
+def test_download_transcription_audio_fails_when_nothing_was_saved(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setattr(
+        "youtube_toolkit.youtube.client.subprocess.run",
+        lambda command, **kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""),
     )
-    assert commands[0][commands[0].index("--output") + 1].endswith(".%(ext)s")
+
+    with pytest.raises(RuntimeError, match="saved no audio"):
+        YtDlpClient().download_transcription_audio({"id": "JpSHyEIZ_bo"}, tmp_path)
 
 
 def test_channel_videos_requests_a_flat_listing_capped_at_last(monkeypatch) -> None:
@@ -122,11 +125,11 @@ def test_identical_requests_refetch_and_preserve_history(
     monkeypatch.setattr("youtube_toolkit.youtube.client.subprocess.run", run)
     client = YtDlpClient()
     assert retrieve(client)["generation"] == 1
-    first_path = next((artifact_root() / namespace).glob("*.json"))
+    first_path = next((artifact_root() / "records" / namespace).glob("*.json"))
     first_copy = first_path.read_bytes()
     assert retrieve(client)["generation"] == 2
     assert len(calls) == 2
-    paths = list((artifact_root() / namespace).glob("*.json"))
+    paths = list((artifact_root() / "records" / namespace).glob("*.json"))
     assert len(paths) == 2
     assert all(identifier in path.name for path in paths)
     assert first_path.read_bytes() == first_copy
@@ -137,7 +140,7 @@ def test_identical_requests_refetch_and_preserve_history(
     )
 
 
-def test_artifact_names_sanitize_identifiers_and_preserve_same_time_copies(
+def test_record_names_sanitize_identifiers_and_preserve_same_time_copies(
     monkeypatch, tmp_path
 ) -> None:
     from datetime import UTC, datetime
@@ -154,7 +157,7 @@ def test_artifact_names_sanitize_identifiers_and_preserve_same_time_copies(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(artifacts, "datetime", FrozenDatetime)
     paths = [
-        artifacts.write_artifact(
+        artifacts.write_record(
             "searches",
             "../agents / tools",
             {"query": "agents / tools"},
@@ -163,7 +166,10 @@ def test_artifact_names_sanitize_identifiers_and_preserve_same_time_copies(
         for generation in (1, 2)
     ]
     assert paths[0] != paths[1]
-    assert all(path.parent == artifacts.artifact_root() / "searches" for path in paths)
+    assert all(
+        path.parent == tmp_path / ".youtube-toolkit/records/searches" for path in paths
+    )
+    assert (tmp_path / ".youtube-toolkit/.gitignore").read_text() == "*\n"
     assert all(path.name.startswith("2026-10-08T143012.123456Z-") for path in paths)
     assert all("agents" in path.name and "tools" in path.name for path in paths)
     entries = [json.loads(path.read_text(encoding="utf-8")) for path in paths]
@@ -175,21 +181,9 @@ def test_artifact_names_sanitize_identifiers_and_preserve_same_time_copies(
 
 
 @pytest.mark.parametrize("timed_out", [False, True])
-def test_failed_audio_download_cleans_only_its_own_partial_files(
-    monkeypatch, tmp_path, timed_out
-) -> None:
-    from youtube_toolkit.artifacts import artifact_root
-
-    monkeypatch.chdir(tmp_path)
-    audio_dir = artifact_root() / "audio"
-    audio_dir.mkdir(parents=True)
-    unrelated = audio_dir / "keep.m4a"
-    unrelated.write_bytes(b"existing audio")
-
+def test_failed_audio_download_reports_why(monkeypatch, tmp_path, timed_out) -> None:
     def fail(command, **kwargs):
         assert kwargs["timeout"] == 600
-        pattern = Path(command[command.index("--output") + 1])
-        pattern.with_suffix(".m4a.part").write_bytes(b"partial")
         if timed_out:
             raise subprocess.TimeoutExpired(command, timeout=600)
         return SimpleNamespace(returncode=1, stderr="download failed")
@@ -198,9 +192,7 @@ def test_failed_audio_download_cleans_only_its_own_partial_files(
     with pytest.raises(
         RuntimeError, match="timed out" if timed_out else "download failed"
     ):
-        YtDlpClient().download_transcription_audio({"id": "JpSHyEIZ_bo"})
-    assert list(audio_dir.iterdir()) == [unrelated]
-    assert unrelated.read_bytes() == b"existing audio"
+        YtDlpClient().download_transcription_audio({"id": "JpSHyEIZ_bo"}, tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -221,19 +213,64 @@ def test_refused_downloads_are_rerun_after_a_pause(
                 returncode=1,
                 stderr="ERROR: unable to download video data: HTTP Error 403: Forbidden",
             )
-        pattern = Path(command[command.index("--output") + 1])
-        pattern.with_suffix(".m4a").write_bytes(b"audio")
-        return SimpleNamespace(returncode=0, stderr="")
+        audio_path = tmp_path / "audio.m4a"
+        audio_path.write_bytes(b"audio")
+        return SimpleNamespace(returncode=0, stdout=f"{audio_path}\n", stderr="")
 
     monkeypatch.setattr("youtube_toolkit.youtube.client.subprocess.run", run)
     monkeypatch.setattr("youtube_toolkit.execution.time.sleep", delays.append)
 
     if refusals < expected_calls:
         assert (
-            YtDlpClient().download_transcription_audio({"id": "JpSHyEIZ_bo"}).is_file()
+            YtDlpClient()
+            .download_transcription_audio({"id": "JpSHyEIZ_bo"}, tmp_path)
+            .is_file()
         )
     else:
         with pytest.raises(RuntimeError, match="HTTP Error 403"):
-            YtDlpClient().download_transcription_audio({"id": "JpSHyEIZ_bo"})
+            YtDlpClient().download_transcription_audio({"id": "JpSHyEIZ_bo"}, tmp_path)
     assert len(calls) == expected_calls
     assert delays == expected_delays
+
+
+def test_comment_search_returns_matches_and_records_the_whole_sample(
+    monkeypatch, tmp_path
+) -> None:
+    import json
+
+    from youtube_toolkit.youtube.comments import search_comments
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        YtDlpClient,
+        "comments",
+        lambda self, _ref, *, limit: {
+            "id": "JpSHyEIZ_bo",
+            "title": "TITLE",
+            "comments": [
+                {"id": "a", "text": "Great agents demo", "like_count": 1},
+                {"id": "b", "text": "First", "like_count": 9},
+                {"id": "c", "text": "AGENTS everywhere", "like_count": 5},
+            ],
+        },
+    )
+
+    result = search_comments("JpSHyEIZ_bo", " Agents ")
+
+    assert result == {
+        "title": "TITLE",
+        "url": "https://www.youtube.com/watch?v=JpSHyEIZ_bo",
+        "query": " Agents ",
+        "sampled": 3,
+        "comments": [
+            {"text": "Great agents demo", "like_count": 1},
+            {"text": "AGENTS everywhere", "like_count": 5},
+        ],
+    }
+    (record,) = (tmp_path / ".youtube-toolkit/records/comments").glob("*.json")
+    sample = json.loads(record.read_text(encoding="utf-8"))["comments"]
+    assert [comment["text"] for comment in sample] == [
+        "Great agents demo",
+        "First",
+        "AGENTS everywhere",
+    ]
