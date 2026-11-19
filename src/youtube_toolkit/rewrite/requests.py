@@ -7,7 +7,7 @@ import re
 
 from ..execution import collect_concurrently
 from ..names import repeated_names
-from ..prompts import HEADER
+from ..prompts import HEADER, TRANSLATION_TARGET
 from ..schemas import TranscriptDocument
 
 MAX_WORKERS = 64
@@ -41,12 +41,16 @@ def request(
     items: list[str],
     *,
     context: int,
+    language: str | None,
 ) -> str:
-    """The numbered `items` between up to `context` of `lines` before `bounds` and after it."""
+    """The numbered `items` between up to `context` of `lines` before `bounds` and after it, closing with the target language when `language` asks for a translation."""
     start, end = bounds
     before = "\n".join(lines[max(0, start - context) : start])
     after = "\n".join(lines[end : end + context])
-    return f"{header}\n\n<before>\n{before}\n</before>\n\n{numbered(items)}\n\n<after>\n{after}\n</after>"
+    user = f"{header}\n\n<before>\n{before}\n</before>\n\n{numbered(items)}\n\n<after>\n{after}\n</after>"
+    if language:
+        return f"{user}\n\n{TRANSLATION_TARGET.format(language=language)}"
+    return user
 
 
 def numbered(lines: list[str]) -> str:

@@ -31,7 +31,12 @@ def rewrite_lines(
 
     def rewrite(start: int, end: int) -> list[TranscriptSegment]:
         user = request(
-            header, texts, (start, end), texts[start:end], context=CONTEXT_LINES
+            header,
+            texts,
+            (start, end),
+            texts[start:end],
+            context=CONTEXT_LINES,
+            language=language,
         )
         best: dict[int, str] = {}
         for _ in range(ATTEMPTS):

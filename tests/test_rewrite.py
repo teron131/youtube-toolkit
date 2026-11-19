@@ -161,6 +161,7 @@ def test_caption_lines_keep_their_own_timing_across_parallel_batches(
 
     assert result.language == "zh-TW"
     assert requests[0]["system"].count("zh-TW") == 1
+    assert "zh-TW" in requests[0]["user"].rsplit("</after>", 1)[1]
     assert result.rewrite == TranscriptRewrite("example/model", translated=True)
     assert result.segments == [
         TranscriptSegment(index, index + 1, f"T L{index}") for index in range(count)

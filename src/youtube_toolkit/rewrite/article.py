@@ -172,7 +172,12 @@ def _rewrite_paragraphs(
         bounds = [index for index in starts if start <= index < end]
         sources = [" ".join(sentences[a:b]) for a, b in pairwise([*bounds, end])]
         user = request(
-            header, sentences, (start, end), sources, context=CONTEXT_SENTENCES
+            header,
+            sentences,
+            (start, end),
+            sources,
+            context=CONTEXT_SENTENCES,
+            language=language,
         )
         for _ in range(ATTEMPTS):
             texts = replies(llm.invoke(system, user), len(sources))
