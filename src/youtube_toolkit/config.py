@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 from tempfile import NamedTemporaryFile
+from typing import Literal
 from urllib.parse import urlparse
 
 from dotenv.parser import parse_stream
@@ -19,6 +20,18 @@ from platformdirs import user_config_path
 DEFAULT_VISION_MAX_FRAMES = 96
 MAX_VISION_FRAMES = 96
 DEFAULT_VISION_MIN_GAP_SECONDS = 10.0
+DEFAULT_VISION_ROWS = 3
+DEFAULT_VISION_COLUMNS = 2
+# Up to three a side, every screenshot keeps at least 360p even in a reader that shows pages at most 2000 px wide.
+MAX_VISION_ROWS = 3
+MAX_VISION_COLUMNS = 3
+type VisionResolution = Literal["360p", "540p", "720p"]
+VISION_RESOLUTIONS: dict[VisionResolution, tuple[int, int]] = {
+    "360p": (640, 360),
+    "540p": (960, 540),
+    "720p": (1280, 720),
+}
+DEFAULT_VISION_RESOLUTION: VisionResolution = "540p"
 
 DEFAULT_STT_PROVIDER = "xai"
 DEFAULT_ELEVENLABS_STT_MODEL = "scribe_v2"

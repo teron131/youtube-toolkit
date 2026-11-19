@@ -1,4 +1,4 @@
-"""Decode video keyframes into RGB frames and audio into mono PCM through bounded FFmpeg subprocesses.
+"""Decode video keyframes or single frames into RGB arrays and audio into mono PCM through bounded FFmpeg subprocesses.
 
 NumPy loads only when decoding is requested, keeping imports usable without the optional media dependencies.
 """
@@ -19,7 +19,6 @@ FFMPEG_TIMEOUT_SECONDS = 10 * 60
 FFMPEG_THREADS = min(4, os.process_cpu_count() or 1)
 FRAME_WIDTH = 960
 FRAME_HEIGHT = 540
-FRAME_FILTER = f"scale={FRAME_WIDTH}:{FRAME_HEIGHT}:force_original_aspect_ratio=decrease:flags=lanczos,pad={FRAME_WIDTH}:{FRAME_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black"
 # showinfo logs one line per frame: `[Parsed_showinfo_0 @ ADDRESS] n:N pts:PTS pts_time:SECONDS ...` → `SECONDS`.
 SHOWINFO_PTS_TIME = re.compile(rb"Parsed_showinfo[^\n]*?pts_time:\s*(-?[0-9.]+)")
 SAMPLE_RATE = 16_000
@@ -63,7 +62,7 @@ def decode_keyframes(
             "-t",
             str(stop - start),
             "-vf",
-            f"showinfo,{FRAME_FILTER}",
+            f"showinfo,{_frame_filter(FRAME_WIDTH, FRAME_HEIGHT)}",
             "-fps_mode",
             "passthrough",
             "-f",
@@ -74,7 +73,7 @@ def decode_keyframes(
         ],
         loglevel="info",
     )
-    frames = _rgb_frames(completed.stdout)
+    frames = _rgb_frames(completed.stdout, FRAME_WIDTH, FRAME_HEIGHT)
     # showinfo also logs the first keyframe past the window, which -t then drops from the output.
     times = [
         start + offset
@@ -86,6 +85,37 @@ def decode_keyframes(
             f"FFmpeg reported {len(times)} keyframe timestamps for {len(frames)} frames"
         )
     return times, frames
+
+
+def decode_frame(
+    video_path: Path, timestamp: float, ffmpeg_path: str, *, width: int, height: int
+) -> np.ndarray:
+    """The frame at a keyframe's timestamp, or the next frame when float rounding puts the seek just past it."""
+    completed = _run_video_ffmpeg(
+        ffmpeg_path,
+        [
+            "-nostats",
+            "-y",
+            "-ss",
+            str(timestamp),
+            "-i",
+            str(video_path),
+            "-frames:v",
+            "1",
+            "-vf",
+            _frame_filter(width, height),
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-",
+        ],
+    )
+    return _rgb_frames(completed.stdout, width, height)[0]
+
+
+def _frame_filter(width: int, height: int) -> str:
+    return f"scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black"
 
 
 def _run_video_ffmpeg(
@@ -109,14 +139,14 @@ def _run_video_ffmpeg(
         ) from error
 
 
-def _rgb_frames(output: bytes) -> np.ndarray:
+def _rgb_frames(output: bytes, width: int, height: int) -> np.ndarray:
     import numpy as np
 
     pixels = np.frombuffer(output, dtype=np.uint8)
-    frame_bytes = FRAME_HEIGHT * FRAME_WIDTH * 3
+    frame_bytes = height * width * 3
     if pixels.size % frame_bytes:
         raise ValueError(f"FFmpeg returned incomplete RGB frames ({pixels.size} bytes)")
-    return pixels.reshape(-1, FRAME_HEIGHT, FRAME_WIDTH, 3)
+    return pixels.reshape(-1, height, width, 3)
 
 
 def decode_audio(audio_path: Path) -> np.ndarray:

@@ -61,7 +61,7 @@ Every command and flag; an option nested inside a flag's brackets needs that fla
 youtube video URL_OR_ID
         [--transcript [--timestamps] [--refine] [--export [--force]] [--stt] [--translate [LANGUAGE]]]
         [--summary [LANGUAGE] [--stt] [--translate [LANGUAGE]]]
-        [--vision [--max-frames N] [--min-gap SECONDS] [--min-similarity COSINE] [--local-only] [--no-auto-clean]]
+        [--vision [--max-frames N] [--rows N] [--columns N] [--resolution 360p|540p|720p] [--min-gap SECONDS] [--min-similarity COSINE] [--local-only] [--no-auto-clean]]
         [--comments [QUERY] [--comment-limit N]]
         [--metadata]
 youtube search QUERY ...
@@ -83,7 +83,7 @@ Commands print JSON, and `--help` lists each command's options. Responses are ar
 
 - `--transcript` prefers manual subtitles, then automatic captions, never machine translations, and falls back to speech-to-text, when configured, if there are none; `--stt` uses speech-to-text even when captions exist. `--refine` cleans it up with an LLM, and `--translate` translates it into English, or `--translate LANGUAGE` into another language. `--export` writes it to a text file, or with `--vision` to a Markdown file beside the collages.
 - `--summary` summarizes the transcript with an LLM, in the transcript's language, the `--translate` language, or `--summary LANGUAGE`; the transcript itself is printed only with `--transcript`.
-- `--vision` picks screenshots and lays them out in collages of six, ranked against the same transcript when `--transcript` is given.
+- `--vision` picks screenshots, ranked against the same transcript when `--transcript` is given, and lays them out at 540p in collages of three rows of two, or at the `--resolution` and in the grid that `--rows` and `--columns` set.
 - `--comments` samples the top 100 comments, or up to 1000 with `--comment-limit`, and keeps those containing the query.
 
 `search` covers YouTube, or the channels named with `--in-channels`, and by default keeps videos with at least 10,000 views and 3 minutes to 8 hours long. `--semantic chunk` ranks caption passages with embeddings, and `--semantic video` returns their videos.
@@ -98,9 +98,9 @@ Without `--timestamps`, the transcript comes back as paragraphs of complete sent
 
 ## Vision
 
-![How vision picks frames: keyframes off the timeline, without near-copies, cross-fades, blank frames, and sponsor spans, are picked by the decision model, else embeddings, else time slots, and land on collage pages of six frames.](docs/vision-pipeline.svg)
+![How vision picks frames: keyframes off the timeline, without near-copies, cross-fades, blank frames, and sponsor spans, are picked by the decision model, else embeddings, else time slots, and land on collage pages, three rows of two by default.](docs/vision-pipeline.svg)
 
-The first available route picks the frames. With `DECISION_API_KEY`, a decision model judges each frame's picture and, where there is speech, whether it shows what is being said, then keeps one view of each thing shown; a 26-minute video costs about a cent. Otherwise embeddings match frames to nearby speech, and without either, frames are spread over time.
+The first available route picks the frames. With `DECISION_API_KEY`, a decision model judges each frame's picture and, where there is speech, whether it shows what is being said, then keeps one view of each thing shown; a 26-minute video costs about a cent. Otherwise embeddings match frames to nearby speech, and without either, frames are spread over time. The picked frames are saved beside the collages, so rerunning a video with only `--rows`, `--columns`, or a resolution no higher than before changed lays the same frames out again in seconds, without downloading or ranking; any other vision option, a higher resolution, a new ranking model, or a new toolkit version picks afresh. Frames are always picked from 540p candidates: `--resolution 360p` shrinks the picks to save image tokens at the cost of small text and digits, and `--resolution 720p` decodes them again from the 720p download.
 
 ## Agent skill
 

@@ -15,7 +15,7 @@ Every command and flag; an option nested inside a flag's brackets needs that fla
 youtube video URL_OR_ID
         [--transcript [--timestamps] [--refine] [--export [--force]] [--stt] [--translate [LANGUAGE]]]
         [--summary [LANGUAGE] [--stt] [--translate [LANGUAGE]]]
-        [--vision [--max-frames N] [--min-gap SECONDS] [--min-similarity COSINE] [--local-only] [--no-auto-clean]]
+        [--vision [--max-frames N] [--rows N] [--columns N] [--resolution 360p|540p|720p] [--min-gap SECONDS] [--min-similarity COSINE] [--local-only] [--no-auto-clean]]
         [--comments [QUERY] [--comment-limit N]]
         [--metadata]
 youtube search QUERY ...
@@ -90,14 +90,17 @@ youtube video URL_OR_ID --transcript --vision --export --timestamps
 
 | Option | Required | Default | What it does |
 | --- | --- | --- | --- |
-| `--vision` | Optional | Off | Downloads the video, up to two hours, picks screenshots, and gives their timestamps and paths to collages of six frames. |
+| `--vision` | Optional | Off | Downloads the video, up to two hours, picks screenshots, and gives their timestamps and paths to collages of them. |
 | `--max-frames N` | Optional | 96 | Returns at most N screenshots, from 1 to 96; the result can be shorter. |
+| `--rows N` | Optional | 3 | Sets the rows of screenshots on each collage page, from 1 to 3. |
+| `--columns N` | Optional | 2 | Sets the screenshots in each row, from 1 to 3. |
+| `--resolution 360p\|540p\|720p` | Optional | 540p | Sets each screenshot's resolution; 360p saves image tokens but loses small text and digits, and 720p shows more detail for small text. |
 | `--min-gap SECONDS` | Optional | 10 | Keeps screenshots at least that far apart. |
 | `--min-similarity COSINE` | Optional | Tuned for the ranking model | Sets how closely a frame must match the speech when embeddings rank, from -1 to 1. |
 | `--local-only` | Optional | Off | Skips the decision model, the embedding API, and speech-to-text, ranking against captions with the local embedding model or else taking evenly spaced frames. |
 | `--no-auto-clean` | Optional | Off: files are deleted | Keeps the downloaded video and candidate frames. |
 
-Use `--vision` when pictures add context, and read the collages alongside the transcript. A run usually takes a few minutes, mostly the download, and the defaults suit most videos. With `--transcript`, vision ranks against that same transcript, and `--export` writes it as Markdown beside the collages.
+Use `--vision` when pictures add context, and read the collages alongside the transcript. A run usually takes a few minutes, mostly the download, and the defaults suit most videos. To change only the layout, rerun with new `--rows`, `--columns`, or a resolution no higher than before, and the same other options: the earlier picks are laid out again, which takes seconds and costs nothing. With `--transcript`, vision ranks against that same transcript, and `--export` writes it as Markdown beside the collages.
 
 ### Comments
 

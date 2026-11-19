@@ -112,9 +112,10 @@ def collect_candidates(
                 neighbor_change=change,
                 similarity_to_previous=similarity,
             )
-            path = directory / f"frame-{round(timestamp * 1000):09d}.jpg"
-            Image.fromarray(images[index]).save(path, "JPEG", quality=95)
-            candidates.append((StoredFrame(timestamp, path, scores), _thumbnail(gray)))
+            stored = store_frame(
+                directory, DecodedFrame(timestamp, images[index], scores)
+            )
+            candidates.append((stored, _thumbnail(gray)))
             recent.append((timestamp, stats))
     candidates.sort(key=lambda candidate: candidate[0].timestamp_seconds)
     cross_fades = {
@@ -129,6 +130,12 @@ def collect_candidates(
     return [
         frame for index, (frame, _) in enumerate(candidates) if index not in cross_fades
     ]
+
+
+def store_frame(directory: Path, frame: DecodedFrame) -> StoredFrame:
+    path = directory / f"frame-{round(frame.timestamp_seconds * 1000):09d}.jpg"
+    Image.fromarray(frame.image).save(path, "JPEG", quality=95)
+    return StoredFrame(frame.timestamp_seconds, path, frame.visual_scores)
 
 
 def select_slot_frames(

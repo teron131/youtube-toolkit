@@ -124,17 +124,17 @@ def test_local_selection_reports_its_reason_and_cleans_up(
     assert bool(result["embedding_warning"]) is (fallback == "no_key")
     assert result["embedding_model"] is None
     assert result["candidate_count"] == 1
-    assert result["frames"] == [
-        {
-            "timestamp_seconds": 12,
-            "visual_scores": {
-                "clarity": 20.0,
-                "neighbor_change": 0.01,
-                "similarity_to_previous": 0.0,
-            },
-            "relevance": None,
-        }
-    ]
+    [frame] = result["frames"]
+    assert Path(frame.pop("image_path")).is_file()
+    assert frame == {
+        "timestamp_seconds": 12,
+        "visual_scores": {
+            "clarity": 20.0,
+            "neighbor_change": 0.01,
+            "similarity_to_previous": 0.0,
+        },
+        "relevance": None,
+    }
     assert result["timestamps_seconds"] == [12]
     assert result["heatmap_available"] is True
     assert Path(result["collage_paths"][0]).is_file()
@@ -142,14 +142,34 @@ def test_local_selection_reports_its_reason_and_cleans_up(
     assert result["media_dir"] is None
     first_collage = Path(result["collage_paths"][0])
     first_contents = first_collage.read_bytes()
-    second = workflow.sample_vision(VIDEO_ID, local_only=local_only)
-    assert metadata_calls == [VIDEO_ID, VIDEO_ID]
+    second = workflow.sample_vision(
+        VIDEO_ID, local_only=local_only, rows=1, columns=1, resolution="360p"
+    )
+    assert metadata_calls == [VIDEO_ID]
+    assert second["picks_reused_from"] == result["directory"]
+    assert second["timestamps_seconds"] == [12]
     second_collage = Path(second["collage_paths"][0])
     assert first_collage.parent != second_collage.parent
-    assert VIDEO_ID in first_collage.parent.name
     assert VIDEO_ID in second_collage.parent.name
     assert first_collage.read_bytes() == first_contents
-    assert second_collage.is_file()
+    with Image.open(second_collage) as page:
+        assert page.size == (652, 396)
+    third = workflow.sample_vision(VIDEO_ID, local_only=local_only, min_gap_seconds=5)
+    assert metadata_calls == [VIDEO_ID, VIDEO_ID]
+    assert third["picks_reused_from"] is None
+    decoded = []
+
+    def decode_frame(_video, timestamp, _ffmpeg, *, width, height):
+        decoded.append((timestamp, width, height))
+        return np.zeros((height, width, 3), dtype=np.uint8)
+
+    monkeypatch.setattr(workflow, "decode_frame", decode_frame)
+    fourth = workflow.sample_vision(VIDEO_ID, local_only=local_only, resolution="720p")
+    assert metadata_calls == [VIDEO_ID, VIDEO_ID, VIDEO_ID]
+    assert fourth["picks_reused_from"] is None
+    assert decoded == [(12, 1280, 720)]
+    with Image.open(fourth["frames"][0]["image_path"]) as frame:
+        assert frame.size == (1280, 720)
 
 
 @pytest.mark.parametrize("limit", [0, 97, -1])
@@ -157,6 +177,15 @@ def test_invalid_budget_fails_before_fetch(monkeypatch, limit) -> None:
     monkeypatch.setattr(workflow, "YtDlpClient", lambda: pytest.fail("no network"))
     with pytest.raises(ValueError, match="max_frames"):
         workflow.sample_vision(VIDEO_ID, max_frames=limit)
+
+
+@pytest.mark.parametrize(
+    "options", [{"rows": 0}, {"rows": 4}, {"columns": 0}, {"columns": 4}]
+)
+def test_invalid_collage_layout_fails_before_fetch(monkeypatch, options) -> None:
+    monkeypatch.setattr(workflow, "YtDlpClient", lambda: pytest.fail("no network"))
+    with pytest.raises(ValueError, match="must be between 1 and 3"):
+        workflow.sample_vision(VIDEO_ID, **options)
 
 
 def test_sample_vision_rejects_long_video_before_download(
@@ -291,6 +320,12 @@ def test_vision_download_failures_become_user_facing_runtime_errors(
             [
                 "--max-frames",
                 "12",
+                "--rows",
+                "2",
+                "--columns",
+                "3",
+                "--resolution",
+                "720p",
                 "--min-similarity",
                 "0.4",
                 "--min-gap",
@@ -300,6 +335,9 @@ def test_vision_download_failures_become_user_facing_runtime_errors(
             ],
             {
                 "max_frames": 12,
+                "rows": 2,
+                "columns": 3,
+                "resolution": "720p",
                 "min_similarity": 0.4,
                 "min_gap_seconds": 5,
                 "local_only": True,

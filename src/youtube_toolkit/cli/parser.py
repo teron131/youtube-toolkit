@@ -6,9 +6,15 @@ import argparse
 
 from ..config import (
     DEFAULT_LOCAL_STT_MODEL,
+    DEFAULT_VISION_COLUMNS,
     DEFAULT_VISION_MAX_FRAMES,
     DEFAULT_VISION_MIN_GAP_SECONDS,
+    DEFAULT_VISION_RESOLUTION,
+    DEFAULT_VISION_ROWS,
+    MAX_VISION_COLUMNS,
     MAX_VISION_FRAMES,
+    MAX_VISION_ROWS,
+    VISION_RESOLUTIONS,
 )
 from ..search import DEFAULT_CHANNEL_SEARCH_LIMIT, DEFAULT_YOUTUBE_SEARCH_LIMIT
 from ..youtube import DEFAULT_COMMENT_LIMIT, DEFAULT_LAST_VIDEOS, MAX_COMMENT_LIMIT
@@ -123,6 +129,23 @@ def _add_video_command(subparsers: argparse._SubParsersAction) -> None:
         "--max-frames",
         type=int,
         help=f"Maximum output screenshots (1-{MAX_VISION_FRAMES}; default: {DEFAULT_VISION_MAX_FRAMES}); candidate coverage is independent",
+    )
+    vision.add_argument(
+        "--rows",
+        type=int,
+        metavar="N",
+        help=f"Rows of screenshots on each collage page (1-{MAX_VISION_ROWS}; default: {DEFAULT_VISION_ROWS})",
+    )
+    vision.add_argument(
+        "--columns",
+        type=int,
+        metavar="N",
+        help=f"Screenshots in each collage row (1-{MAX_VISION_COLUMNS}; default: {DEFAULT_VISION_COLUMNS})",
+    )
+    vision.add_argument(
+        "--resolution",
+        choices=list(VISION_RESOLUTIONS),
+        help=f"Screenshot resolution (default: {DEFAULT_VISION_RESOLUTION}); 360p saves image tokens but loses small text and digits, and 720p decodes the picked frames again from the 720p download",
     )
     vision.add_argument(
         "--min-similarity",

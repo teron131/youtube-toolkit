@@ -42,6 +42,9 @@ from .health import require_vision
 # CLI option names that apply only with one of their parts' flags, and the sample_vision parameter each vision option sets.
 VISION_OPTIONS = {
     "max_frames": "max_frames",
+    "rows": "rows",
+    "columns": "columns",
+    "resolution": "resolution",
     "min_similarity": "min_similarity",
     "min_gap": "min_gap_seconds",
     "local_only": "local_only",

@@ -59,15 +59,26 @@ def create_artifact_directory(namespace: str, identifier: str) -> Path:
         return path
 
 
+def artifact_directories(namespace: str, identifier: str) -> list[Path]:
+    """Directories create_artifact_directory made for identifier, newest first; one suffixed after a same-microsecond collision is left out."""
+    return sorted(
+        (artifact_root() / namespace).glob(f"*Z-{_artifact_label(identifier)}"),
+        reverse=True,
+    )
+
+
 def _artifact_stems(identifier: str, fetched_at: datetime) -> Iterator[str]:
     """Yield the UTC fetch time joined to the filename-safe identifier, then that stem suffixed `-2`, `-3`, and so on.
 
     `SEARCH QUERY?` yields `YYYY-MM-DDTHHMMSS.ffffffZ-SEARCH_QUERY`.
     """
-    label = re.sub(r"[^\w.@-]+", "_", identifier).strip(" ._")[:48] or "request"
-    stem = f"{fetched_at.strftime('%Y-%m-%dT%H%M%S.%fZ')}-{label}"
+    stem = f"{fetched_at.strftime('%Y-%m-%dT%H%M%S.%fZ')}-{_artifact_label(identifier)}"
     yield stem
     counter = 2
     while True:
         yield f"{stem}-{counter}"
         counter += 1
+
+
+def _artifact_label(identifier: str) -> str:
+    return re.sub(r"[^\w.@-]+", "_", identifier).strip(" ._")[:48] or "request"

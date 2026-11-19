@@ -6,12 +6,12 @@ Evidence (re-verify on update):
   Too close (within 10 seconds of a pick): vision/candidates.py select_ranked_frames, config.py DEFAULT_VISION_MIN_GAP_SECONDS
   Embeddings (keyword, sentence, and paragraph targets; each frame matched to speech around it; ranks fused): vision/text.py prepare_targets, vision/reranking.py rerank_frames
   Time slots (equal slots of at least 12 seconds, the candidate nearest each middle, skipped when too close to the last pick): vision/candidates.py select_slot_frames, SLOT_SECONDS
-  Collages two across and three down, a timestamp under each frame, in time order: vision/collages.py
+  Collage pages of three rows of two by default, up to three a side, a timestamp under each frame, in time order: vision/collages.py, config.py DEFAULT_VISION_ROWS, DEFAULT_VISION_COLUMNS, MAX_VISION_ROWS, MAX_VISION_COLUMNS
   The frames, scores, and picks drawn are one made-up example that follows these rules
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="468" viewBox="0 0 1120 468" role="img" aria-labelledby="title desc">
   <title id="title">How vision picks frames</title>
-  <desc id="desc">A strip of sixteen keyframes taken off a video's timeline, one every few seconds. Five never become candidates: a near-copy, a cross-fade, a blank frame, and two inside a sponsor span. Three routes can pick from the rest, and the first that is set up does. One, with a decision key: a decision model scores each picture, plus a little when it shows what is being said; talking heads fall under the 0.30 line, two neighbouring frames of the same item keep one, and a frame too close to a pick is skipped. Two, otherwise, with timed speech: embeddings match each frame to the keywords, sentences, and paragraphs said around it. Three, otherwise: the frame nearest the middle of each equal time slot, whatever it shows. The picks land on collage pages of six frames, in time order, each with its timestamp.</desc>
+  <desc id="desc">A strip of sixteen keyframes taken off a video's timeline, one every few seconds. Five never become candidates: a near-copy, a cross-fade, a blank frame, and two inside a sponsor span. Three routes can pick from the rest, and the first that is set up does. One, with a decision key: a decision model scores each picture, plus a little when it shows what is being said; talking heads fall under the 0.30 line, two neighbouring frames of the same item keep one, and a frame too close to a pick is skipped. Two, otherwise, with timed speech: embeddings match each frame to the keywords, sentences, and paragraphs said around it. Three, otherwise: the frame nearest the middle of each equal time slot, whatever it shows. The picks land on collage pages, three rows of two by default, in time order, each with its timestamp.</desc>
   <defs>
     <style>
     .flag { font: 700 15px ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; fill: #F3EFE6; }
@@ -232,7 +232,7 @@ Evidence (re-verify on update):
   <circle cx="760" cy="388" r="2" fill="#7B786F"/>
   </g>
   <g id="collage">
-  <text x="838" y="34" class="cap">SIX-FRAME COLLAGE PAGES</text>
+  <text x="838" y="34" class="cap">COLLAGES, 3 × 2 BY DEFAULT</text>
   <path d="M790 300 H798 a8 8 0 0 0 8 -8 V190" fill="none" stroke="#40D2BD" stroke-width="1.6" stroke-dasharray="5 4.044"/>
   <path d="M790 399 H808 a8 8 0 0 0 8 -8 V190" fill="none" stroke="#E8E1CF" stroke-width="1.6" stroke-dasharray="5 4.063" opacity="0.8"/>
   <path d="M790 190 H826" fill="none" stroke="#FF7CC0" stroke-width="2"/>

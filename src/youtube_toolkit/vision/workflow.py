@@ -1,8 +1,10 @@
-"""Vision's entry point, which picks a ranking route for a video's keyframes and writes the chosen frames as collages."""
+"""Vision's entry point, which picks a ranking route for a video's keyframes, or reuses the frames a matching earlier run saved, and writes them as collages."""
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
+from importlib.metadata import version
+import json
 import math
 from pathlib import Path
 import re
@@ -10,17 +12,26 @@ import shutil
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from ..artifacts import create_artifact_directory
+from ..artifacts import artifact_directories, create_artifact_directory
 from ..config import (
     API_EMBEDDING_CUTOFFS,
+    DEFAULT_VISION_COLUMNS,
     DEFAULT_VISION_MAX_FRAMES,
     DEFAULT_VISION_MIN_GAP_SECONDS,
+    DEFAULT_VISION_RESOLUTION,
+    DEFAULT_VISION_ROWS,
+    GEMINI_EMBEDDING_MODEL,
+    MAX_VISION_COLUMNS,
     MAX_VISION_FRAMES,
+    MAX_VISION_ROWS,
+    VISION_RESOLUTIONS,
     DecisionConfig,
     EmbeddingCutoffs,
+    VisionResolution,
     decision_config,
     gemini_embedding_key,
     local_embedding_cutoffs,
+    local_embedding_model,
 )
 from ..embeddings import (
     EmbeddingResult,
@@ -29,6 +40,7 @@ from ..embeddings import (
     LocalImageEmbeddingClient,
     local_embedding_installed,
 )
+from ..ffmpeg_utils import FRAME_HEIGHT, decode_frame
 from ..identity import VideoRef, require_video_id
 from ..schemas import TranscriptDocument, VideoMetadata
 from ..transcript import fetch_transcript
@@ -36,9 +48,11 @@ from ..youtube import YtDlpClient, extract_sponsorblock_intervals
 from .candidates import (
     DecodedFrame,
     StoredFrame,
+    VisualScores,
     collect_candidates,
     select_ranked_frames,
     select_slot_frames,
+    store_frame,
 )
 from .collages import render_timestamped_collages
 from .decisions import DecisionRanking, rank_frames
@@ -47,6 +61,7 @@ from .text import TextTarget, prepare_targets
 
 MAX_VIDEO_DURATION_SECONDS = 2 * 60 * 60
 MAX_VIDEO_BYTES = 500 * 1024 * 1024
+PICKS_FILE = "picks.json"
 SPONSOR_TITLE = re.compile(r"\b(?:sponsor(?:ed|ship)?|advertisement|ad break)\b", re.I)
 
 # A selected frame with its relevance record, which is None when time slots chose it.
@@ -68,6 +83,9 @@ def sample_vision(
     video_ref: VideoRef,
     *,
     max_frames: int = DEFAULT_VISION_MAX_FRAMES,
+    rows: int = DEFAULT_VISION_ROWS,
+    columns: int = DEFAULT_VISION_COLUMNS,
+    resolution: VisionResolution = DEFAULT_VISION_RESOLUTION,
     min_similarity: float | None = None,
     min_gap_seconds: float = DEFAULT_VISION_MIN_GAP_SECONDS,
     local_only: bool = False,
@@ -83,9 +101,16 @@ def sample_vision(
     Without captions it comes from speech-to-text, which ranks frames only when its route reports timing.
     min_similarity applies to embedding routes, and None means the cutoff tuned for the ranking model.
     max_frames limits the output, never the candidate search.
+    The picked frames are saved, and a later run whose picking options, ranking model, and toolkit version match lays them out again under its rows, columns, and resolution without downloading, fetching a transcript, or ranking, provided the saved frames are at least that resolution; usage is then None and picks_reused_from names the saved run.
+    A given document plays no part in that match, and auto_clean=False always picks afresh because it keeps the downloaded media.
     """
     if not 1 <= max_frames <= MAX_VISION_FRAMES:
         raise ValueError(f"max_frames must be between 1 and {MAX_VISION_FRAMES}")
+    if not 1 <= rows <= MAX_VISION_ROWS:
+        raise ValueError(f"rows must be between 1 and {MAX_VISION_ROWS}")
+    if not 1 <= columns <= MAX_VISION_COLUMNS:
+        raise ValueError(f"columns must be between 1 and {MAX_VISION_COLUMNS}")
+    width, height = VISION_RESOLUTIONS[resolution]
     if min_similarity is not None and (
         not math.isfinite(min_similarity) or not -1 <= min_similarity <= 1
     ):
@@ -93,6 +118,22 @@ def sample_vision(
     if not math.isfinite(min_gap_seconds) or min_gap_seconds < 0:
         raise ValueError("min_gap_seconds must be finite and non-negative")
     video_id = require_video_id(video_ref)
+    decision = None if local_only else decision_config()
+    gemini_key = None if local_only else gemini_embedding_key()
+    pick_options = {
+        "max_frames": max_frames,
+        "min_similarity": min_similarity,
+        "min_gap_seconds": min_gap_seconds,
+        "local_only": local_only,
+        "ranking_model": _ranking_model(decision, gemini_key),
+        "toolkit_version": version("youtube-toolkit"),
+    }
+    saved = _find_saved_picks(video_id, pick_options, height) if auto_clean else None
+    if saved is not None:
+        source, saved_result = saved
+        return _lay_out_saved_picks(
+            source, saved_result, rows=rows, columns=columns, frame_size=(width, height)
+        )
     ffmpeg_path = shutil.which("ffmpeg")
     if ffmpeg_path is None:
         raise RuntimeError("ffmpeg is required for video vision extraction")
@@ -117,8 +158,6 @@ def sample_vision(
             f"Video is longer than {MAX_VIDEO_DURATION_SECONDS // 3600} hours"
         )
     excluded_intervals = _excluded_intervals(metadata, duration)
-    decision = None if local_only else decision_config()
-    gemini_key = None if local_only else gemini_embedding_key()
     transcript_warning = None
     embedding_warning = None
     targets: list[TextTarget] = []
@@ -204,44 +243,159 @@ def sample_vision(
                     )
                 ]
             picks.sort(key=lambda pick: pick[0].timestamp_seconds)
+            # Candidates stay at 540p, the size picking was tuned on, so only the picks are decoded again above it.
+            if height > FRAME_HEIGHT:
+                picks = [
+                    (
+                        replace(
+                            frame,
+                            image=decode_frame(
+                                video_path,
+                                frame.timestamp_seconds,
+                                ffmpeg_path,
+                                width=width,
+                                height=height,
+                            ),
+                        ),
+                        relevance,
+                    )
+                    for frame, relevance in picks
+                ]
+            frames_directory = destination / "frames"
+            frames_directory.mkdir()
+            stored = [store_frame(frames_directory, frame) for frame, _ in picks]
             collage_paths = render_timestamped_collages(
-                [frame for frame, _ in picks], destination / f"{video_id}_vision"
+                [frame for frame, _ in picks],
+                destination / f"{video_id}_vision",
+                rows=rows,
+                columns=columns,
+                frame_size=(width, height),
             )
+        result = {
+            "video_id": video_id,
+            "duration_seconds": duration,
+            "heatmap_available": bool(metadata.get("heatmap")),
+            "selection_mode": "decision"
+            if decision
+            else "semantic"
+            if embedding
+            else "visual",
+            "transcript_warning": transcript_warning,
+            "embedding_warning": embedding_warning,
+            "embedding_model": None if embedding is None else embedding.embedder.model,
+            "embedding_usage": None
+            if embedding_usage is None
+            else asdict(embedding_usage),
+            "decision_model": decision.model if decision else None,
+            "decision_warning": None
+            if decision_ranking is None
+            else decision_ranking.warning,
+            "decision_usage": None
+            if decision_ranking is None
+            else asdict(decision_ranking.usage),
+            "candidate_count": len(candidates),
+            "min_similarity": None if decision else match_floor,
+            "min_gap_seconds": min_gap_seconds,
+            "frame_count": len(picks),
+            "timestamps_seconds": [frame.timestamp_seconds for frame, _ in picks],
+            "directory": str(destination),
+            "collage_paths": [str(path) for path in collage_paths],
+            "media_dir": None if auto_clean else str(work_dir),
+            "picks_reused_from": None,
+            "frames": [
+                {
+                    **frame.to_dict(),
+                    "image_path": str(stored_frame.image_path),
+                    "relevance": relevance,
+                }
+                for (frame, relevance), stored_frame in zip(picks, stored, strict=True)
+            ],
+        }
+        _save_picks(destination, pick_options, max(height, FRAME_HEIGHT), result)
     except OSError as error:
         raise RuntimeError(
             f"Vision artifact filesystem error under {destination}: {error}"
         ) from error
+    return result
+
+
+def _ranking_model(
+    decision: DecisionConfig | None, gemini_key: str | None
+) -> str | None:
+    """The model the route order would try first; None means time slots."""
+    if decision:
+        return decision.model
+    if gemini_key:
+        return GEMINI_EMBEDDING_MODEL
+    if local_embedding_installed():
+        return local_embedding_model()
+    return None
+
+
+def _find_saved_picks(
+    video_id: str, options: dict[str, Any], height: int
+) -> tuple[Path, dict[str, Any]] | None:
+    """The newest saved run whose options match and whose frames are at least height tall, with its result."""
+    for directory in artifact_directories("vision", video_id):
+        path = directory / PICKS_FILE
+        if not path.is_file():
+            continue
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        if saved["options"] == options and saved["frame_height"] >= height:
+            return directory, saved["result"]
+    return None
+
+
+def _save_picks(
+    destination: Path,
+    options: dict[str, Any],
+    frame_height: int,
+    result: dict[str, Any],
+) -> None:
+    document = {"options": options, "frame_height": frame_height, "result": result}
+    (destination / PICKS_FILE).write_text(
+        json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+
+
+def _lay_out_saved_picks(
+    source: Path,
+    saved: dict[str, Any],
+    *,
+    rows: int,
+    columns: int,
+    frame_size: tuple[int, int],
+) -> dict[str, Any]:
+    destination = None
+    try:
+        frames = [
+            StoredFrame(
+                frame["timestamp_seconds"],
+                Path(frame["image_path"]),
+                VisualScores(**frame["visual_scores"]),
+            ).load()
+            for frame in saved["frames"]
+        ]
+        destination = create_artifact_directory("vision", saved["video_id"])
+        collage_paths = render_timestamped_collages(
+            frames,
+            destination / f"{saved['video_id']}_vision",
+            rows=rows,
+            columns=columns,
+            frame_size=frame_size,
+        )
+    except OSError as error:
+        raise RuntimeError(
+            f"Vision artifact filesystem error under {destination or source}: {error}"
+        ) from error
     return {
-        "video_id": video_id,
-        "duration_seconds": duration,
-        "heatmap_available": bool(metadata.get("heatmap")),
-        "selection_mode": "decision"
-        if decision
-        else "semantic"
-        if embedding
-        else "visual",
-        "transcript_warning": transcript_warning,
-        "embedding_warning": embedding_warning,
-        "embedding_model": None if embedding is None else embedding.embedder.model,
-        "embedding_usage": None if embedding_usage is None else asdict(embedding_usage),
-        "decision_model": decision.model if decision else None,
-        "decision_warning": None
-        if decision_ranking is None
-        else decision_ranking.warning,
-        "decision_usage": None
-        if decision_ranking is None
-        else asdict(decision_ranking.usage),
-        "candidate_count": len(candidates),
-        "min_similarity": None if decision else match_floor,
-        "min_gap_seconds": min_gap_seconds,
-        "frame_count": len(picks),
-        "timestamps_seconds": [frame.timestamp_seconds for frame, _ in picks],
+        **saved,
+        "embedding_usage": None,
+        "decision_usage": None,
         "directory": str(destination),
         "collage_paths": [str(path) for path in collage_paths],
-        "media_dir": None if auto_clean else str(work_dir),
-        "frames": [
-            {**frame.to_dict(), "relevance": relevance} for frame, relevance in picks
-        ],
+        "media_dir": None,
+        "picks_reused_from": str(source),
     }
 
 

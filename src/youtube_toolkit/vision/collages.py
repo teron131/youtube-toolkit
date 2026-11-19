@@ -1,4 +1,7 @@
-"""Lay selected frames out as timestamped 2x3 JPEG pages sized for vision models."""
+"""Lay selected frames out as timestamped JPEG pages in a grid of the requested frame size.
+
+A page is deliberately not fitted to vision models' image limits: the frame resolution is the caller's choice, and a model downscales an oversized page itself.
+"""
 
 from __future__ import annotations
 
@@ -7,39 +10,42 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from ..ffmpeg_utils import FRAME_HEIGHT, FRAME_WIDTH
 from .candidates import DecodedFrame
 
 TIMESTAMP_FOOTER_HEIGHT = 24
 COLLAGE_PADDING = 6
-# A page must stay within vision models' per-image limit (Claude: 2576 px long edge, about 3.75 MP), or the model shrinks every tile.
-COLLAGE_COLUMNS = 2
-COLLAGE_ROWS = 3
-FRAMES_PER_COLLAGE = COLLAGE_COLUMNS * COLLAGE_ROWS
 JPEG_QUALITY = 80
 JPEG_SUBSAMPLING = "4:2:2"
 TIMESTAMP_FONT = ImageFont.load_default(size=16)
 
 
 def render_timestamped_collages(
-    frames: list[DecodedFrame], output_stem: Path
+    frames: list[DecodedFrame],
+    output_stem: Path,
+    *,
+    rows: int,
+    columns: int,
+    frame_size: tuple[int, int],
 ) -> list[Path]:
-    tile_height = FRAME_HEIGHT + TIMESTAMP_FOOTER_HEIGHT
-    collage_width = FRAME_WIDTH * COLLAGE_COLUMNS + COLLAGE_PADDING * (
-        COLLAGE_COLUMNS + 1
-    )
-    collage_height = tile_height * COLLAGE_ROWS + COLLAGE_PADDING * (COLLAGE_ROWS + 1)
+    width, height = frame_size
+    tile_height = height + TIMESTAMP_FOOTER_HEIGHT
+    collage_width = columns * width + COLLAGE_PADDING * (columns + 1)
+    collage_height = rows * tile_height + COLLAGE_PADDING * (rows + 1)
+    frames_per_page = rows * columns
     output_paths: list[Path] = []
-    for page, offset in enumerate(range(0, len(frames), FRAMES_PER_COLLAGE), start=1):
+    for page, offset in enumerate(range(0, len(frames), frames_per_page), start=1):
         collage = np.full(
             (collage_height, collage_width, 3), (10, 12, 15), dtype=np.uint8
         )
-        for index, selected in enumerate(frames[offset : offset + FRAMES_PER_COLLAGE]):
-            tile = add_timestamp_footer(selected.image, selected.timestamp_seconds)
-            row, column = divmod(index, COLLAGE_COLUMNS)
-            x = COLLAGE_PADDING + column * (FRAME_WIDTH + COLLAGE_PADDING)
+        for index, selected in enumerate(frames[offset : offset + frames_per_page]):
+            image = Image.fromarray(selected.image).resize(
+                frame_size, Image.Resampling.LANCZOS
+            )
+            tile = add_timestamp_footer(np.asarray(image), selected.timestamp_seconds)
+            row, column = divmod(index, columns)
+            x = COLLAGE_PADDING + column * (width + COLLAGE_PADDING)
             y = COLLAGE_PADDING + row * (tile_height + COLLAGE_PADDING)
-            collage[y : y + tile_height, x : x + FRAME_WIDTH] = tile
+            collage[y : y + tile_height, x : x + width] = tile
 
         output_path = output_stem.with_name(f"{output_stem.name}_page{page}.jpg")
         Image.fromarray(collage).save(

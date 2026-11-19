@@ -5,6 +5,12 @@ from PIL import Image, JpegImagePlugin
 import pytest
 
 from youtube_toolkit import ffmpeg_utils
+from youtube_toolkit.config import (
+    DEFAULT_VISION_COLUMNS,
+    DEFAULT_VISION_RESOLUTION,
+    DEFAULT_VISION_ROWS,
+    VISION_RESOLUTIONS,
+)
 from youtube_toolkit.vision import candidates as frame_selection, collages
 
 
@@ -50,9 +56,31 @@ def test_collage_renderer_uses_six_540p_frames_per_progressive_jpeg(
         "run_ffmpeg",
         lambda *_args: pytest.fail("renderer must not decode"),
     )
-    paths = collages.render_timestamped_collages(frames, tmp_path / "vision")
+    paths = collages.render_timestamped_collages(
+        frames,
+        tmp_path / "vision",
+        rows=DEFAULT_VISION_ROWS,
+        columns=DEFAULT_VISION_COLUMNS,
+        frame_size=VISION_RESOLUTIONS[DEFAULT_VISION_RESOLUTION],
+    )
     assert len(paths) == 2
     with Image.open(paths[0]) as image:
         assert image.size == (1938, 1716)
         assert image.info["progressive"] == 1
         assert JpegImagePlugin.get_sampling(image) == 1
+
+
+@pytest.mark.parametrize(
+    ("rows", "columns", "frame_size", "pages", "page_size"),
+    [(1, 1, (640, 360), 7, (652, 396)), (3, 3, (960, 540), 1, (2904, 1716))],
+)
+def test_collage_pages_hold_the_grid_at_full_frame_size(
+    tmp_path, rows, columns, frame_size, pages, page_size
+) -> None:
+    frames = [make_frame(float(index)) for index in range(7)]
+    paths = collages.render_timestamped_collages(
+        frames, tmp_path / "vision", rows=rows, columns=columns, frame_size=frame_size
+    )
+    assert len(paths) == pages
+    with Image.open(paths[0]) as image:
+        assert image.size == page_size
