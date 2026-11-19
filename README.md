@@ -6,11 +6,23 @@ A YouTube CLI for agents: search videos, fetch their metadata, transcripts, comm
 
 ## Install
 
-Requires Python 3.13+ and uv. The installer installs `youtube` as a uv tool; rerun it after pulling changes. Add `--vision` for screenshots and frame downloads, `--embeddings` for the local embedding model, or `--stt` for local speech-to-text; vision, speech-to-text, and downloads also need `ffmpeg`.
+On macOS, run in Terminal:
 
 ```bash
-uv run python scripts/install.py --vision
+curl -LsSf https://raw.githubusercontent.com/teron131/youtube-toolkit/main/install.sh | sh
 ```
+
+On Windows, run in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/teron131/youtube-toolkit/main/install.ps1 | iex
+```
+
+Each script installs what is missing of uv, FFmpeg, and Deno, the JavaScript runtime yt-dlp needs for YouTube: through Homebrew on macOS, installing Homebrew first if needed, or through winget on Windows. It then installs `youtube` with screenshots and frame downloads from this repository and runs `youtube doctor`; rerun it to update. Open a new terminal afterwards so `youtube` is on the path.
+
+Without [Homebrew](https://brew.sh/) or [winget](https://learn.microsoft.com/en-us/windows/package-manager/winget/), install [uv](https://docs.astral.sh/uv/getting-started/installation/), [FFmpeg](https://ffmpeg.org/download.html), and [Deno](https://docs.deno.com/runtime/getting_started/installation/) from their sites. If screenshots fail on Windows with "DLL load failed", install the [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist). Windows on ARM is not supported, since the Chinese caption converter has no build for it, and Intel Macs cannot install the local embedding model or local speech-to-text, which need PyTorch.
+
+From a clone, `uv run python scripts/install.py --vision` installs the working tree instead; add `--embeddings` for the local embedding model or `--stt` for local speech-to-text.
 
 ## Configuration
 

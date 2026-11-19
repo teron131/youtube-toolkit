@@ -35,6 +35,7 @@ def run_doctor(args: argparse.Namespace) -> str:
             f"  artifacts  {artifact_root()}",
             f"  vision     {_checked(vision_health)}",
             f"  ffmpeg     {'available' if shutil.which('ffmpeg') else 'not installed'}",
+            f"  deno       {'available' if shutil.which('deno') else 'not installed; yt-dlp may miss YouTube formats without it'}",
             f"  embedding  {_checked(embedding_health)}",
             f"  decision   {_checked(decision_health)}",
             f"  stt        {_checked(stt_health)}",

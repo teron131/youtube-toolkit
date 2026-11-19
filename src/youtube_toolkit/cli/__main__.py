@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import sys
 
@@ -9,6 +10,10 @@ from .parser import build_parser
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Windows writes piped output in its legacy code page, which cannot hold most non-Latin titles.
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(encoding="utf-8")
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
