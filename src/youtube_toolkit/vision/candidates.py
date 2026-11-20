@@ -204,15 +204,20 @@ def select_ranked_frames(
     *,
     max_frames: int,
     min_gap_seconds: float,
+    repeats: frozenset[tuple[int, int]],
 ) -> list[tuple[int, DecodedFrame]]:
-    """Walk candidate indexes in order, skipping any within min_gap_seconds of a pick or looking like one, so a screen that returns minutes later is picked once."""
+    """Walk candidate indexes in order, skipping any within min_gap_seconds of a pick, looking like one, or paired with one in repeats, so a screen that returns minutes later is picked once.
+
+    repeats holds candidate index pairs, lower first, that show the same item. A pair counts only once one of its frames is picked, so a frame skipped for sitting near another pick never takes its repeat down with it.
+    """
     selected: list[tuple[int, DecodedFrame]] = []
     selected_stats: list[_PixelStats] = []
     for index in order:
         candidate = candidates[index]
         if any(
             abs(candidate.timestamp_seconds - frame.timestamp_seconds) < min_gap_seconds
-            for _, frame in selected
+            or (min(index, picked), max(index, picked)) in repeats
+            for picked, frame in selected
         ):
             continue
         frame = candidate.load()

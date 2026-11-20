@@ -34,11 +34,7 @@ from youtube_toolkit.schemas import (
 )
 from youtube_toolkit.transcript import fetch_transcript
 from youtube_toolkit.vision import candidates as frame_selection, workflow
-from youtube_toolkit.vision.decisions import (
-    DecisionRanking,
-    DecisionUsage,
-    FrameDecision,
-)
+from youtube_toolkit.vision.decisions import DecisionUsage
 from youtube_toolkit.youtube.captions import CaptionTranscriptUnavailable
 from youtube_toolkit.youtube.client import YtDlpClient
 
@@ -47,6 +43,15 @@ VIDEOS = Path(".youtube-toolkit/videos")
 DECISION = DecisionConfig(
     DEFAULT_DECISION_BASE_URL, "decision-key", DEFAULT_DECISION_MODEL
 )
+RELEVANCE = {
+    "selection_rank": 1,
+    "score": 0.95,
+    "has_information": 0.9,
+    "visual": 0.3,
+    "impressive": 0.4,
+    "loaded": 0.9,
+    "illustrative": 0.2,
+}
 
 
 SCORES = frame_selection.VisualScores(20.0, 0.01, 0.0)
@@ -351,12 +356,40 @@ def test_ranked_selection_skips_close_picks_and_repeats_of_any_pick(tmp_path) ->
 
     def picks(max_frames: int) -> list[int]:
         selected = frame_selection.select_ranked_frames(
-            candidates, [1, 2, 3, 0], max_frames=max_frames, min_gap_seconds=10
+            candidates,
+            [1, 2, 3, 0],
+            max_frames=max_frames,
+            min_gap_seconds=10,
+            repeats=frozenset(),
         )
         return [index for index, _frame in selected]
 
     assert picks(96) == [1, 3]
     assert picks(1) == [1]
+
+
+@pytest.mark.parametrize(
+    ("order", "picked"),
+    [([1, 0, 2], [1]), ([2, 1, 0], [2, 0])],
+    ids=["its repeat was picked", "its repeat sat too close to another pick"],
+)
+def test_ranked_selection_skips_a_repeat_only_once_the_frame_it_repeats_is_picked(
+    tmp_path, order, picked
+) -> None:
+    # 0 and 100 show one item; 104 is something else beside 100.
+    candidates = [
+        store_frame(tmp_path, 0, chart()),
+        store_frame(tmp_path, 100, chart((10, 20, 35, 60))),
+        store_frame(tmp_path, 104, chart((60, 40, 25, 10))),
+    ]
+    selected = frame_selection.select_ranked_frames(
+        candidates,
+        order,
+        max_frames=96,
+        min_gap_seconds=10,
+        repeats=frozenset({(0, 1)}),
+    )
+    assert [index for index, _frame in selected] == picked
 
 
 @pytest.mark.parametrize("section", [None, (60.0, 90.0)])
@@ -743,19 +776,18 @@ def test_decision_model_ranks_first_with_a_decision_key(
 ) -> None:
     warning = "1 of 2 frame requests failed after repeated decision host errors, so those frames were left out of the ranking."
 
-    def rank(frames, document, config, *, even_gap_seconds):
+    def rank(candidates, document, config, *, duration, max_frames, min_gap_seconds):
         assert config == DECISION
-        assert even_gap_seconds == 120 / DEFAULT_VISION_MAX_FRAMES
+        assert (duration, max_frames) == (120, DEFAULT_VISION_MAX_FRAMES)
         assert document.segments
-        assert len(frames) == 2
-        return DecisionRanking(
-            [(0, FrameDecision(0.95, 0.9, 0.3, 0.4, 0.2))],
-            DecisionUsage(200, 6, 0.00002, 3.1),
-            warning,
+        assert len(candidates) == 2
+        requests = SimpleNamespace(
+            usage=DecisionUsage(200, 6, 0.00002, 3.1), warning=warning
         )
+        return [(candidates[0].load(), RELEVANCE)], requests
 
     monkeypatch.setattr(workflow, "decision_config", lambda: DECISION)
-    monkeypatch.setattr(workflow, "rank_frames", rank)
+    monkeypatch.setattr(workflow, "_rank_by_decisions", rank)
     monkeypatch.setattr(
         workflow, "GeminiEmbeddingClient", lambda _key: pytest.fail("no embeddings")
     )
@@ -777,14 +809,7 @@ def test_decision_model_ranks_first_with_a_decision_key(
     assert saved["min_similarity"] is None
     assert saved["decision_warning"] == warning
     assert saved["timestamps_seconds"] == [12]
-    assert saved["frames"][0]["relevance"] == {
-        "selection_rank": 1,
-        "score": 0.95,
-        "has_information": 0.9,
-        "visual": 0.3,
-        "impressive": 0.4,
-        "illustrative": 0.2,
-    }
+    assert saved["frames"][0]["relevance"] == RELEVANCE
 
 
 def test_a_given_transcript_is_ranked_against_without_fetching(
@@ -793,19 +818,18 @@ def test_a_given_transcript_is_ranked_against_without_fetching(
     given = workflow.fetch_transcript(VIDEO_ID, fresh=False).value
     ranked_against = []
 
-    def rank(frames, document, config, *, even_gap_seconds):
+    def rank(candidates, document, config, **_picking):
         ranked_against.append(document)
-        return DecisionRanking(
-            [(0, FrameDecision(0.95, 0.9, 0.3, 0.4, 0.2))],
-            DecisionUsage(None, None, None, None),
-            None,
+        requests = SimpleNamespace(
+            usage=DecisionUsage(None, None, None, None), warning=None
         )
+        return [(candidates[0].load(), RELEVANCE)], requests
 
     monkeypatch.setattr(
         workflow, "fetch_transcript", lambda *_args, **_kwargs: pytest.fail("fetch")
     )
     monkeypatch.setattr(workflow, "decision_config", lambda: DECISION)
-    monkeypatch.setattr(workflow, "rank_frames", rank)
+    monkeypatch.setattr(workflow, "_rank_by_decisions", rank)
     result = workflow.sample_vision(VIDEO_ID, document=given)
     assert ranked_against == [given]
     assert result["collages"] == [

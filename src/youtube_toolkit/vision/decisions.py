@@ -1,4 +1,4 @@
-"""Rank candidate frames with a decision model that judges each picture on its own and asks separately whether it shows what is being said.
+"""The decision route's steps, which vision/workflow.py runs in order: the questions a decision model answers about candidate frames, how the answers score and keep frames, joining views of one item, and ranking the items.
 
 The picture questions never see the speech, so a narrator naming a title card cannot raise its picture score.
 """
@@ -11,6 +11,7 @@ import io
 from itertools import pairwise
 from typing import TYPE_CHECKING
 
+import numpy as np
 from PIL import Image
 from typesafe_sdk import Answer, Noul, NoulAnswer
 
@@ -38,7 +39,13 @@ REQUEST_SIZE = (640, 360)
 ASSET_WORKERS = 4
 # Applied to the combined score, so speech can lift a frame over it but never push one under.
 MIN_SCORE = 0.30
+# The model's own yes. A frame also needs one to some question, since several doubtful answers can add up past MIN_SCORE on a blank page.
+YES = 0.5
 SAME_ITEM = 0.6
+# Items far apart are compared only because their colours match closest among many, which leans the model towards yes, and a wrong yes deletes a scene, so a repeat needs a surer answer than neighbours do.
+REPEAT = 0.8
+# Colour only shortlists the pairs same_item judges: more finds repeats whose colours changed more, at about one request per item each.
+LOOKALIKES = 2
 CONTEXT_WEIGHT = 0.25
 # The share of its score an item loses at the same moment as a ranked one. Higher lets a weak frame far from every pick outrank a strong one near a pick.
 NEARNESS_WEIGHT = 0.25
@@ -46,13 +53,17 @@ NEARNESS_WEIGHT = 0.25
 MAX_FAILED_SHARE = 0.1
 FRAME_QUESTIONS = {
     "has_information": Noul(
-        instructions="Does the frame show specific information a viewer could read or study, shown in full rather than still being written, typed, or drawn? Counts: slides and title cards with readable text; code, terminals, and app, web, or document screens; charts, tables, and figures with numbers; equations and labeled diagrams; posts, articles, and on-screen lists. Does not count: subtitles or captions of the speech, a speaker's name or channel caption, logos and watermarks, decorative or background text, and text too small, blurred, or partial to read."
+        instructions="Does the frame show specific information a viewer could read or study, shown in full rather than still being written, typed, or drawn? Counts: slides and title cards with readable text; code, terminals, and app, web, or document screens; charts, tables, and figures with numbers; equations and labeled diagrams; posts, articles, and on-screen lists. Does not count: subtitles or captions of the speech, a speaker's name or channel caption, logos and watermarks, decorative or background text, a blank or loading page whose only text is the window, tabs, or toolbar around it, menus, pickers, and lists of titles or links for choosing what to open next, and text too small, blurred, or partial to read."
     ),
     "visual": Noul(
         instructions="Is the frame a moment worth pausing on for what it shows, where something new has fully appeared and the shot holds on it? Counts: a complete scene, illustration, or animation at its finished state; a reveal of a new place, object, or idea; a finished artwork, photograph, product shot, or generated result; a demo showing its outcome. Does not count: an earlier step still being drawn, written, built, or assembled; transitions such as cuts, fades, swirls, zooms, morphs, or motion blur; people as the main subject, such as talking heads, face close-ups, reactions, or someone walking or working; blank, dark, logo, end, or loading screens."
     ),
     "impressive": Noul(
         instructions="Looking at the main content and ignoring the app window around it and any small webcam inset, is it a visually impressive view: a striking, detailed render, scene, artwork, or result, shown fully and clearly? Does not count: main content partly covered by an open settings panel, menu, dialog, or tooltip; plain text, posts, tables, or code; blurry, dark, or half-loaded views."
+    ),
+    # The questions above judge what is shown, so a split view whose second pane never loaded scores like a finished one; only this one sees the missing pane.
+    "loaded": Noul(
+        instructions="Ignoring the app window around the main content, including its toolbars, sidebars, empty side columns, and any small webcam inset, has every pane of the main content finished loading? Counts: a single view, or a split or grid view where every pane shows its content, even when that finished content is dark, a night scene, or a sparse page. Does not count: a split or grid view where a pane is still blank, empty, a plain color, or a loading screen, so only some of the compared results show."
     ),
 }
 # Any view of one item counts as the same, since a scrolled page, a rotated 3D scene, and a webcam toggled on change most pixels while showing nothing new.
@@ -76,6 +87,7 @@ class FrameDecision:
     has_information: float
     visual: float
     impressive: float
+    loaded: float
     illustrative: float | None
 
 
@@ -90,60 +102,40 @@ class DecisionUsage:
     provider_seconds: float | None
 
 
-@dataclass(frozen=True, slots=True)
-class DecisionRanking:
-    """frames holds one frame per item in rank order, keyed by its index among the candidates.
+class DecisionRequests:
+    """Sends each step's requests and keeps every step's usage and failures.
 
-    warning names requests that failed after retries and what that cost.
+    More than MAX_FAILED_SHARE of a step's requests failing raises DecisionError; fewer cost what that step's consequence says, and warning names them.
     """
 
-    frames: list[tuple[int, FrameDecision]]
-    usage: DecisionUsage
-    warning: str | None
-
-
-def rank_frames(
-    frames: list[StoredFrame],
-    document: TranscriptDocument | None,
-    config: DecisionConfig,
-    *,
-    even_gap_seconds: float,
-) -> DecisionRanking:
-    """Rank frames in five steps:
-
-    1. Each frame alone: has_information, visual, and impressive.
-    2. Each of those frames with speech within CONTEXT_SECONDS: illustrative, shown with that speech.
-    3. Score: max(has_information, visual) + CONTEXT_WEIGHT x illustrative; frames under MIN_SCORE drop out.
-    4. Each pair of neighbouring frames that both remain: same_item; neighbours at SAME_ITEM or more join one item, which keeps its frame with the highest score plus impressive.
-    5. Items rank one at a time by score, lowered by how surely same_item ties them to an item already ranked and, by up to NEARNESS_WEIGHT, by how near in time they are to one, so things not yet shown and stretches not yet covered come first.
-
-    even_gap_seconds is the gap that evenly spread picks would leave, and is how far a ranked item's nearness reaches.
-    A None document means the video has no speech to show, so step 2 asks nothing.
-    A failed request leaves its frame out, scores it by the picture alone, or keeps its pair apart, by step.
-    More than MAX_FAILED_SHARE failing in any step raises DecisionError.
-    """
-    with ThreadPoolExecutor(ASSET_WORKERS) as executor:
-        assets = list(executor.map(_asset, [frame.image_path for frame in frames]))
-    results: list[DecisionResult] = []
-    warnings: list[str] = []
+    def __init__(self, config: DecisionConfig) -> None:
+        self._config = config
+        self._results: list[DecisionResult] = []
+        self._warnings: list[str] = []
 
     def ask(
+        self,
         questions: dict[str, Noul],
         inputs: list[DecisionInput],
         noun: str,
         consequence: str,
     ) -> list[dict[str, float] | None]:
-        rows = decide_each(config, questions=questions, inputs=inputs) if inputs else []
+        """Each input's answers as probabilities, None where its request failed."""
+        rows = (
+            decide_each(self._config, questions=questions, inputs=inputs)
+            if inputs
+            else []
+        )
         errors = [row for row in rows if isinstance(row, DecisionError)]
         if len(errors) > MAX_FAILED_SHARE * len(rows):
             raise DecisionError(
                 f"{len(errors)} of {len(rows)} {noun} requests failed; first: {errors[0]}"
             ) from errors[0]
         if errors:
-            warnings.append(
+            self._warnings.append(
                 f"{len(errors)} of {len(rows)} {noun} requests failed after repeated decision host errors, {consequence}."
             )
-        results.extend(row for row in rows if isinstance(row, DecisionResult))
+        self._results.extend(row for row in rows if isinstance(row, DecisionResult))
         return [
             _probabilities(row.answers, questions)
             if isinstance(row, DecisionResult)
@@ -151,12 +143,51 @@ def rank_frames(
             for row in rows
         ]
 
-    pictures = ask(
+    @property
+    def usage(self) -> DecisionUsage:
+        provider_seconds = _total([result.provider_seconds for result in self._results])
+        return DecisionUsage(
+            _total([result.input_tokens for result in self._results]),
+            _total([result.output_tokens for result in self._results]),
+            _total([result.cost_usd for result in self._results]),
+            None if provider_seconds is None else round(provider_seconds, 3),
+        )
+
+    @property
+    def warning(self) -> str | None:
+        return " ".join(self._warnings) or None
+
+
+def frame_assets(frames: list[StoredFrame]) -> list[dict[str, str]]:
+    """Each frame shrunk to REQUEST_SIZE and encoded as a request image."""
+    with ThreadPoolExecutor(ASSET_WORKERS) as executor:
+        return list(executor.map(_asset, [frame.image_path for frame in frames]))
+
+
+def judge_pictures(
+    requests: DecisionRequests, assets: list[dict[str, str]]
+) -> list[dict[str, float] | None]:
+    """FRAME_QUESTIONS for each frame alone, None where its request failed, which leaves the frame out."""
+    return requests.ask(
         FRAME_QUESTIONS,
         [DecisionInput([FRAME_ASSET], {FRAME_ASSET: asset}) for asset in assets],
         "frame",
         "so those frames were left out of the ranking",
     )
+
+
+def judge_speech(
+    requests: DecisionRequests,
+    frames: list[StoredFrame],
+    assets: list[dict[str, str]],
+    pictures: list[dict[str, float] | None],
+    document: TranscriptDocument | None,
+) -> dict[int, dict[str, float] | None]:
+    """illustrative for each frame with speech within CONTEXT_SECONDS that score_frames could still keep, shown with that speech and keyed by frame index.
+
+    A None document means the video has no speech to show, so nothing is asked.
+    A failed request leaves None, so the picture alone scores that frame.
+    """
     speech: dict[int, str] = {}
     if document is not None:
         spoken = [
@@ -166,9 +197,14 @@ def rank_frames(
         ]
         for index, picture in enumerate(pictures):
             timestamp = frames[index].timestamp_seconds
-            if picture is not None and (lines := _nearby(spoken, timestamp)):
+            # A sure yes is the most speech can add.
+            if (
+                picture is not None
+                and _passes(_decision(picture, {"illustrative": 1.0}))
+                and (lines := _nearby(spoken, timestamp))
+            ):
                 speech[index] = _context(document, timestamp, lines)
-    illustrations = ask(
+    illustrations = requests.ask(
         CONTEXT_QUESTIONS,
         [
             DecisionInput([text, FRAME_ASSET], {FRAME_ASSET: assets[index]})
@@ -177,33 +213,49 @@ def rank_frames(
         "speech",
         "so those frames were scored by their picture alone",
     )
-    contexts = dict(zip(speech, illustrations, strict=True))
-    decisions = {
-        index: _decision(picture, contexts.get(index))
+    return dict(zip(speech, illustrations, strict=True))
+
+
+def score_frames(
+    pictures: list[dict[str, float] | None],
+    illustrations: dict[int, dict[str, float] | None],
+) -> dict[int, FrameDecision]:
+    """The frames that stay, keyed by index in time order: each scores max(has_information, visual) + CONTEXT_WEIGHT x illustrative and needs MIN_SCORE, a YES among those three answers, and a YES to loaded."""
+    decisions = (
+        (index, _decision(picture, illustrations.get(index)))
         for index, picture in enumerate(pictures)
         if picture is not None
-    }
-    passing = {
-        index: decision
-        for index, decision in decisions.items()
-        if decision.score >= MIN_SCORE
-    }
+    )
+    return {index: decision for index, decision in decisions if _passes(decision)}
+
+
+@dataclass(frozen=True, slots=True)
+class Items:
+    """Items in time order, each a run of neighbouring frames that show one thing.
+
+    frames holds each item's chosen frame as a candidate index; ties[n] is the same_item answer between item n and item n + 1, None when their frames are not neighbours or the request failed.
+    """
+
+    frames: list[int]
+    ties: list[float | None]
+
+
+def join_neighbours(
+    requests: DecisionRequests,
+    assets: list[dict[str, str]],
+    passing: dict[int, FrameDecision],
+) -> Items:
+    """same_item for each pair of neighbouring frames that both stay; neighbours at SAME_ITEM or more join one item, which keeps its frame with the highest score plus impressive, and a failed request keeps its pair apart."""
     pairs = [(index - 1, index) for index in passing if index - 1 in passing]
-    same_item = ask(
+    answers = requests.ask(
         SAME_ITEM_QUESTIONS,
-        [
-            DecisionInput(
-                ["FIRST frame:", "first", "SECOND frame:", "second"],
-                {"first": assets[first], "second": assets[second]},
-            )
-            for first, second in pairs
-        ],
+        [_pair(assets[first], assets[second]) for first, second in pairs],
         "same-item",
         "so those neighbours were kept as separate items",
     )
     ties = {
         pair: answer["same_item"]
-        for pair, answer in zip(pairs, same_item, strict=True)
+        for pair, answer in zip(pairs, answers, strict=True)
         if answer is not None
     }
     items: list[list[int]] = []
@@ -212,27 +264,86 @@ def rank_frames(
             items[-1].append(index)
         else:
             items.append([index])
-    kept = [
-        max(item, key=lambda index: passing[index].score + passing[index].impressive)
-        for item in items
-    ]
-    order = _rank_items(
-        [passing[index].score for index in kept],
-        [ties.get((before[-1], after[0]), 0.0) for before, after in pairwise(items)],
-        [frames[index].timestamp_seconds for index in kept],
-        even_gap_seconds,
+    return Items(
+        [
+            max(
+                item, key=lambda index: passing[index].score + passing[index].impressive
+            )
+            for item in items
+        ],
+        [ties.get((before[-1], after[0])) for before, after in pairwise(items)],
     )
-    provider_seconds = _total([result.provider_seconds for result in results])
-    return DecisionRanking(
-        [(kept[item], passing[kept[item]]) for item in order],
-        DecisionUsage(
-            _total([result.input_tokens for result in results]),
-            _total([result.output_tokens for result in results]),
-            _total([result.cost_usd for result in results]),
-            None if provider_seconds is None else round(provider_seconds, 3),
-        ),
-        " ".join(warnings) or None,
+
+
+def find_repeats(
+    requests: DecisionRequests,
+    frames: list[StoredFrame],
+    assets: list[dict[str, str]],
+    items: Items,
+) -> frozenset[tuple[int, int]]:
+    """Pairs of chosen frames, lower index first, that show one item again far apart: same_item at REPEAT or more for each item and its LOOKALIKES closest items in colour, unless join_neighbours compared them."""
+    compared = {
+        (number, number + 1) for number, tie in enumerate(items.ties) if tie is not None
+    }
+    lookalikes = _lookalikes(
+        [frames[index].image_path for index in items.frames], compared
     )
+    answers = requests.ask(
+        SAME_ITEM_QUESTIONS,
+        [
+            _pair(assets[items.frames[first]], assets[items.frames[second]])
+            for first, second in lookalikes
+        ],
+        "lookalike",
+        "so those lookalikes were both kept",
+    )
+    return frozenset(
+        (items.frames[first], items.frames[second])
+        for (first, second), answer in zip(lookalikes, answers, strict=True)
+        if answer is not None and answer["same_item"] >= REPEAT
+    )
+
+
+def rank_items(
+    items: Items,
+    passing: dict[int, FrameDecision],
+    frames: list[StoredFrame],
+    *,
+    even_gap_seconds: float,
+) -> list[int]:
+    """The chosen frames' indexes, best first: items rank one at a time by score, lowered by how surely same_item ties them to an item already ranked and, by up to NEARNESS_WEIGHT, by how near in time they are to one, so things not yet shown and stretches not yet covered come first.
+
+    even_gap_seconds is the gap that evenly spread picks would leave, and is how far a ranked item's nearness reaches.
+    A tie across several items is the weakest one on the way, since a repeat needs every step between them to be one.
+    The answer and the gap are the weights, so no cutoff decides what counts as a repeat or as too close.
+    """
+    scores = [passing[index].score for index in items.frames]
+    ties = [tie or 0.0 for tie in items.ties]
+    times = [frames[index].timestamp_seconds for index in items.frames]
+    novelty = [1.0] * len(scores)
+    spread = [1.0] * len(scores)
+    order: list[int] = []
+    unranked = set(range(len(scores)))
+
+    def worth(item: int) -> tuple[float, int]:
+        return scores[item] * novelty[item] * spread[item], -item
+
+    while unranked:
+        best = max(unranked, key=worth)
+        unranked.remove(best)
+        order.append(best)
+        tie = 1.0
+        for item in range(best + 1, len(scores)):
+            tie = min(tie, ties[item - 1])
+            novelty[item] = min(novelty[item], 1 - tie)
+        tie = 1.0
+        for item in range(best - 1, -1, -1):
+            tie = min(tie, ties[item])
+            novelty[item] = min(novelty[item], 1 - tie)
+        for item in unranked:
+            nearness = max(0.0, 1 - abs(times[item] - times[best]) / even_gap_seconds)
+            spread[item] = min(spread[item], 1 - NEARNESS_WEIGHT * nearness)
+    return [items.frames[item] for item in order]
 
 
 def _asset(path: Path) -> dict[str, str]:
@@ -242,6 +353,42 @@ def _asset(path: Path) -> dict[str, str]:
     buffer = io.BytesIO()
     small.save(buffer, "JPEG", quality=85)
     return image_asset(buffer.getvalue())
+
+
+def _pair(first: dict[str, str], second: dict[str, str]) -> DecisionInput:
+    return DecisionInput(
+        ["FIRST frame:", "first", "SECOND frame:", "second"],
+        {"first": first, "second": second},
+    )
+
+
+def _lookalikes(
+    paths: list[Path], compared: set[tuple[int, int]]
+) -> list[tuple[int, int]]:
+    """Pairs of positions in paths, lower first, joining each to its LOOKALIKES most similar in colour that compared does not hold."""
+    if not paths:
+        return []
+    shares = np.sqrt(np.stack([_colours(path) for path in paths]))
+    # Bhattacharyya overlap of the colour histograms, 1 for identical colours.
+    similarity = shares @ shares.T
+    pairs: set[tuple[int, int]] = set()
+    for item, row in enumerate(similarity):
+        closest = [
+            (min(item, other), max(item, other))
+            for other in map(int, np.argsort(-row, kind="stable"))
+            if other != item and (min(item, other), max(item, other)) not in compared
+        ]
+        pairs.update(closest[:LOOKALIKES])
+    return sorted(pairs)
+
+
+def _colours(path: Path) -> np.ndarray:
+    """The share of pixels in each of 512 colour bins."""
+    with Image.open(path) as image:
+        levels = np.asarray(image.convert("RGB").resize((160, 90))) // 32
+    # Eight levels per channel make one bin: (255, 0, 64) -> 7 * 64 + 0 * 8 + 2 = 450.
+    bins = levels[..., 0].astype(int) * 64 + levels[..., 1] * 8 + levels[..., 2]
+    return np.bincount(bins.ravel(), minlength=512) / bins.size
 
 
 def _decision(
@@ -254,7 +401,17 @@ def _decision(
         picture["has_information"],
         picture["visual"],
         picture["impressive"],
+        picture["loaded"],
         illustrative,
+    )
+
+
+def _passes(decision: FrameDecision) -> bool:
+    return (
+        decision.score >= MIN_SCORE
+        and max(decision.has_information, decision.visual, decision.illustrative or 0.0)
+        >= YES
+        and decision.loaded >= YES
     )
 
 
@@ -301,41 +458,6 @@ def _nearby(
         <= timestamp
         <= segment.end_seconds + CONTEXT_SECONDS
     ]
-
-
-def _rank_items(
-    scores: list[float], ties: list[float], times: list[float], even_gap_seconds: float
-) -> list[int]:
-    """Order items, given in time order, so that a likely repeat of a ranked item, or one close to it in time, counts for less.
-
-    ties[n] is the same_item answer between item n and item n + 1, 0.0 where they are not neighbouring frames.
-    A tie across several items is the weakest one on the way, since a repeat needs every step between them to be one.
-    The answer and the gap are the weights, so no cutoff decides what counts as a repeat or as too close.
-    """
-    novelty = [1.0] * len(scores)
-    spread = [1.0] * len(scores)
-    order: list[int] = []
-    unranked = set(range(len(scores)))
-
-    def worth(item: int) -> tuple[float, int]:
-        return scores[item] * novelty[item] * spread[item], -item
-
-    while unranked:
-        best = max(unranked, key=worth)
-        unranked.remove(best)
-        order.append(best)
-        tie = 1.0
-        for item in range(best + 1, len(scores)):
-            tie = min(tie, ties[item - 1])
-            novelty[item] = min(novelty[item], 1 - tie)
-        tie = 1.0
-        for item in range(best - 1, -1, -1):
-            tie = min(tie, ties[item])
-            novelty[item] = min(novelty[item], 1 - tie)
-        for item in unranked:
-            nearness = max(0.0, 1 - abs(times[item] - times[best]) / even_gap_seconds)
-            spread[item] = min(spread[item], 1 - NEARNESS_WEIGHT * nearness)
-    return order
 
 
 def _total[N: (int, float)](values: list[N | None]) -> N | None:

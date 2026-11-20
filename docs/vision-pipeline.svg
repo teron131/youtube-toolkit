@@ -1,9 +1,9 @@
 <!--
 Evidence (re-verify on update):
   Keyframes and what drops out (sponsor spans, near-blank frames, near-copies of recent candidates, cross-fades): vision/candidates.py collect_candidates, ffmpeg_utils.py decode_keyframes; sponsor spans from vision/workflow.py _excluded_intervals
-  Route order (decision key, else embeddings with timed speech, else time slots): vision/workflow.py sample_vision, config.py decision_config and gemini_embedding_key, embeddings local_embedding_installed
-  Decision scores (better of information and visual, plus 0.25 x illustrative; 0.30 to stay; neighbours that are the same item keep one frame; ranked by score, lowered for a likely repeat of an item already ranked and for one close to it in time): vision/decisions.py rank_frames, MIN_SCORE, CONTEXT_WEIGHT, SAME_ITEM
-  Too close (within 10 seconds of a pick): vision/candidates.py select_ranked_frames, config.py DEFAULT_VISION_MIN_GAP_SECONDS
+  Route order (decision key, else embeddings with timed speech, else time slots): vision/workflow.py _ranker, config.py decision_config and gemini_embedding_key, embeddings local_embedding_installed
+  Decision scores (better of information and visual, plus 0.25 x illustrative; 0.30, at least one yes, and a yes that every pane has loaded to stay; neighbours that are the same item keep one frame, and far-apart items alike in colour that the model surely calls the same are marked as repeats; ranked by score, lowered for a likely repeat of an item already ranked and for one close to it in time): vision/workflow.py _rank_by_decisions runs the steps in vision/decisions.py, MIN_SCORE, YES, CONTEXT_WEIGHT, SAME_ITEM, REPEAT, LOOKALIKES
+  Too close (within 10 seconds of a pick) or a marked repeat of a pick: vision/candidates.py select_ranked_frames, config.py DEFAULT_VISION_MIN_GAP_SECONDS
   Embeddings (keyword, sentence, and paragraph targets; each frame matched to speech around it; ranks fused): vision/text.py prepare_targets, vision/reranking.py rerank_frames
   Time slots (equal slots of at least 12 seconds, the candidate nearest each middle, skipped when too close to the last pick): vision/candidates.py select_slot_frames, SLOT_SECONDS
   Collage pages of three rows of two by default, up to three a side, a timestamp under each frame, in time order: vision/collages.py, config.py DEFAULT_VISION_ROWS, DEFAULT_VISION_COLUMNS, MAX_VISION_ROWS, MAX_VISION_COLUMNS
@@ -11,7 +11,7 @@ Evidence (re-verify on update):
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="468" viewBox="0 0 1120 468" role="img" aria-labelledby="title desc">
   <title id="title">How vision picks frames</title>
-  <desc id="desc">A strip of sixteen keyframes taken off a video's timeline, one every few seconds. Five never become candidates: a near-copy, a cross-fade, a blank frame, and two inside a sponsor span. Three routes can pick from the rest, and the first that is set up does. One, with a decision key: a decision model scores each picture, plus a little when it shows what is being said; talking heads fall under the 0.30 line, two neighbouring frames of the same item keep one, and a frame too close to a pick is skipped. Two, otherwise, with timed speech: embeddings match each frame to the keywords, sentences, and paragraphs said around it. Three, otherwise: the frame nearest the middle of each equal time slot, whatever it shows. The picks land on collage pages, three rows of two by default, in time order, each with its timestamp.</desc>
+  <desc id="desc">A strip of sixteen keyframes taken off a video's timeline, one every few seconds. Five never become candidates: a near-copy, a cross-fade, a blank frame, and two inside a sponsor span. Three routes can pick from the rest, and the first that is set up does. One, with a decision key: a decision model scores each picture, plus a little when it shows what is being said; talking heads fall under the 0.30 line, two neighbouring frames of the same item keep one, an item shown again later is picked once, and a frame too close to a pick is skipped. Two, otherwise, with timed speech: embeddings match each frame to the keywords, sentences, and paragraphs said around it. Three, otherwise: the frame nearest the middle of each equal time slot, whatever it shows. The picks land on collage pages, three rows of two by default, in time order, each with its timestamp.</desc>
   <defs>
     <style>
     .flag { font: 700 15px ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; fill: #F3EFE6; }
@@ -69,9 +69,9 @@ Evidence (re-verify on update):
   <path d="M573 70 l14 13.4 M587 70 l-14 13.4" stroke="#F3EFE6" stroke-width="1.6" stroke-linecap="round" opacity="0.85"/>
   <g opacity="0.32"><g transform="translate(606 66)"><rect x="0" y="0" width="38" height="21.4" rx="2" fill="#3A3E4A"/><circle cx="19" cy="8.3125" r="4.35417" fill="#C9B8A4"/><path d="M9.5 21.375 Q19 9.5 28.5 21.375 Z" fill="#C9B8A4"/><rect x="0" y="0" width="38" height="21.4" rx="2" fill="none" stroke="#000" stroke-opacity="0.45"/></g></g>
   <path d="M618 70 l14 13.4 M632 70 l-14 13.4" stroke="#F3EFE6" stroke-width="1.6" stroke-linecap="round" opacity="0.85"/>
-  <g transform="translate(651 66)"><rect x="0" y="0" width="38" height="21.4" rx="2" fill="#3A3E4A"/><circle cx="19" cy="8.3125" r="4.35417" fill="#C9B8A4"/><path d="M9.5 21.375 Q19 9.5 28.5 21.375 Z" fill="#C9B8A4"/><rect x="0" y="0" width="38" height="21.4" rx="2" fill="none" stroke="#000" stroke-opacity="0.45"/></g>
-  <g transform="translate(696 66)"><rect x="0" y="0" width="38" height="21.4" rx="2" fill="#20222C"/><rect x="5.54167" y="11.875" width="4.75" height="6.33333" fill="#40D2BD"/><rect x="12.6667" y="7.91667" width="4.75" height="10.2917" fill="#40D2BD"/><rect x="19.7917" y="10.2917" width="4.75" height="7.91667" fill="#40D2BD"/><rect x="26.9167" y="3.95833" width="4.75" height="14.25" fill="#FFB54A"/><rect x="0" y="0" width="38" height="21.4" rx="2" fill="none" stroke="#000" stroke-opacity="0.45"/></g>
-  <g transform="translate(741 66)"><rect x="0" y="0" width="38" height="21.4" rx="2" fill="#DCD6C6"/><rect x="3.95833" y="3.95833" width="17.4167" height="3.16667" fill="#15151A"/><rect x="3.95833" y="10.2917" width="26.9167" height="1.58333" fill="#8C877A"/><rect x="3.95833" y="13.8542" width="21.375" height="1.58333" fill="#8C877A"/><rect x="3.95833" y="17.4167" width="15.8333" height="1.58333" fill="#8C877A"/><rect x="0" y="0" width="38" height="21.4" rx="2" fill="none" stroke="#000" stroke-opacity="0.45"/></g>
+  <g transform="translate(651 66)"><rect x="0" y="0" width="38" height="21.4" rx="2" fill="#20222C"/><rect x="5.54167" y="11.875" width="4.75" height="6.33333" fill="#40D2BD"/><rect x="12.6667" y="7.91667" width="4.75" height="10.2917" fill="#40D2BD"/><rect x="19.7917" y="10.2917" width="4.75" height="7.91667" fill="#40D2BD"/><rect x="26.9167" y="3.95833" width="4.75" height="14.25" fill="#FFB54A"/><rect x="0" y="0" width="38" height="21.4" rx="2" fill="none" stroke="#000" stroke-opacity="0.45"/></g>
+  <g transform="translate(696 66)"><rect x="0" y="0" width="38" height="21.4" rx="2" fill="#1B2A2C"/><rect x="3.95833" y="3.16667" width="30.0833" height="3.16667" fill="#96DA5E"/><rect x="3.95833" y="8.70833" width="7.125" height="1.58333" fill="#F3EFE6"/><rect x="13.0625" y="8.70833" width="9.5" height="1.58333" fill="#7FA2C9"/><rect x="24.5417" y="8.70833" width="9.5" height="1.58333" fill="#7FA2C9"/><rect x="3.95833" y="12.6667" width="7.125" height="1.58333" fill="#F3EFE6"/><rect x="13.0625" y="12.6667" width="9.5" height="1.58333" fill="#7FA2C9"/><rect x="24.5417" y="12.6667" width="9.5" height="1.58333" fill="#7FA2C9"/><rect x="3.95833" y="16.625" width="7.125" height="1.58333" fill="#F3EFE6"/><rect x="13.0625" y="16.625" width="9.5" height="1.58333" fill="#7FA2C9"/><rect x="24.5417" y="16.625" width="9.5" height="1.58333" fill="#7FA2C9"/><rect x="0" y="0" width="38" height="21.4" rx="2" fill="none" stroke="#000" stroke-opacity="0.45"/></g>
+  <g transform="translate(741 66)"><rect x="0" y="0" width="38" height="21.4" rx="2" fill="#DCD6C6"/><rect x="3.95833" y="3.95833" width="23.75" height="3.16667" fill="#15151A"/><rect x="3.95833" y="10.2917" width="15.8333" height="1.58333" fill="#8C877A"/><rect x="3.95833" y="13.8542" width="17.4167" height="1.58333" fill="#8C877A"/><rect x="3.95833" y="17.4167" width="11.0833" height="1.58333" fill="#8C877A"/><rect x="23.75" y="10.2917" width="10.2917" height="8.70833" fill="#7FA2C9"/><rect x="0" y="0" width="38" height="21.4" rx="2" fill="none" stroke="#000" stroke-opacity="0.45"/></g>
   <text x="602.5" y="106" class="tc" text-anchor="middle">sponsor</text>
   </g>
   <g id="route-decision">
@@ -116,9 +116,9 @@ Evidence (re-verify on update):
   <rect x="527" y="180.5" width="16" height="9.5" fill="#FF7CC0" opacity="0.5"/>
   </g>
   <circle cx="535" cy="172.5" r="4" fill="#FF7CC0"/>
-  <g>
-  <rect x="662" y="204" width="16" height="10" fill="#55555F"/>
-  <rect x="662" y="201" width="16" height="1.5" fill="#55555F" opacity="0.5"/>
+  <g opacity="0.45">
+  <rect x="662" y="171.5" width="16" height="42.5" fill="#FF7CC0"/>
+  <rect x="662" y="166" width="16" height="4" fill="#FF7CC0" opacity="0.5"/>
   </g>
   <g>
   <rect x="707" y="175" width="16" height="39" fill="#FF7CC0"/>
@@ -132,6 +132,7 @@ Evidence (re-verify on update):
   <line x1="62" y1="199" x2="786" y2="199" stroke="#ABA79C" stroke-width="1" stroke-dasharray="4 4"/>
   <path d="M391 216.5 v3.5 h63 v-3.5" fill="none" stroke="#ABA79C" stroke-width="1.2"/>
   <text x="422.5" y="230.5" class="tc-s" text-anchor="middle">same item</text>
+  <text x="670" y="230.5" class="tc-s" text-anchor="middle">shown before</text>
   <text x="760" y="230.5" class="tc-s" text-anchor="middle">too close</text>
   </g>
   <g id="route-embeddings">
@@ -253,7 +254,7 @@ Evidence (re-verify on update):
   <g transform="translate(846 243.375)"><rect x="0" y="0" width="115" height="64.6875" rx="2" fill="#2A4A6B"/><circle cx="83.8542" cy="19.1667" r="9.58333" fill="#FFB54A"/><path d="M0 64.6875 L33.5417 28.75 L59.8958 50.3125 L79.0625 35.9375 L115 64.6875 Z" fill="#274B3A"/><rect x="0" y="0" width="115" height="64.6875" rx="2" fill="none" stroke="#000" stroke-opacity="0.45"/></g>
   <rect x="846" y="308.062" width="115" height="17" fill="#15171C"/>
   <text x="852" y="320.562" class="stamp">00:50</text>
-  <g transform="translate(969 243.375)"><rect x="0" y="0" width="115" height="64.6875" rx="2" fill="#20222C"/><rect x="16.7708" y="35.9375" width="14.375" height="19.1667" fill="#40D2BD"/><rect x="38.3333" y="23.9583" width="14.375" height="31.1458" fill="#40D2BD"/><rect x="59.8958" y="31.1458" width="14.375" height="23.9583" fill="#40D2BD"/><rect x="81.4583" y="11.9792" width="14.375" height="43.125" fill="#FFB54A"/><rect x="0" y="0" width="115" height="64.6875" rx="2" fill="none" stroke="#000" stroke-opacity="0.45"/></g>
+  <g transform="translate(969 243.375)"><rect x="0" y="0" width="115" height="64.6875" rx="2" fill="#1B2A2C"/><rect x="11.9792" y="9.58333" width="91.0417" height="9.58333" fill="#96DA5E"/><rect x="11.9792" y="26.3542" width="21.5625" height="4.79167" fill="#F3EFE6"/><rect x="39.5313" y="26.3542" width="28.75" height="4.79167" fill="#7FA2C9"/><rect x="74.2708" y="26.3542" width="28.75" height="4.79167" fill="#7FA2C9"/><rect x="11.9792" y="38.3333" width="21.5625" height="4.79167" fill="#F3EFE6"/><rect x="39.5313" y="38.3333" width="28.75" height="4.79167" fill="#7FA2C9"/><rect x="74.2708" y="38.3333" width="28.75" height="4.79167" fill="#7FA2C9"/><rect x="11.9792" y="50.3125" width="21.5625" height="4.79167" fill="#F3EFE6"/><rect x="39.5313" y="50.3125" width="28.75" height="4.79167" fill="#7FA2C9"/><rect x="74.2708" y="50.3125" width="28.75" height="4.79167" fill="#7FA2C9"/><rect x="0" y="0" width="115" height="64.6875" rx="2" fill="none" stroke="#000" stroke-opacity="0.45"/></g>
   <rect x="969" y="308.062" width="115" height="17" fill="#15171C"/>
   <text x="975" y="320.562" class="stamp">01:10</text>
   <rect x="838" y="347.062" width="12" height="12" rx="2" fill="#FF7CC0"/>

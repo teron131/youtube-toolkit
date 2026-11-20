@@ -65,7 +65,16 @@ from .candidates import (
     store_frame,
 )
 from .collages import render_collages
-from .decisions import DecisionRanking, rank_frames
+from .decisions import (
+    DecisionRequests,
+    find_repeats,
+    frame_assets,
+    join_neighbours,
+    judge_pictures,
+    judge_speech,
+    rank_items,
+    score_frames,
+)
 from .reranking import rerank_frames
 from .text import TextTarget, prepare_targets
 
@@ -87,6 +96,16 @@ class _Embedding:
     warning: str | None
     targets: list[TextTarget]
     texts: EmbeddingResult
+
+
+@dataclass(frozen=True, slots=True)
+class _EmbeddingRoute:
+    """Ranking by embeddings, through Gemini with gemini_key or with the local model when it is None."""
+
+    gemini_key: str | None
+
+
+type _Ranker = DecisionConfig | _EmbeddingRoute | None
 
 
 def sample_vision(
@@ -144,8 +163,8 @@ def sample_vision(
         raise ValueError(
             f"yt-dlp returned video {fetched_video_id} for requested video {video_id}"
         )
-    decision = None if local_only else decision_config()
-    gemini_key = None if local_only else gemini_embedding_key()
+    ranker = _ranker(local_only)
+    decision = ranker if isinstance(ranker, DecisionConfig) else None
     pick_options = {
         "max_frames": max_frames,
         "min_similarity": min_similarity,
@@ -153,7 +172,7 @@ def sample_vision(
         "local_only": local_only,
         "start": start,
         "end": end,
-        "ranking_model": _ranking_model(decision, gemini_key),
+        "ranking_model": _ranking_model(ranker),
         "toolkit_version": version("youtube-toolkit"),
     }
     destination = (
@@ -215,7 +234,7 @@ def sample_vision(
     transcript_warning = None
     embedding_warning = None
     targets: list[TextTarget] = []
-    if decision or gemini_key or local_embedding_installed():
+    if ranker is not None:
         fallback = (
             "the decision model judges frames without speech"
             if decision
@@ -250,12 +269,12 @@ def sample_vision(
         embedding_warning = "Set DECISION_API_KEY or EMBEDDING_API_KEY, or install youtube-toolkit[embeddings], for relevance ranking; using local frame selection."
     # Embedding routes match frames to timed speech, so without it they fall back to time slots; the decision model can judge a frame by its image alone.
     embedding = None
-    if not decision and targets:
-        embedding = _embed_targets(gemini_key, targets)
+    if isinstance(ranker, _EmbeddingRoute) and targets:
+        embedding = _embed_targets(ranker.gemini_key, targets)
         embedding_warning = embedding.warning
     cutoffs = API_EMBEDDING_CUTOFFS if embedding is None else embedding.cutoffs
     match_floor = cutoffs.vision_match if min_similarity is None else min_similarity
-    decision_ranking = None
+    decision_requests = None
     embedding_usage = None
     try:
         # picks.json goes in last, so a run cut short leaves a folder that the next run replaces.
@@ -285,7 +304,7 @@ def sample_vision(
                 distinct=True,
             )
             if decision:
-                picks, decision_ranking = _rank_by_decisions(
+                picks, decision_requests = _rank_by_decisions(
                     candidates,
                     document if targets else None,
                     decision,
@@ -359,11 +378,11 @@ def sample_vision(
             else asdict(embedding_usage),
             "decision_model": decision.model if decision else None,
             "decision_warning": None
-            if decision_ranking is None
-            else decision_ranking.warning,
+            if decision_requests is None
+            else decision_requests.warning,
             "decision_usage": None
-            if decision_ranking is None
-            else asdict(decision_ranking.usage),
+            if decision_requests is None
+            else asdict(decision_requests.usage),
             "candidate_count": len(candidates),
             "min_similarity": None if decision else match_floor,
             "min_gap_seconds": min_gap_seconds,
@@ -394,16 +413,21 @@ def sample_vision(
     return _output(destination, result, collage_paths, reused=False)
 
 
-def _ranking_model(
-    decision: DecisionConfig | None, gemini_key: str | None
-) -> str | None:
-    """The model the route order would try first; None means time slots."""
-    if decision:
-        return decision.model
-    if gemini_key:
-        return GEMINI_EMBEDDING_MODEL
-    if local_embedding_installed():
-        return local_embedding_model()
+def _ranker(local_only: bool) -> _Ranker:
+    """The first route that is set up, in route order; None leaves time slots."""
+    if not local_only:
+        if decision := decision_config():
+            return decision
+        if gemini_key := gemini_embedding_key():
+            return _EmbeddingRoute(gemini_key)
+    return _EmbeddingRoute(None) if local_embedding_installed() else None
+
+
+def _ranking_model(ranker: _Ranker) -> str | None:
+    if isinstance(ranker, DecisionConfig):
+        return ranker.model
+    if isinstance(ranker, _EmbeddingRoute):
+        return GEMINI_EMBEDDING_MODEL if ranker.gemini_key else local_embedding_model()
     return None
 
 
@@ -457,21 +481,29 @@ def _rank_by_decisions(
     duration: float,
     max_frames: int,
     min_gap_seconds: float,
-) -> tuple[list[_Pick], DecisionRanking]:
-    ranking = rank_frames(
-        candidates, document, config, even_gap_seconds=duration / max_frames
+) -> tuple[list[_Pick], DecisionRequests]:
+    """Each step asks only about the frames that the steps before it kept."""
+    requests = DecisionRequests(config)
+    assets = frame_assets(candidates)
+    pictures = judge_pictures(requests, assets)
+    illustrations = judge_speech(requests, candidates, assets, pictures, document)
+    passing = score_frames(pictures, illustrations)
+    items = join_neighbours(requests, assets, passing)
+    repeats = find_repeats(requests, candidates, assets, items)
+    order = rank_items(
+        items, passing, candidates, even_gap_seconds=duration / max_frames
     )
-    decisions = dict(ranking.frames)
     picks = select_ranked_frames(
         candidates,
-        list(decisions),
+        order,
         max_frames=max_frames,
         min_gap_seconds=min_gap_seconds,
+        repeats=repeats,
     )
     return [
-        (frame, {"selection_rank": rank, **asdict(decisions[index])})
+        (frame, {"selection_rank": rank, **asdict(passing[index])})
         for rank, (index, frame) in enumerate(picks, start=1)
-    ], ranking
+    ], requests
 
 
 def _rank_by_embeddings(
